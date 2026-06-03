@@ -44,3 +44,20 @@ ws.onmessage = (ev) => {
 ws.onclose = () => term.write("\r\n\x1b[2m[woland: pty disconnected]\x1b[0m\r\n");
 
 window.addEventListener("resize", sendResize);
+
+// Right pane: the semantic re-render. Show the requested session, else the most recent.
+async function loadTranscript() {
+  const frame = document.getElementById("transcript") as HTMLIFrameElement;
+  const params = new URLSearchParams(location.search);
+  let uuid = params.get("session");
+  if (!uuid) {
+    try {
+      const res = await fetch("/api/recent");
+      if (res.ok) uuid = (await res.text()).trim();
+    } catch {
+      /* no daemon transcript available */
+    }
+  }
+  if (uuid) frame.src = `/session/${encodeURIComponent(uuid)}`;
+}
+loadTranscript();

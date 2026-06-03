@@ -36,6 +36,84 @@ pub fn sessions_view(sessions: &[SessionRef], now: DateTime<Utc>, show_project: 
     }
 }
 
+/// The session transcript as semantic HTML: a collapsible `<details>` per exchange
+/// (user turn + nested replies), full untruncated content, escaped. This is render's
+/// html projection for woland's right pane.
+pub fn session_html(session: &Session) -> String {
+    let visible = visible_turns(session);
+    let leaf = visible_leaf(session, &visible);
+    let exchanges = visible.iter().filter(|t| t.role == Role::User).count();
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "<article class=\"session\"><header>session {} · {} exchange{}</header>",
+        esc(&short_id(&session.session_id)),
+        exchanges,
+        if exchanges == 1 { "" } else { "s" },
+    ));
+
+    let mut open = false;
+    for turn in &visible {
+        if turn.role == Role::User {
+            if open {
+                out.push_str("</details>");
+            }
+            out.push_str("<details open class=\"exchange\"><summary>");
+            out.push_str(&turn_html(turn, &leaf));
+            out.push_str("</summary>");
+            open = true;
+        } else {
+            if !open {
+                out.push_str("<details open class=\"exchange\">");
+                open = true;
+            }
+            out.push_str("<div class=\"reply\">");
+            out.push_str(&turn_html(turn, &leaf));
+            out.push_str("</div>");
+        }
+    }
+    if open {
+        out.push_str("</details>");
+    }
+    out.push_str("</article>");
+    out
+}
+
+fn turn_html(turn: &Turn, leaf: &Option<String>) -> String {
+    let (glyph, label) = turn_glyph_label(turn.role);
+    let content = match turn.role {
+        Role::System => duration_label(turn),
+        _ => content_text(turn),
+    };
+    let marker = if leaf.as_deref() == Some(turn.uuid.as_str()) {
+        " <span class=\"leaf\">← leaf</span>"
+    } else {
+        ""
+    };
+    format!(
+        "<span class=\"glyph {label}\">{glyph}</span> \
+         <span class=\"role\">{label}</span> \
+         <span class=\"content\">{}</span>{marker}",
+        esc(&content),
+    )
+}
+
+/// Escape text for safe embedding in HTML.
+fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Width of the source (left) column in the side-by-side fork diff.
 const DIFF_COL: usize = 46;
 

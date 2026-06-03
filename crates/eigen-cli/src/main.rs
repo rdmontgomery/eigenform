@@ -377,6 +377,7 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>) -> Result<()> {
         args: Vec::new(),
         cwd: Some(cwd),
         web_dir,
+        projects_dir: Some(projects_dir()?),
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     println!("woland → http://{addr}");
