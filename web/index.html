@@ -7,10 +7,10 @@
     <link rel="stylesheet" href="/dist/main.css" />
     <style>
       html, body { margin: 0; height: 100%; background: #0b0b0e; color: #e6e6e6;
-        font-family: ui-monospace, Menlo, Consolas, monospace; }
+        font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
       #app { display: grid; grid-template-columns: 260px 1fr 1fr; height: 100vh; }
-      /* left = the forest (pick a session) · center = live pty · right = re-render */
-      #sidebar { border-right: 1px solid #1c1c24; overflow-y: auto; font-size: 12px; }
+      /* left = the forest (pick) · center = the furnace (live pty) · right = the Manuscript */
+      #sidebar { border-right: 1px solid #1c1c24; overflow-y: auto; }
       #sidebar h1 { font-size: 12px; color: #565666; padding: 10px 12px 4px; margin: 0;
         text-transform: uppercase; letter-spacing: 0.08em; }
       .session-item { display: block; width: 100%; text-align: left; background: none;
@@ -23,14 +23,43 @@
       .session-item .meta { display: block; color: #565666; font-size: 11px; }
       #terminal { height: 100%; padding: 6px; box-sizing: border-box; overflow: hidden;
         border-right: 1px solid #1c1c24; }
-      #transcript { border: 0; height: 100%; width: 100%; }
+
+      /* The Manuscript — the conversation re-rendered as a living document, plus a leaf
+         input that pipes to the session. (Editing-as-fork comes next.) */
+      #right { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+      #manuscript { overflow-y: auto; padding: 12px; line-height: 1.5; }
+      #manuscript .session header { color: #8a8a99; margin-bottom: 10px; }
+      #manuscript details.exchange { margin: 0 0 6px; border-left: 2px solid #23232b; padding-left: 8px; }
+      #manuscript summary { cursor: pointer; list-style: none; }
+      #manuscript summary::-webkit-details-marker { display: none; }
+      #manuscript .reply { margin: 4px 0 4px 16px; white-space: pre-wrap; word-break: break-word; }
+      #manuscript .glyph { display: inline-block; width: 1em; }
+      #manuscript .glyph.user { color: #7aa2f7; }
+      #manuscript .glyph.assistant { color: #9ece6a; }
+      #manuscript .glyph.system { color: #565666; }
+      #manuscript .role { color: #565666; margin-right: 6px; }
+      #manuscript .content { white-space: pre-wrap; }
+      #manuscript .leaf { color: #e0af68; }
+      #manuscript .placeholder { color: #565666; padding: 20px 8px; }
+
+      #leaf { border-top: 1px solid #1c1c24; padding: 8px; }
+      #leaf textarea { width: 100%; box-sizing: border-box; resize: none; background: #14141a;
+        color: #e6e6e6; border: 1px solid #23232b; border-radius: 4px; padding: 8px;
+        font: inherit; min-height: 38px; }
+      #leaf textarea:disabled { opacity: 0.4; }
+      #leaf textarea::placeholder { color: #565666; }
     </style>
   </head>
   <body>
     <div id="app">
       <nav id="sidebar"><h1>sessions</h1><div id="sessions"></div></nav>
       <div id="terminal"></div>
-      <iframe id="transcript" title="semantic transcript"></iframe>
+      <div id="right">
+        <div id="manuscript"><div class="placeholder">select a session to write into its Manuscript</div></div>
+        <div id="leaf">
+          <textarea id="leaf-input" rows="1" placeholder="select a session to write…" disabled></textarea>
+        </div>
+      </div>
     </div>
     <script type="module" src="/dist/main.js"></script>
   </body>

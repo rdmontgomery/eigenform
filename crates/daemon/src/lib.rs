@@ -39,6 +39,7 @@ pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty_ws))
         .route("/session/:uuid", get(session_route))
+        .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/sessions", get(sessions_route))
         .route("/api/recent", get(recent_route))
         .route("/api/watch/:uuid", get(watch_route));
@@ -70,20 +71,36 @@ async fn session_route(
     AxumPath(uuid): AxumPath<String>,
     State(cfg): State<Arc<Config>>,
 ) -> Response {
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    let path = match eigen_forest::resolve(dir, &uuid) {
-        Ok(p) => p,
-        Err(_) => return (StatusCode::NOT_FOUND, "no such session").into_response(),
-    };
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return (StatusCode::NOT_FOUND, "could not read session").into_response();
-    };
+    match session_fragment(&cfg, &uuid) {
+        Ok(frag) => Html(transcript_page(&frag)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /api/session/:uuid` — just the transcript fragment, for in-page injection into
+/// the Manuscript (no page chrome).
+async fn session_fragment_route(
+    AxumPath(uuid): AxumPath<String>,
+    State(cfg): State<Arc<Config>>,
+) -> Response {
+    match session_fragment(&cfg, &uuid) {
+        Ok(frag) => Html(frag).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Resolve, read, parse, and render a session's transcript fragment.
+fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'static str)> {
+    let dir = cfg
+        .projects_dir
+        .as_ref()
+        .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
+    let path = eigen_forest::resolve(dir, uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
+    let contents =
+        std::fs::read_to_string(&path).map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
     // parse_str is currently infallible (ParseError is uninhabited).
-    let session = eigen_surgery::Session::parse_str(&contents)
-        .unwrap_or_else(|e| match e {});
-    Html(transcript_page(&eigen_render::session_html(&session))).into_response()
+    let session = eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+    Ok(eigen_render::session_html(&session))
 }
 
 /// `GET /api/sessions` — recent sessions across all projects, for the sidebar.

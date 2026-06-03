@@ -45,6 +45,16 @@ async fn session_route_renders_the_transcript_html() {
 }
 
 #[tokio::test]
+async fn session_fragment_route_returns_bare_html_for_in_page_injection() {
+    let (_d, cfg) = fixture();
+    let base = start(cfg).await;
+    let body = reqwest_get(&format!("{base}/api/session/aaaa1111")).await;
+    assert!(body.contains("<details"), "transcript fragment:\n{body}");
+    assert!(body.contains("render me in the right pane"));
+    assert!(!body.to_lowercase().contains("<!doctype"), "fragment, not a full page:\n{body}");
+}
+
+#[tokio::test]
 async fn sessions_route_lists_sessions_with_titles() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;

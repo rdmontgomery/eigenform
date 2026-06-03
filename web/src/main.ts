@@ -58,23 +58,49 @@ function connectPty(session?: string) {
   sock.onclose = () => term.write("\r\n\x1b[2m[woland: pty disconnected]\x1b[0m\r\n");
 }
 
-const frame = () => document.getElementById("transcript") as HTMLIFrameElement;
+const manuscript = () => document.getElementById("manuscript") as HTMLElement;
 
-// Point the right pane at a session and follow it live: each SSE 'change' reloads the
-// transcript, restoring scroll so a growing session doesn't jump under you.
-function followTranscript(uuid: string) {
-  frame().src = `/session/${encodeURIComponent(uuid)}`;
+// Render the Manuscript in-page (not an iframe) so it can become a writing surface.
+// Re-fetch the fragment on each SSE 'change'; stay pinned to the leaf if we were near it.
+async function renderManuscript(uuid: string) {
+  const m = manuscript();
+  const nearBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 80;
+  const prev = m.scrollTop;
+  try {
+    m.innerHTML = await (await fetch(`/api/session/${encodeURIComponent(uuid)}`)).text();
+    m.scrollTop = nearBottom ? m.scrollHeight : prev;
+  } catch {
+    m.innerHTML = `<div class="placeholder">could not load session</div>`;
+  }
+}
+
+function followManuscript(uuid: string) {
+  void renderManuscript(uuid);
   if (es) es.close();
   es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
-  es.onmessage = () => {
-    const f = frame();
-    const y = f.contentWindow ? f.contentWindow.scrollY : 0;
-    f.onload = () => {
-      f.contentWindow?.scrollTo(0, y);
-      f.onload = null;
-    };
-    f.src = `/session/${encodeURIComponent(uuid)}`;
-  };
+  es.onmessage = () => void renderManuscript(uuid);
+}
+
+// The leaf input: type into the Manuscript, pipe to the live session's pty (claude).
+function setupLeafInput() {
+  const input = document.getElementById("leaf-input") as HTMLTextAreaElement;
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const text = input.value;
+      if (text && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "stdin", data: text + "\r" }));
+        input.value = "";
+      }
+    }
+  });
+}
+
+function enableLeafInput(session: string) {
+  const input = document.getElementById("leaf-input") as HTMLTextAreaElement;
+  input.disabled = false;
+  input.placeholder = `write to ${session.slice(0, 8)} — Enter to send, Shift+Enter for newline`;
+  input.focus();
 }
 
 let activeSession: string | null = null;
@@ -82,7 +108,8 @@ let activeSession: string | null = null;
 function selectSession(uuid: string) {
   activeSession = uuid;
   connectPty(uuid);
-  followTranscript(uuid);
+  followManuscript(uuid);
+  enableLeafInput(uuid);
   document.querySelectorAll<HTMLElement>(".session-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.uuid === uuid);
   });
@@ -143,11 +170,12 @@ async function loadSidebar() {
 // the forest in the sidebar. Pick a session to resume it.
 connectPty();
 loadSidebar();
+setupLeafInput();
 devLiveReload();
 fetch("/api/recent")
   .then((r) => (r.ok ? r.text() : ""))
   .then((u) => {
     const uuid = u.trim();
-    if (uuid) followTranscript(uuid);
+    if (uuid) followManuscript(uuid); // read-only preview until a session is selected
   })
   .catch(() => {});
