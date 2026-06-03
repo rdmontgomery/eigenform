@@ -253,8 +253,35 @@ pub fn inject(src: &Session, after: &str, role: Role, text: &str) -> Result<Sess
     let cut = cut_through(src, after)?;
     let parent = turn_uuid(&src.rows[cut]);
     let new_uuid = Uuid::new_v4().to_string();
-    let synthetic = build_turn_line(role, &new_uuid, &parent, text, &src.session_id);
+    let synthetic = build_turn_line(role, &new_uuid, Some(&parent), text, &src.session_id);
     finish(&src.rows[..=cut], &[synthetic], new_uuid, &src.session_id)
+}
+
+/// Edit a turn's content and fork at it: keep the prefix *before* the turn, re-author
+/// the turn with `text` (keeping its uuid, parent, and role), drop the tail, and make
+/// the edited turn the new resume head.
+pub fn edit_then_fork(
+    src: &Session,
+    turn: &str,
+    role: Role,
+    text: &str,
+) -> Result<Session, SurgeryError> {
+    let idx = src
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Turn(t) if t.uuid == turn))
+        .ok_or_else(|| SurgeryError::TurnNotFound(turn.to_string()))?;
+    let Row::Turn(target) = &src.rows[idx] else {
+        unreachable!("position matched a Turn");
+    };
+    let edited = build_turn_line(
+        role,
+        &target.uuid,
+        target.parent_uuid.as_deref(),
+        text,
+        &src.session_id,
+    );
+    finish(&src.rows[..idx], &[edited], target.uuid.clone(), &src.session_id)
 }
 
 /// Index of the prefix cut for forking/injecting at `turn`: the turn's own row,
@@ -310,7 +337,14 @@ fn finish(
 
 /// Build a synthetic turn line in the field shape Claude Code accepts (spike 03 Run 2).
 /// Built with the source `session_id`; `finish` swaps it to the new id uniformly.
-fn build_turn_line(role: Role, uuid: &str, parent: &str, text: &str, session_id: &str) -> String {
+fn build_turn_line(
+    role: Role,
+    uuid: &str,
+    parent: Option<&str>,
+    text: &str,
+    session_id: &str,
+) -> String {
+    let parent = parent.map(Value::from).unwrap_or(Value::Null);
     let value = match role {
         Role::User => json!({
             "parentUuid": parent,
