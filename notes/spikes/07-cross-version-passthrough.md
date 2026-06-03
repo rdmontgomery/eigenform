@@ -29,13 +29,27 @@ spike-authored) and 8 from other local projects.
 
 3. **`sessionId` coverage:** every row type EXCEPT `file-history-snapshot` carries a
    top-level `sessionId`. The id rewrite must therefore touch opaque rows too — and
-   does, via the guarded swap, with no per-type knowledge.
+   does, via a structural field-targeted rewrite (see finding 4), with no per-type
+   knowledge.
 
-4. **Guarded-swap safety:** for each session, walked every JSON value equal to that
-   session's own uuid (~3,700 occurrences total) and checked its position. **0 occurred
-   at a non-`sessionId` position.** The guarded string-token swap is empirically safe on
-   the entire corpus; the guard (bail if the uuid appears off a session field) is the
-   safety net for any future file that violates this.
+4. **Session-id position — CORRECTED 2026-06-03.** The first pass walked JSON values
+   for *exact equality* to the session uuid and found 0 off-`sessionId`, concluding a
+   string-token swap was safe. **That was a measurement artifact.** Re-checking for
+   *substring* occurrences (not just exact value equality) found the session uuid buried
+   inside `tool_result` / `stdout` content in **5 of 11 sessions** (15, 12, 2, 1, 1
+   occurrences) — a tool had printed the session's own `<id>.jsonl` filename or file
+   contents. (This project inspects `~/.claude/projects`, so its sessions quote their own
+   ids routinely.) A naive string-replace would **corrupt** those rows; the original
+   guard (which bails on any off-field occurrence) would **refuse to fork ~45% of real
+   sessions**. The corpus property test surfaced this immediately.
+
+   What *is* true: across all 11 sessions, **the session uuid is never the exact full
+   value of a non-`sessionId` key** (`exact-other = 0`). So the correct rewrite is
+   **field-targeted**: structurally walk the JSON and replace only values sitting at a
+   `sessionId` key. Substring occurrences in content are left untouched (they are at
+   `content`/`stdout` keys). A retained guard bails only on the `exact-other` case (a
+   non-`sessionId` key whose full value is the session uuid) as an early warning for
+   future schema drift. See `crates/surgery/src/lib.rs::rewrite_session_id`.
 
 5. **Leaf re-point target:** for every session the LAST `last-prompt` row has a
    `leafUuid` present, and it resolves to a real turn `uuid` in the file — across all 6
@@ -43,16 +57,22 @@ spike-authored) and 8 from other local projects.
 
 ## Implication
 
-CONFIRMED. Passthrough + guarded swap + last-`last-prompt` re-point are version-robust
-on the available corpus. The surgery crate encodes these as: total `.type` dispatch,
-opaque raw-line retention, guarded swap with a bail on stray, and re-point off the final
-`last-prompt`. A gated corpus property-test (see surgery design) re-runs findings 1/4/5
-plus byte-identical round-trip on whatever corpus a dev's machine has, so version drift
-surfaces automatically without committing other projects' content.
+CONFIRMED (with the finding-4 correction). Passthrough + field-targeted id rewrite +
+last-`last-prompt` re-point are version-robust on the available corpus. The surgery crate
+encodes these as: total `.type` dispatch, opaque raw-line retention, **field-targeted**
+session-id rewrite (structural walk of `sessionId` keys, guard bails only on the
+`exact-other` case), and re-point off the final `last-prompt`. A gated corpus
+property-test (see surgery design) re-runs findings 1/4/5 plus byte-identical round-trip
+on whatever corpus a dev's machine has, so version drift surfaces automatically without
+committing other projects' content. The corpus test is what caught the finding-4 artifact
+in the first place.
 
 ## Falsifiers to watch
 
-- A future row type that hides a session-scoped id under a key other than `sessionId`
-  (guarded swap would leave it stale — but the guard would NOT catch it, since the value
-  wouldn't equal the *session* uuid; it'd be some other id). Re-survey on version bumps.
+- A future row that carries the session uuid as the full value of a key other than
+  `sessionId` (e.g. a hypothetical `resumedFrom`). The field-targeted rewrite would leave
+  it stale, but the `exact-other` guard bails and flags it for us to extend the rewrite
+  rule. Re-survey on version bumps.
 - A `last-prompt` schema change dropping `leafUuid`. Corpus test asserts it resolves.
+- The session uuid appearing as a substring of content is EXPECTED and safe under the
+  field-targeted rewrite (left untouched); only naive string-replace was vulnerable.

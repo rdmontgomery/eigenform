@@ -1,7 +1,8 @@
-//! Guarded session-id swap: replace the old session uuid with a new one across a row,
-//! byte-faithful everywhere else — but REFUSE if the old uuid appears anywhere that
-//! isn't a `sessionId` value (a blind swap there would corrupt content). Spike 07
-//! verified the guard passes on every real session; these tests pin the contract.
+//! Field-targeted session-id swap: replace ONLY values sitting at a `sessionId` key,
+//! anywhere in the row's JSON tree. Substring occurrences inside content (tool output
+//! that printed the session's own id — see spike 07 finding 4) are left untouched.
+//! A guard bails only on the `exact-other` case: the old id as the full value of a
+//! non-`sessionId` key.
 
 use eigen_surgery::rewrite_session_id;
 
@@ -16,29 +17,36 @@ fn swaps_the_session_id_in_an_opaque_row() {
 }
 
 #[test]
-fn is_byte_faithful_except_the_swapped_id() {
-    // Two sessionId occurrences, surrounding structure untouched.
+fn preserves_old_id_appearing_as_substring_in_message_content() {
+    // A tool printed the session's own <id>.jsonl filename into content. The sessionId
+    // field must flip; the content occurrence must NOT (spike 07 finding 4).
     let line = format!(
-        r#"{{"type":"last-prompt","lastPrompt":"keep me","leafUuid":"some-turn-uuid","sessionId":"{OLD}"}}"#
+        r#"{{"type":"user","uuid":"u1","sessionId":"{OLD}","message":{{"role":"user","content":"see {OLD}.jsonl"}}}}"#
     );
+    let out = rewrite_session_id(&line, OLD, NEW).expect("swap, not bail");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["sessionId"], NEW, "sessionId field swapped");
+    assert_eq!(
+        v["message"]["content"],
+        format!("see {OLD}.jsonl"),
+        "content substring left intact"
+    );
+}
+
+#[test]
+fn rewrites_a_nested_session_id_too() {
+    // Whatever the nesting, every value at a `sessionId` key flips.
+    let line = format!(r#"{{"type":"x","sessionId":"{OLD}","meta":{{"sessionId":"{OLD}"}}}}"#);
     let out = rewrite_session_id(&line, OLD, NEW).unwrap();
-    assert!(out.contains(NEW));
     assert!(!out.contains(OLD));
-    assert_eq!(out, line.replace(OLD, NEW));
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["sessionId"], NEW);
+    assert_eq!(v["meta"]["sessionId"], NEW);
 }
 
 #[test]
-fn bails_when_old_uuid_appears_inside_message_content() {
-    // User pasted the session uuid into their prompt — a blind replace would mangle it.
-    let line = format!(
-        r#"{{"type":"user","uuid":"u1","sessionId":"{OLD}","message":{{"role":"user","content":"my session is {OLD}"}}}}"#
-    );
-    assert!(rewrite_session_id(&line, OLD, NEW).is_err());
-}
-
-#[test]
-fn bails_when_old_uuid_is_an_exact_value_under_a_non_session_key() {
-    let line = format!(r#"{{"type":"x","note":"{OLD}","sessionId":"{OLD}"}}"#);
+fn bails_when_old_id_is_an_exact_value_under_a_non_session_key() {
+    let line = format!(r#"{{"type":"x","resumedFrom":"{OLD}","sessionId":"{OLD}"}}"#);
     assert!(rewrite_session_id(&line, OLD, NEW).is_err());
 }
 

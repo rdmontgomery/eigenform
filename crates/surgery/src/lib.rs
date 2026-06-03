@@ -40,54 +40,57 @@ pub enum RewriteError {
     StrayOccurrence { old: String, line: String },
 }
 
-/// Replace `old` with `new` in one JSONL line, but only if every occurrence of `old`
-/// is a `sessionId` value. Byte-faithful everywhere else. A line not containing `old`
-/// is returned unchanged. See spike 07.
+/// Replace the session id `old` with `new` in one JSONL line, targeting **only** values
+/// that sit at a `sessionId` key (anywhere in the tree). Substring occurrences inside
+/// content — e.g. a tool that printed the session's own `<id>.jsonl` filename — are left
+/// untouched (spike 07 finding 4). Bails if `old` is the exact full value of some other
+/// key (`exact-other`), as an early warning for an id-bearing key we don't yet rewrite.
+/// A line not containing `old`, or not valid JSON, is returned unchanged.
 pub fn rewrite_session_id(line: &str, old: &str, new: &str) -> Result<String, RewriteError> {
-    let total = line.matches(old).count();
-    if total == 0 {
+    if !line.contains(old) {
         return Ok(line.to_string());
     }
-    let bail = || RewriteError::StrayOccurrence {
-        old: old.to_string(),
-        line: line.to_string(),
+    let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+        return Ok(line.to_string());
     };
-    // Count the occurrences that are legitimate: a JSON string value exactly equal to
-    // `old`, sitting at a key named `sessionId`. Anything else (a different key, a
-    // substring inside a larger string) is a stray.
-    let value: Value = serde_json::from_str(line).map_err(|_| bail())?;
-    let mut session_field_hits = 0;
     let mut stray = false;
-    walk_strings(&value, None, &mut |key, s| {
-        if s == old {
-            if key == Some("sessionId") {
-                session_field_hits += 1;
-            } else {
-                stray = true;
-            }
-        }
-    });
-    // A substring occurrence (old buried inside a larger token) shows up in `total` but
-    // never as an exact string value, so the counts diverge — also a stray.
-    if stray || total != session_field_hits {
-        return Err(bail());
+    rewrite_session_fields(&mut value, None, old, new, &mut stray);
+    if stray {
+        return Err(RewriteError::StrayOccurrence {
+            old: old.to_string(),
+            line: line.to_string(),
+        });
     }
-    Ok(line.replace(old, new))
+    Ok(serde_json::to_string(&value).expect("re-serialize rewritten row"))
 }
 
-/// Visit every string value in a JSON tree with the key it was found under (None for
-/// array elements / the root).
-fn walk_strings(value: &Value, key: Option<&str>, f: &mut impl FnMut(Option<&str>, &str)) {
+/// Walk the tree: swap string values equal to `old` that are keyed `sessionId`; flag any
+/// other key whose full value equals `old` as a stray.
+fn rewrite_session_fields(
+    value: &mut Value,
+    key: Option<&str>,
+    old: &str,
+    new: &str,
+    stray: &mut bool,
+) {
     match value {
-        Value::String(s) => f(key, s),
+        Value::String(s) => {
+            if s == old {
+                if key == Some("sessionId") {
+                    *s = new.to_string();
+                } else {
+                    *stray = true;
+                }
+            }
+        }
         Value::Array(items) => {
             for item in items {
-                walk_strings(item, None, f);
+                rewrite_session_fields(item, None, old, new, stray);
             }
         }
         Value::Object(map) => {
-            for (k, v) in map {
-                walk_strings(v, Some(k), f);
+            for (k, v) in map.iter_mut() {
+                rewrite_session_fields(v, Some(k.as_str()), old, new, stray);
             }
         }
         _ => {}
@@ -154,14 +157,31 @@ pub struct Session {
     /// The session uuid, read from the first row that carries a top-level `sessionId`.
     pub session_id: String,
     pub rows: Vec<Row>,
+    /// Whether the source ended with a trailing newline, so re-emit is exact.
+    trailing_newline: bool,
 }
 
 impl Session {
     /// Parse JSONL text into rows, preserving each line verbatim.
     pub fn parse_str(input: &str) -> Result<Session, ParseError> {
+        if input.is_empty() {
+            return Ok(Session {
+                session_id: String::new(),
+                rows: Vec::new(),
+                trailing_newline: false,
+            });
+        }
+        let trailing_newline = input.ends_with('\n');
+        // A trailing '\n' produces a final empty segment that is not a row.
+        let body = if trailing_newline {
+            &input[..input.len() - 1]
+        } else {
+            input
+        };
+
         let mut rows = Vec::new();
         let mut session_id: Option<String> = None;
-        for line in input.split('\n') {
+        for line in body.split('\n') {
             let value: Option<Value> = serde_json::from_str(line).ok();
             if session_id.is_none() {
                 if let Some(sid) = value.as_ref().and_then(session_id_of) {
@@ -170,22 +190,23 @@ impl Session {
             }
             rows.push(classify(line, value.as_ref()));
         }
-        // A trailing '\n' produces a final empty segment; to_jsonl re-adds the newline
-        // after every row, so drop it here to round-trip exactly.
-        if input.ends_with('\n') {
-            rows.pop();
-        }
         Ok(Session {
             session_id: session_id.unwrap_or_default(),
             rows,
+            trailing_newline,
         })
     }
 
-    /// Re-emit the session as JSONL bytes.
+    /// Re-emit the session as JSONL bytes, byte-identical to the parsed source.
     pub fn to_jsonl(&self) -> String {
         let mut out = String::new();
-        for row in &self.rows {
+        for (i, row) in self.rows.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
             out.push_str(row.raw());
+        }
+        if self.trailing_newline {
             out.push('\n');
         }
         out

@@ -26,3 +26,16 @@ fn parse_then_emit_is_byte_identical_for_a_mixed_session() {
     let session = Session::parse_str(MIXED).expect("parse should succeed");
     assert_eq!(session.to_jsonl(), MIXED);
 }
+
+#[test]
+fn round_trip_preserves_a_missing_trailing_newline() {
+    // A file that doesn't end in '\n' must come back exactly as it went in.
+    let no_newline = MIXED.trim_end_matches('\n');
+    let session = Session::parse_str(no_newline).expect("parse");
+    assert_eq!(session.to_jsonl(), no_newline);
+}
+
+#[test]
+fn round_trip_of_empty_input_is_empty() {
+    assert_eq!(Session::parse_str("").unwrap().to_jsonl(), "");
+}
