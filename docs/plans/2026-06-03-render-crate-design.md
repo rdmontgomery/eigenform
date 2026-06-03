@@ -51,8 +51,18 @@ walks the tree drawing box-drawing connectors (`├─ └─ │`).
 - **Resume leaf:** marked `← leaf`. If the literal leaf is a hidden row, the marker falls
   back to the last visible turn.
 
-CLI: `eigen sessions show <session-path> [--render text]`. (Path-based for now; uuid→path
-resolution arrives with `crates/forest`, build step 5.)
+CLI: `eigen sessions show <uuid|prefix|path> [--render text]` (uuid resolution via
+`crates/forest`).
+
+## Second view: the fork diff (added 2026-06-03)
+
+`fork_diff_view(source: &Session, fork: &Session) -> View` — a **side-by-side** diff
+aligned by turn uuid (`fork_at` preserves uuids): kept turns on both columns, dropped
+left-only (`-`), injected right-only (`+`), edited both with differing content (`~`).
+Header summary (kept/dropped/injected/edited counts) and a `leaf:` move line. CLI:
+`eigen sessions diff <a> <b>`, and `eigen surgery fork … --diff` (diff to stderr so
+stdout stays the new uuid for scripting). Uses the shared visibility/leaf helpers, so the
+diff shows exactly the turns `show` would.
 
 ## Tests
 
