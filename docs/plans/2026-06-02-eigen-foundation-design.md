@@ -141,7 +141,11 @@ Spikes 2–4 are gating for implementation start. The justfile contains `just sp
    (which corrected spike 07 — see [`notes/spikes/07-cross-version-passthrough.md`](../../notes/spikes/07-cross-version-passthrough.md)).
    `tail` deferred: it rides on `--fork-session`, gated by spike 2. CLI takes a file
    path; uuid→path resolution is a follow-up.
-3. ⬜ `crates/render` (text + json projections; html lands with daemon).
+3. 🟡 `crates/render` (text + json projections; html lands with daemon). — **text
+   projection shipped 2026-06-03** (View IR + `session_view` turn-tree +
+   `eigen sessions show`). json/html **deliberately deferred** until a browser consumer
+   exists (the data model is kept fluid on purpose). Design:
+   [`2026-06-03-render-crate-design.md`](2026-06-03-render-crate-design.md).
 4. 🟡 `eigen skills tree|list|audit` + `eigen memory tree|list|audit`. — tree/list landed
    earlier; `audit` subcommands pending.
 5. ⬜ `crates/forest` + `eigen sessions list|show`.
