@@ -148,7 +148,11 @@ Spikes 2–4 are gating for implementation start. The justfile contains `just sp
    [`2026-06-03-render-crate-design.md`](2026-06-03-render-crate-design.md).
 4. 🟡 `eigen skills tree|list|audit` + `eigen memory tree|list|audit`. — tree/list landed
    earlier; `audit` subcommands pending.
-5. ⬜ `crates/forest` + `eigen sessions list|show`.
+5. 🟡 `crates/forest` + `eigen sessions list|show`. — **sessions shipped 2026-06-03**:
+   global uuid/prefix resolution + recent list (tail-peek recency/title, 7d default,
+   `--all-projects`/`--since`/`--cwd`), newest-at-bottom. Design:
+   [`2026-06-03-forest-crate-design.md`](2026-06-03-forest-crate-design.md). Deferred:
+   skills/memory indexing under forest, `--keyword` search, persisted index.
 6. ⬜ `crates/daemon` (http + ws; html projection in render).
 7. ⬜ Browser vertical slice: forest browser + context inspector.
 8. ⬜ Affordance buttons (browser → daemon → surgery).
