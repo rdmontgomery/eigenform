@@ -15,8 +15,23 @@ const PREVIEW_WIDTH: usize = 60;
 /// level, assistant/system replies nested beneath), glyph by role, one-line previews,
 /// resume leaf marked.
 pub fn session_view(session: &Session) -> View {
+    // Only conversational content: user/assistant turns with text, and system rows that
+    // carry a turn duration. Thinking-only rows and meta system rows are noise.
+    let visible: Vec<&Turn> = session
+        .turns()
+        .into_iter()
+        .filter(|t| is_visible(t))
+        .collect();
+
+    // The resume leaf often points at a row we hide (a turn_duration or meta system row).
+    // Mark it where it lands if visible, otherwise fall back to the last visible turn.
     let leaf = session.resume_leaf();
-    let exchanges = session.turns().iter().filter(|t| t.role == Role::User).count();
+    let leaf_target = match &leaf {
+        Some(l) if visible.iter().any(|t| &t.uuid == l) => Some(l.clone()),
+        _ => visible.last().map(|t| t.uuid.clone()),
+    };
+
+    let exchanges = visible.iter().filter(|t| t.role == Role::User).count();
     let title = format!(
         "session {} · {} exchange{}",
         short_id(&session.session_id),
@@ -25,8 +40,8 @@ pub fn session_view(session: &Session) -> View {
     );
 
     let mut top: Vec<Node> = Vec::new();
-    for turn in session.turns() {
-        let node = turn_node(turn, leaf.as_deref());
+    for turn in &visible {
+        let node = turn_node(turn, leaf_target.as_deref());
         if turn.role == Role::User {
             top.push(node);
         } else if let Some(parent) = top.last_mut() {
@@ -41,6 +56,19 @@ pub fn session_view(session: &Session) -> View {
         title,
         body: vec![View::Tree(top)],
     }
+}
+
+/// Whether a turn carries conversational content worth showing.
+fn is_visible(turn: &Turn) -> bool {
+    match turn.role {
+        Role::System => has_duration(turn),
+        _ => !content_preview(turn).is_empty(),
+    }
+}
+
+fn has_duration(turn: &Turn) -> bool {
+    let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
+    value.get("durationMs").and_then(|d| d.as_f64()).is_some()
 }
 
 fn turn_node(turn: &Turn, leaf: Option<&str>) -> Node {

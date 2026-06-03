@@ -62,6 +62,56 @@ fn multiple_exchanges_are_top_level_siblings() {
     assert!(out.trim_end().ends_with("← leaf"));
 }
 
+/// An assistant row carrying only a thinking block (no text) — real sessions split
+/// thinking and text into separate rows.
+fn assistant_thinking(uuid: &str, parent: &str) -> String {
+    format!(r#"{{"type":"assistant","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"sessionId":"{SID}","message":{{"role":"assistant","content":[{{"type":"thinking","thinking":"hmm"}}]}}}}"#)
+}
+/// A non-turn_duration system row (e.g. an init/meta marker) — carries no durationMs.
+fn system_meta(uuid: &str, parent: &str) -> String {
+    format!(r#"{{"type":"system","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"subtype":"init","sessionId":"{SID}"}}"#)
+}
+
+#[test]
+fn thinking_only_assistant_rows_are_omitted() {
+    let s = session_from(&[
+        user("U1", "", "hi"),
+        assistant_thinking("A0", "U1"),
+        assistant("A1", "A0", "real answer"),
+        last_prompt("A1"),
+    ]);
+    let out = render_text(&session_view(&s));
+    assert_eq!(out.matches("◇ assistant").count(), 1, "only the text row shows:\n{out}");
+    assert!(out.contains("real answer"));
+}
+
+#[test]
+fn system_rows_without_duration_are_omitted() {
+    let s = session_from(&[
+        user("U1", "", "hi"),
+        assistant("A1", "U1", "yo"),
+        system_meta("M1", "A1"),
+        last_prompt("A1"),
+    ]);
+    let out = render_text(&session_view(&s));
+    assert!(!out.contains("· system"), "non-duration system hidden:\n{out}");
+}
+
+#[test]
+fn leaf_marker_falls_back_to_last_visible_turn_when_the_leaf_is_hidden() {
+    // The real leaf points at a hidden meta system row; the marker should land on the
+    // last visible turn (the assistant) instead of vanishing.
+    let s = session_from(&[
+        user("U1", "", "hi"),
+        assistant("A1", "U1", "yo"),
+        system_meta("M1", "A1"),
+        last_prompt("M1"),
+    ]);
+    let out = render_text(&session_view(&s));
+    let row = out.lines().find(|l| l.contains("← leaf")).expect("leaf marked somewhere");
+    assert!(row.contains("assistant"), "leaf fell back to assistant:\n{out}");
+}
+
 #[test]
 fn long_content_is_truncated_to_one_line() {
     let long = "x".repeat(200);

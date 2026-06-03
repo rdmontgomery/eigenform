@@ -28,6 +28,29 @@ enum Cmd {
         #[command(subcommand)]
         action: SurgeryAction,
     },
+    /// inspect sessions
+    Sessions {
+        #[command(subcommand)]
+        action: SessionsAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SessionsAction {
+    /// render a session JSONL as a turn-tree
+    Show {
+        /// path to the session JSONL
+        session: PathBuf,
+        #[arg(long, value_enum, default_value_t = RenderFormat::Text)]
+        render: RenderFormat,
+    },
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum RenderFormat {
+    Text,
+    Json,
+    Html,
 }
 
 #[derive(Subcommand, Debug)]
@@ -124,7 +147,27 @@ fn main() -> Result<()> {
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
         Cmd::Surgery { action } => surgery(action),
+        Cmd::Sessions { action } => match action {
+            SessionsAction::Show { session, render } => sessions_show(session, render),
+        },
     }
+}
+
+fn sessions_show(session: PathBuf, render: RenderFormat) -> Result<()> {
+    match render {
+        RenderFormat::Text => {}
+        RenderFormat::Json | RenderFormat::Html => {
+            anyhow::bail!(
+                "--render {:?} is not supported yet; the json/html schema is deferred until \
+                 we render in the browser. Use --render text.",
+                render
+            );
+        }
+    }
+    let src = load_session(&session)?;
+    let view = eigen_render::session_view(&src);
+    print!("{}", eigen_render::render_text(&view));
+    Ok(())
 }
 
 fn surgery(action: SurgeryAction) -> Result<()> {

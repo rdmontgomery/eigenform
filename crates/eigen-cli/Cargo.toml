@@ -15,6 +15,7 @@ eigen-skills   = { path = "../skills" }
 eigen-projects = { path = "../projects" }
 eigen-memory   = { path = "../memory" }
 eigen-surgery  = { path = "../surgery" }
+eigen-render   = { path = "../render" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
