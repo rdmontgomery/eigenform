@@ -23,6 +23,7 @@ A control surface over Claude Code (and imported Claude Chat) that performs cont
 - `~/.claude/sessions/` contains tiny per-PID bookkeeping files, NOT transcripts. The spec's claim that active sessions live there is corrected: only `~/.claude/projects/` holds transcripts.
 - `claude --fork-session` exists as a flag.
 - JSONL header rows encode a `leafUuid` pointer; turn rows carry `parentUuid` and `isSidechain`. The file is internally a tree with a leaf pointer, not a flat log.
+- **Mid-tree cold-load CONFIRMED (spike 03, 2026-06-03):** a hand-built JSONL — prefix-truncated, sessionId rewritten, dropped into the projects dir — resumes via `claude --resume`, and the model's context is exactly that file: dropped turns don't leak, fully fabricated turns load and are recalled. Resume head = last `last-prompt` row's `leafUuid`, which surgery must re-point. This unblocks `crates/surgery` (build step 2).
 
 ## Repo layout
 
@@ -150,8 +151,8 @@ Each step usable on its own.
 
 ## Known unknowns
 
-- Whether `claude --resume` will accept a JSONL we author from scratch with a parent-uuid prefix copy. Spike 3 settles this.
-- Whether mid-tree edits actually reach the model (cold-load assumption). Spike 3 settles this.
+- ~~Whether `claude --resume` will accept a JSONL we author from scratch with a parent-uuid prefix copy.~~ RESOLVED (spike 03, 2026-06-03): yes — fully synthetic 3-turn session loaded and was recalled.
+- ~~Whether mid-tree edits actually reach the model (cold-load assumption).~~ RESOLVED (spike 03, 2026-06-03): yes — truncated fork resumed with no knowledge of dropped turns.
 - Whether plugin skills resolve identically to user skills in the override stack. Verifying during step 4.
 - Embedding stack choice (Ollama local vs ONNX in-process vs Python sidecar). Deferred to step 10.
 - TS frontend framework choice. Deferred to step 7.
