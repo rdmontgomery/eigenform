@@ -1,0 +1,21 @@
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# TS frontend (later)
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# os
+.DS_Store
+Thumbs.db
+
+# local-only spike scratch
+/tmp-spike-*/
