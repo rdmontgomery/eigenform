@@ -10,6 +10,68 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ParseError {}
 
+#[derive(Debug, Error)]
+pub enum RewriteError {
+    /// The old session uuid appears somewhere other than a `sessionId` value — a blind
+    /// swap would corrupt content. Refuse rather than mangle.
+    #[error("session uuid `{old}` appears off a sessionId field; refusing to swap row: {line}")]
+    StrayOccurrence { old: String, line: String },
+}
+
+/// Replace `old` with `new` in one JSONL line, but only if every occurrence of `old`
+/// is a `sessionId` value. Byte-faithful everywhere else. A line not containing `old`
+/// is returned unchanged. See spike 07.
+pub fn rewrite_session_id(line: &str, old: &str, new: &str) -> Result<String, RewriteError> {
+    let total = line.matches(old).count();
+    if total == 0 {
+        return Ok(line.to_string());
+    }
+    let bail = || RewriteError::StrayOccurrence {
+        old: old.to_string(),
+        line: line.to_string(),
+    };
+    // Count the occurrences that are legitimate: a JSON string value exactly equal to
+    // `old`, sitting at a key named `sessionId`. Anything else (a different key, a
+    // substring inside a larger string) is a stray.
+    let value: Value = serde_json::from_str(line).map_err(|_| bail())?;
+    let mut session_field_hits = 0;
+    let mut stray = false;
+    walk_strings(&value, None, &mut |key, s| {
+        if s == old {
+            if key == Some("sessionId") {
+                session_field_hits += 1;
+            } else {
+                stray = true;
+            }
+        }
+    });
+    // A substring occurrence (old buried inside a larger token) shows up in `total` but
+    // never as an exact string value, so the counts diverge — also a stray.
+    if stray || total != session_field_hits {
+        return Err(bail());
+    }
+    Ok(line.replace(old, new))
+}
+
+/// Visit every string value in a JSON tree with the key it was found under (None for
+/// array elements / the root).
+fn walk_strings(value: &Value, key: Option<&str>, f: &mut impl FnMut(Option<&str>, &str)) {
+    match value {
+        Value::String(s) => f(key, s),
+        Value::Array(items) => {
+            for item in items {
+                walk_strings(item, None, f);
+            }
+        }
+        Value::Object(map) => {
+            for (k, v) in map {
+                walk_strings(v, Some(k), f);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The role of a conversation turn, taken from the row's `type`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
