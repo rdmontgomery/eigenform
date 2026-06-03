@@ -33,7 +33,100 @@ fn render_tree_single_skill_shows_layer_and_path() {
 }
 
 #[test]
-fn render_tree_collides_two_layers_marks_last_as_winner() {
+fn render_tree_treats_multi_plugin_same_name_as_namespaced_not_shadowing() {
+    // All-plugin contributions to the same name = three fully-qualified
+    // namespaced skills (plugin:discord:access etc.). No shadowing,
+    // no WINS marker.
+    let scan = vec![
+        sk(
+            "access",
+            Layer::Plugin {
+                name: "discord".into(),
+            },
+            "/p/discord/access.md",
+        ),
+        sk(
+            "access",
+            Layer::Plugin {
+                name: "imessage".into(),
+            },
+            "/p/imessage/access.md",
+        ),
+        sk(
+            "access",
+            Layer::Plugin {
+                name: "telegram".into(),
+            },
+            "/p/telegram/access.md",
+        ),
+    ];
+    let out = render_tree(&scan);
+
+    assert!(out.contains("[plugin:discord]"));
+    assert!(out.contains("[plugin:imessage]"));
+    assert!(out.contains("[plugin:telegram]"));
+    assert!(
+        !out.contains("WINS"),
+        "plugin-only contributions are namespaced; no shadowing: {out}"
+    );
+    assert!(
+        out.contains("(namespaced)"),
+        "should annotate plugin-only co-existence: {out}"
+    );
+}
+
+#[test]
+fn render_tree_marks_shadowing_only_for_non_plugin_collisions() {
+    // global + repo at the same name = real shadowing (only one is reachable
+    // by the bare name `foo`). Repo wins by precedence.
+    let scan = vec![
+        sk("foo", Layer::Global, "/h/foo.md"),
+        sk(
+            "foo",
+            Layer::Repo { project: None },
+            "/r/foo.md",
+        ),
+    ];
+    let out = render_tree(&scan);
+
+    assert!(out.contains("WINS"));
+    let winner_line = out
+        .lines()
+        .find(|l| l.contains("WINS"))
+        .expect("expected a winner line");
+    assert!(winner_line.contains("[repo]"));
+}
+
+#[test]
+fn render_tree_mixed_plugin_and_non_plugin_marks_only_non_plugin_shadowing() {
+    // global + plugin:foo + plugin:bar at the same name:
+    //   - only one non-plugin contribution (global), so no shadowing among
+    //     non-plugins.
+    //   - plugins remain namespaced.
+    //   - no WINS marker (only one bare-name reachable contribution).
+    let scan = vec![
+        sk("hat", Layer::Global, "/h/hat.md"),
+        sk(
+            "hat",
+            Layer::Plugin {
+                name: "foo".into(),
+            },
+            "/p/foo/hat.md",
+        ),
+        sk(
+            "hat",
+            Layer::Plugin {
+                name: "bar".into(),
+            },
+            "/p/bar/hat.md",
+        ),
+    ];
+    let out = render_tree(&scan);
+    assert!(!out.contains("WINS"), "single non-plugin contribution = no shadowing: {out}");
+}
+
+#[test]
+fn render_tree_collides_two_non_plugin_layers_marks_last_as_winner() {
     // scan_many's output order = layer precedence order: global is first, repo is last.
     let scan = vec![
         sk("foo", Layer::Global, "/h/foo.md"),

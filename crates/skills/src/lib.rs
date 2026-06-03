@@ -255,7 +255,19 @@ pub fn render_tree(scan: &[LayeredSkill]) -> String {
         groups.entry(ls.skill.name.as_str()).or_default().push(ls);
     }
     for (name, contribs) in &groups {
-        let _ = writeln!(out, "{name}");
+        let non_plugin: Vec<&&LayeredSkill> = contribs
+            .iter()
+            .filter(|ls| !matches!(ls.layer, Layer::Plugin { .. }))
+            .collect();
+        let plugin_count = contribs.len() - non_plugin.len();
+        // Plugins are namespaced (`plugin:<plug>:<skill>`) — multiple plugin
+        // contributions to the same name coexist, they don't shadow.
+        let namespaced = non_plugin.is_empty() && plugin_count > 1;
+        if namespaced {
+            let _ = writeln!(out, "{name}  (namespaced)");
+        } else {
+            let _ = writeln!(out, "{name}");
+        }
         for ls in contribs {
             let _ = writeln!(
                 out,
@@ -264,8 +276,10 @@ pub fn render_tree(scan: &[LayeredSkill]) -> String {
                 ls.skill.source_path.display()
             );
         }
-        if contribs.len() > 1 {
-            let winner = contribs.last().unwrap();
+        // Real shadowing only happens between non-namespaced (bare-name)
+        // contributions: bundled, global, repo, cwd.
+        if non_plugin.len() > 1 {
+            let winner = non_plugin.last().unwrap();
             let _ = writeln!(out, "  -> WINS: [{}]", layer_tag(&winner.layer));
         }
         out.push('\n');
