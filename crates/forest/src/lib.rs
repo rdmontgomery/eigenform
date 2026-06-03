@@ -115,10 +115,18 @@ pub fn enumerate_session_stubs(projects_dir: &Path) -> Result<Vec<SessionStub>> 
 
 /// Resolve a session `query` (full uuid or unique prefix) to its path, machine-wide.
 pub fn resolve(projects_dir: &Path, query: &str) -> std::result::Result<PathBuf, ResolveError> {
+    Ok(resolve_stub(projects_dir, query)?.path)
+}
+
+/// Like [`resolve`], but returns the full [`SessionStub`] (uuid, path, and cwd).
+pub fn resolve_stub(
+    projects_dir: &Path,
+    query: &str,
+) -> std::result::Result<SessionStub, ResolveError> {
     let stubs = enumerate_session_stubs(projects_dir)?;
 
     if let Some(exact) = stubs.iter().find(|s| s.uuid == query) {
-        return Ok(exact.path.clone());
+        return Ok(exact.clone());
     }
     let matches: Vec<SessionStub> = stubs
         .into_iter()
@@ -126,7 +134,7 @@ pub fn resolve(projects_dir: &Path, query: &str) -> std::result::Result<PathBuf,
         .collect();
     match matches.len() {
         0 => Err(ResolveError::NotFound(query.to_string())),
-        1 => Ok(matches.into_iter().next().unwrap().path),
+        1 => Ok(matches.into_iter().next().unwrap()),
         _ => Err(ResolveError::Ambiguous(matches)),
     }
 }

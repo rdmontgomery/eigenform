@@ -37,7 +37,9 @@ pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty_ws))
         .route("/session/:uuid", get(session_route))
-        .route("/api/recent", get(recent_route));
+        .route("/api/sessions", get(sessions_route))
+        .route("/api/recent", get(recent_route))
+        .route("/api/watch/:uuid", get(watch_route));
     if let Some(web_dir) = &config.web_dir {
         let index = web_dir.join("index.html");
         router = router.fallback_service(
@@ -76,6 +78,30 @@ async fn session_route(
     Html(transcript_page(&eigen_render::session_html(&session))).into_response()
 }
 
+/// `GET /api/sessions` — recent sessions across all projects, for the sidebar.
+async fn sessions_route(State(cfg): State<Arc<Config>>) -> Response {
+    let Some(dir) = &cfg.projects_dir else {
+        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
+    };
+    match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+        Ok(sessions) => {
+            let items: Vec<_> = sessions
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "uuid": s.uuid,
+                        "title": s.title.clone().unwrap_or_else(|| "(untitled)".to_string()),
+                        "cwd": s.cwd.display().to_string(),
+                        "recency": s.recency.to_rfc3339(),
+                    })
+                })
+                .collect();
+            axum::Json(items).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
+    }
+}
+
 /// `GET /api/recent` — the most recent session uuid across all projects.
 async fn recent_route(State(cfg): State<Arc<Config>>) -> Response {
     let Some(dir) = &cfg.projects_dir else {
@@ -88,6 +114,54 @@ async fn recent_route(State(cfg): State<Arc<Config>>) -> Response {
         },
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
     }
+}
+
+/// `GET /api/watch/:uuid` — Server-Sent Events: a `change` event each time the session's
+/// JSONL is written (the live-follow signal for the right pane).
+async fn watch_route(
+    AxumPath(uuid): AxumPath<String>,
+    State(cfg): State<Arc<Config>>,
+) -> Response {
+    let Some(dir) = &cfg.projects_dir else {
+        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
+    };
+    let path = match eigen_forest::resolve(dir, &uuid) {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "no such session").into_response(),
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(8);
+    // A dedicated thread owns the watcher; it lives until the SSE receiver is dropped.
+    std::thread::spawn(move || {
+        let (raw_tx, raw_rx) = std::sync::mpsc::channel();
+        let mut watcher = match notify::recommended_watcher(move |res| {
+            let _ = raw_tx.send(res);
+        }) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        let watch_dir = path.parent().unwrap_or(&path).to_path_buf();
+        if notify::Watcher::watch(&mut watcher, &watch_dir, notify::RecursiveMode::NonRecursive)
+            .is_err()
+        {
+            return;
+        }
+        let target = path.file_name().map(|n| n.to_os_string());
+        for event in raw_rx {
+            let Ok(event) = event else { continue };
+            let touches = event
+                .paths
+                .iter()
+                .any(|p| p.file_name().map(|n| n.to_os_string()) == target);
+            if touches && tx.blocking_send(()).is_err() {
+                break; // SSE connection gone; drop the watcher
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|_| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data("change")));
+    axum::response::sse::Sse::new(stream).into_response()
 }
 
 /// Wrap a transcript fragment in a standalone dark page with collapsible styling.
@@ -110,9 +184,17 @@ summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:n
 .role{color:#565666;margin-right:6px}.content{white-space:pre-wrap}\
 .leaf{color:#e0af68}";
 
+#[derive(serde::Deserialize)]
+struct PtyQuery {
+    /// Resume this session in the pty (spawns `claude --resume`). Absent = the default
+    /// command (a shell). Only a real connection spawns anything.
+    session: Option<String>,
+}
+
 async fn pty_ws(
     ws: WebSocketUpgrade,
     State(cfg): State<Arc<Config>>,
+    axum::extract::Query(query): axum::extract::Query<PtyQuery>,
     headers: HeaderMap,
 ) -> Response {
     // Defend against CSRF-to-localhost: a page you visit must not be able to open a
@@ -121,7 +203,36 @@ async fn pty_ws(
     if !origin_is_local(&headers) {
         return (StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response();
     }
-    ws.on_upgrade(move |socket| bridge(socket, cfg))
+    let command = pty_command(&cfg, query.session.as_deref());
+    ws.on_upgrade(move |socket| bridge(socket, command))
+}
+
+/// Resolve which command a pty connection should run. `session` → `claude --resume
+/// <full-uuid>` in that session's cwd (the user-initiated, token-spending path). No
+/// session → the configured default (a shell in dev, a dummy in tests). Pure: spawns
+/// nothing.
+fn pty_command(cfg: &Config, session: Option<&str>) -> PtyCommand {
+    if let (Some(uuid), Some(dir)) = (session, &cfg.projects_dir) {
+        if let Ok(stub) = eigen_forest::resolve_stub(dir, uuid) {
+            return PtyCommand {
+                program: "claude".to_string(),
+                args: vec!["--resume".to_string(), stub.uuid],
+                cwd: Some(stub.cwd),
+            };
+        }
+    }
+    PtyCommand {
+        program: cfg.program.clone(),
+        args: cfg.args.clone(),
+        cwd: cfg.cwd.clone(),
+    }
+}
+
+#[derive(Clone)]
+struct PtyCommand {
+    program: String,
+    args: Vec<String>,
+    cwd: Option<PathBuf>,
 }
 
 fn origin_is_local(headers: &HeaderMap) -> bool {
@@ -153,9 +264,9 @@ enum Control {
 
 /// Bridge one websocket to a freshly-spawned pty: pty output → binary frames, client
 /// control messages → stdin / resize.
-async fn bridge(socket: WebSocket, cfg: Arc<Config>) {
-    let args: Vec<&str> = cfg.args.iter().map(String::as_str).collect();
-    let mut pty = match Pty::spawn(&cfg.program, &args, cfg.cwd.as_deref(), (80, 24)) {
+async fn bridge(socket: WebSocket, command: PtyCommand) {
+    let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
+    let mut pty = match Pty::spawn(&command.program, &args, command.cwd.as_deref(), (80, 24)) {
         Ok(p) => p,
         Err(_) => return,
     };
@@ -277,5 +388,42 @@ impl Pty {
             pixel_height: 0,
         })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_query_resolves_to_claude_resume_without_spawning() {
+        // A temp projects dir with one session; pty_command must map it to claude --resume
+        // in the session's cwd — and spawn nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let pdir = dir.path().join("-home-me-proj");
+        std::fs::create_dir_all(&pdir).unwrap();
+        let uuid = "abcdef00-0000-4000-8000-000000000000";
+        std::fs::write(
+            pdir.join(format!("{uuid}.jsonl")),
+            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{uuid}"}}"#) + "\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            program: "bash".into(),
+            args: vec![],
+            cwd: None,
+            web_dir: None,
+            projects_dir: Some(dir.path().to_path_buf()),
+        };
+
+        let resumed = pty_command(&cfg, Some("abcdef00"));
+        assert_eq!(resumed.program, "claude");
+        assert_eq!(resumed.args, vec!["--resume".to_string(), uuid.to_string()]);
+        assert_eq!(resumed.cwd.as_deref(), Some(std::path::Path::new("/home/me/proj")));
+
+        // No session → the configured default, never claude.
+        let default = pty_command(&cfg, None);
+        assert_eq!(default.program, "bash");
     }
 }

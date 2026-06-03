@@ -6,15 +6,29 @@
     <title>woland</title>
     <link rel="stylesheet" href="/dist/main.css" />
     <style>
-      html, body { margin: 0; height: 100%; background: #0b0b0e; }
-      #app { display: grid; grid-template-columns: 1fr 1fr; height: 100vh; }
-      #terminal { height: 100%; padding: 6px; box-sizing: border-box; overflow: hidden; }
-      #transcript { border: 0; border-left: 1px solid #1c1c24; height: 100%; width: 100%; }
-      /* left = faithful pty (ground truth); right = our semantic re-render */
+      html, body { margin: 0; height: 100%; background: #0b0b0e; color: #e6e6e6;
+        font-family: ui-monospace, Menlo, Consolas, monospace; }
+      #app { display: grid; grid-template-columns: 260px 1fr 1fr; height: 100vh; }
+      /* left = the forest (pick a session) · center = live pty · right = re-render */
+      #sidebar { border-right: 1px solid #1c1c24; overflow-y: auto; font-size: 12px; }
+      #sidebar h1 { font-size: 12px; color: #565666; padding: 10px 12px 4px; margin: 0;
+        text-transform: uppercase; letter-spacing: 0.08em; }
+      .session-item { display: block; width: 100%; text-align: left; background: none;
+        border: 0; color: #e6e6e6; padding: 8px 12px; cursor: pointer; font: inherit;
+        border-left: 2px solid transparent; }
+      .session-item:hover { background: #14141a; }
+      .session-item.active { background: #14141a; border-left-color: #7aa2f7; }
+      .session-item .title { display: block; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; }
+      .session-item .meta { display: block; color: #565666; font-size: 11px; }
+      #terminal { height: 100%; padding: 6px; box-sizing: border-box; overflow: hidden;
+        border-right: 1px solid #1c1c24; }
+      #transcript { border: 0; height: 100%; width: 100%; }
     </style>
   </head>
   <body>
     <div id="app">
+      <nav id="sidebar"><h1>sessions</h1><div id="sessions"></div></nav>
       <div id="terminal"></div>
       <iframe id="transcript" title="semantic transcript"></iframe>
     </div>
