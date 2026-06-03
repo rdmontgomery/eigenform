@@ -85,6 +85,12 @@ Memory follows the same shape, applied to `~/.claude/projects/<cwd>/memory/` and
 
 ## Surgery library shape (v0.1)
 
+> **✅ IMPLEMENTED 2026-06-03 — this sketch is superseded.** The `Header + Vec<Turn>`
+> model below proved too thin (real sessions are a heterogeneous row stream; the resume
+> head lives in the last `last-prompt`). See the as-built design in
+> [`2026-06-03-surgery-crate-design.md`](2026-06-03-surgery-crate-design.md) and
+> `crates/surgery`. Sketch kept for historical context.
+
 Pure library, no I/O policy beyond writing the new JSONL into the same projects directory as the source. The CLI binary is thin.
 
 ```rust
@@ -126,18 +132,26 @@ Spikes 2–4 are gating for implementation start. The justfile contains `just sp
 
 ## Build order (final)
 
-1. Spikes 2–4.
-2. `crates/surgery` + `eigen surgery fork|inject|rewind|tail`.
-3. `crates/render` (text + json projections; html lands with daemon).
-4. `eigen skills tree|list|audit` + `eigen memory tree|list|audit`.
-5. `crates/forest` + `eigen sessions list|show`.
-6. `crates/daemon` (http + ws; html projection in render).
-7. Browser vertical slice: forest browser + context inspector.
-8. Affordance buttons (browser → daemon → surgery).
-9. Token economy + cache-hotness.
-10. Rhizome layer (semantic edges; local embeddings, likely via Ollama).
-11. Labeling UI → eigenform classifier.
-12. Chat→Code handoff.
+1. 🟡 Spikes 2–4. — **spike 3 (mid-tree cold-load) CONFIRMED 2026-06-03**; spike 2
+   (tail-fork) and spike 4 (billing flip) still pending.
+2. ✅ `crates/surgery` + `eigen surgery fork|inject|rewind`. — **done 2026-06-03**
+   (TDD, 82 workspace tests). Design: [`2026-06-03-surgery-crate-design.md`](2026-06-03-surgery-crate-design.md).
+   Adds `parse`, `fork_at`, `rewind_to`, `inject`, `edit_then_fork`, `write`,
+   field-targeted guarded id rewrite, and a gated cross-version corpus property test
+   (which corrected spike 07 — see [`notes/spikes/07-cross-version-passthrough.md`](../../notes/spikes/07-cross-version-passthrough.md)).
+   `tail` deferred: it rides on `--fork-session`, gated by spike 2. CLI takes a file
+   path; uuid→path resolution is a follow-up.
+3. ⬜ `crates/render` (text + json projections; html lands with daemon).
+4. 🟡 `eigen skills tree|list|audit` + `eigen memory tree|list|audit`. — tree/list landed
+   earlier; `audit` subcommands pending.
+5. ⬜ `crates/forest` + `eigen sessions list|show`.
+6. ⬜ `crates/daemon` (http + ws; html projection in render).
+7. ⬜ Browser vertical slice: forest browser + context inspector.
+8. ⬜ Affordance buttons (browser → daemon → surgery).
+9. ⬜ Token economy + cache-hotness.
+10. ⬜ Rhizome layer (semantic edges; local embeddings, likely via Ollama).
+11. ⬜ Labeling UI → eigenform classifier.
+12. ⬜ Chat→Code handoff.
 
 Each step usable on its own.
 
