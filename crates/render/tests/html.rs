@@ -36,6 +36,17 @@ fn shows_full_untruncated_content() {
 }
 
 #[test]
+fn preserves_newlines_in_content() {
+    let multi = "para one\n\npara two\nstill two";
+    let text = format!(
+        r#"{{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"sessionId":"{SID}","message":{{"role":"user","content":{}}}}}"#,
+        serde_json::to_string(multi).unwrap()
+    ) + "\n";
+    let html = session_html(&Session::parse_str(&text).unwrap());
+    assert!(html.contains("para one\n\npara two\nstill two"), "newlines kept (pre-wrap renders them):\n{html}");
+}
+
+#[test]
 fn escapes_html_in_content() {
     let evil = r#"<script>alert('x')</script>"#;
     let text = format!(

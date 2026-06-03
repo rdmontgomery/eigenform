@@ -83,7 +83,7 @@ fn turn_html(turn: &Turn, leaf: &Option<String>) -> String {
     let (glyph, label) = turn_glyph_label(turn.role);
     let content = match turn.role {
         Role::System => duration_label(turn),
-        _ => content_text(turn),
+        _ => content_raw(turn), // preserve newlines; pre-wrap renders them
     };
     let marker = if leaf.as_deref() == Some(turn.uuid.as_str()) {
         " <span class=\"leaf\">← leaf</span>"
@@ -337,19 +337,24 @@ fn short_id(session_id: &str) -> String {
     session_id.split('-').next().unwrap_or(session_id).to_string()
 }
 
-/// A turn's full message content as a single whitespace-collapsed line (no truncation).
-fn content_text(turn: &Turn) -> String {
+/// A turn's full message content with newlines preserved (text blocks joined by a blank
+/// line). For the Manuscript HTML, where `white-space: pre-wrap` renders the breaks.
+fn content_raw(turn: &Turn) -> String {
     let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
-    let raw = match &value["message"]["content"] {
+    match &value["message"]["content"] {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Array(blocks) => blocks
             .iter()
             .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
             .collect::<Vec<_>>()
-            .join(" "),
+            .join("\n\n"),
         _ => String::new(),
-    };
-    collapse_ws(&raw)
+    }
+}
+
+/// A turn's content as a single whitespace-collapsed line (for the tree and diff views).
+fn content_text(turn: &Turn) -> String {
+    collapse_ws(&content_raw(turn))
 }
 
 /// Collapse a turn's message content to a single truncated line for display.
