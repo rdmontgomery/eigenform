@@ -6,4 +6,6 @@ rust-version.workspace = true
 
 [dependencies]
 serde_json    = { workspace = true }
+chrono        = { workspace = true }
 eigen-surgery = { path = "../surgery" }
+eigen-forest  = { path = "../forest" }

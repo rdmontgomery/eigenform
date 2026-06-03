@@ -38,6 +38,48 @@ fn sessions_show_renders_the_turn_tree() {
     assert!(stdout.contains("← leaf"), "got:\n{stdout}");
 }
 
+/// Build a temp HOME containing one project with one session, return (home, uuid).
+fn temp_home_with_session() -> (tempfile::TempDir, String) {
+    let uuid = "aaaa1111-0000-4000-8000-000000000001";
+    let home = tempdir().unwrap();
+    let pdir = home.path().join(".claude/projects/-home-me-p");
+    std::fs::create_dir_all(&pdir).unwrap();
+    let lines = [
+        format!(r#"{{"type":"user","uuid":"{uuid}","parentUuid":null,"isSidechain":false,"cwd":"/home/me/p","timestamp":"2026-06-03T10:00:00Z","sessionId":"{uuid}","message":{{"role":"user","content":"hello"}}}}"#),
+        format!(r#"{{"type":"ai-title","aiTitle":"my recent work","sessionId":"{uuid}"}}"#),
+    ];
+    std::fs::write(pdir.join(format!("{uuid}.jsonl")), lines.join("\n") + "\n").unwrap();
+    (home, uuid.to_string())
+}
+
+fn run_home(home: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_eigen"))
+        .env("HOME", home)
+        .args(args)
+        .output()
+        .expect("run eigen")
+}
+
+#[test]
+fn show_resolves_a_session_by_uuid_prefix() {
+    let (home, _uuid) = temp_home_with_session();
+    let out = run_home(home.path(), &["sessions", "show", "aaaa1111"]);
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("session aaaa1111"), "got:\n{stdout}");
+    assert!(stdout.contains("● user"), "got:\n{stdout}");
+}
+
+#[test]
+fn list_shows_recent_sessions_with_titles() {
+    let (home, _uuid) = temp_home_with_session();
+    let out = run_home(home.path(), &["sessions", "list", "--all-projects"]);
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("aaaa1111"), "got:\n{stdout}");
+    assert!(stdout.contains("my recent work"), "got:\n{stdout}");
+}
+
 #[test]
 fn render_json_is_not_yet_supported() {
     let dir = tempdir().unwrap();

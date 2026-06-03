@@ -37,10 +37,24 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum SessionsAction {
-    /// render a session JSONL as a turn-tree
+    /// render a session as a turn-tree (resolve by uuid, prefix, or path)
     Show {
-        /// path to the session JSONL
-        session: PathBuf,
+        /// session uuid, unique prefix, or a path to the JSONL
+        session: String,
+        #[arg(long, value_enum, default_value_t = RenderFormat::Text)]
+        render: RenderFormat,
+    },
+    /// list recent sessions (current project, last 7 days, by default)
+    List {
+        /// recency window: e.g. 7d, 24h, 30m, 2w, or `all`
+        #[arg(long)]
+        since: Option<String>,
+        /// list across every project, not just the current one
+        #[arg(long)]
+        all_projects: bool,
+        /// list the project at this cwd instead of the current directory
+        #[arg(long)]
+        cwd: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = RenderFormat::Text)]
         render: RenderFormat,
     },
@@ -149,25 +163,110 @@ fn main() -> Result<()> {
         Cmd::Surgery { action } => surgery(action),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
+            SessionsAction::List {
+                since,
+                all_projects,
+                cwd,
+                render,
+            } => sessions_list(since, all_projects, cwd, render),
         },
     }
 }
 
-fn sessions_show(session: PathBuf, render: RenderFormat) -> Result<()> {
+fn require_text(render: RenderFormat) -> Result<()> {
     match render {
-        RenderFormat::Text => {}
-        RenderFormat::Json | RenderFormat::Html => {
-            anyhow::bail!(
-                "--render {:?} is not supported yet; the json/html schema is deferred until \
-                 we render in the browser. Use --render text.",
-                render
-            );
-        }
+        RenderFormat::Text => Ok(()),
+        RenderFormat::Json | RenderFormat::Html => anyhow::bail!(
+            "--render {:?} is not supported yet; the json/html schema is deferred until we \
+             render in the browser. Use --render text.",
+            render
+        ),
     }
-    let src = load_session(&session)?;
+}
+
+fn projects_dir() -> Result<PathBuf> {
+    Ok(home_dir()
+        .context("could not determine home directory")?
+        .join(".claude/projects"))
+}
+
+fn sessions_show(session: String, render: RenderFormat) -> Result<()> {
+    require_text(render)?;
+
+    // A literal path wins; otherwise resolve as a uuid/prefix machine-wide.
+    let path = if PathBuf::from(&session).is_file() {
+        PathBuf::from(&session)
+    } else {
+        let dir = projects_dir()?;
+        match eigen_forest::resolve(&dir, &session) {
+            Ok(p) => p,
+            Err(eigen_forest::ResolveError::Ambiguous(candidates)) => {
+                eprintln!("`{session}` is ambiguous — {} sessions match:", candidates.len());
+                for c in &candidates {
+                    let title = eigen_forest::session_ref(c)
+                        .title
+                        .unwrap_or_else(|| "(untitled)".to_string());
+                    eprintln!("  {}  {}", &c.uuid[..c.uuid.len().min(8)], title);
+                }
+                anyhow::bail!("specify more of the uuid");
+            }
+            Err(e) => return Err(anyhow::anyhow!("{e}")),
+        }
+    };
+
+    let src = load_session(&path)?;
     let view = eigen_render::session_view(&src);
     print!("{}", eigen_render::render_text(&view));
     Ok(())
+}
+
+fn sessions_list(
+    since: Option<String>,
+    all_projects: bool,
+    cwd: Option<PathBuf>,
+    render: RenderFormat,
+) -> Result<()> {
+    require_text(render)?;
+    let dir = projects_dir()?;
+
+    let scope = if all_projects {
+        eigen_forest::Scope::AllProjects
+    } else {
+        let here = match cwd {
+            Some(c) => c,
+            None => env::current_dir().context("could not read current dir")?,
+        };
+        eigen_forest::Scope::Project(here)
+    };
+
+    let window = parse_since(since.as_deref())?;
+    let now = chrono::Utc::now();
+    let sessions = eigen_forest::list(&dir, scope, window, now).map_err(|e| anyhow::anyhow!("{e}"))?;
+    print!("{}", eigen_render::render_text(&eigen_render::sessions_view(&sessions, now, all_projects)));
+    Ok(())
+}
+
+/// Parse a recency window: `None` defaults to 7 days; `all` means no window; otherwise
+/// `<n><unit>` with unit m/h/d/w.
+fn parse_since(since: Option<&str>) -> Result<Option<chrono::Duration>> {
+    let Some(s) = since else {
+        return Ok(Some(chrono::Duration::days(7)));
+    };
+    if s == "all" {
+        return Ok(None);
+    }
+    let (num, unit) = s.split_at(s.len() - 1);
+    let n: i64 = num
+        .parse()
+        .with_context(|| format!("invalid --since `{s}` (try 7d, 24h, 30m, 2w, or all)"))?;
+    let dur = match unit {
+        "m" => chrono::Duration::minutes(n),
+        "h" => chrono::Duration::hours(n),
+        "d" => chrono::Duration::days(n),
+        "w" => chrono::Duration::weeks(n),
+        _ => anyhow::bail!("invalid --since unit in `{s}` (use m, h, d, w, or all)"),
+    };
+    Ok(Some(dur))
 }
 
 fn surgery(action: SurgeryAction) -> Result<()> {

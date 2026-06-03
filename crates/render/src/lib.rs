@@ -6,7 +6,51 @@
 
 use std::fmt::Write as _;
 
+use chrono::{DateTime, Utc};
+use eigen_forest::SessionRef;
 use eigen_surgery::{Role, Session, Turn};
+
+/// Render a recent-session list: one row per session, newest at the bottom.
+pub fn sessions_view(sessions: &[SessionRef], now: DateTime<Utc>, show_project: bool) -> View {
+    let title = format!("{} session{}", sessions.len(), if sessions.len() == 1 { "" } else { "s" });
+
+    // `sessions` arrives recent-first; emit oldest→newest so the latest sits at the bottom.
+    let lines = sessions
+        .iter()
+        .rev()
+        .map(|s| {
+            let short = short_id(&s.uuid);
+            let when = relative_time(now, s.recency);
+            let label = s.title.clone().unwrap_or_else(|| "(untitled)".to_string());
+            if show_project {
+                format!("{short}  {when:<8}  {:<24}  {label}", s.cwd.display())
+            } else {
+                format!("{short}  {when:<8}  {label}")
+            }
+        })
+        .collect();
+
+    View::Document {
+        title,
+        body: vec![View::Lines(lines)],
+    }
+}
+
+fn relative_time(now: DateTime<Utc>, then: DateTime<Utc>) -> String {
+    let d = now - then;
+    let secs = d.num_seconds().max(0);
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", d.num_minutes())
+    } else if secs < 86_400 {
+        format!("{}h ago", d.num_hours())
+    } else if d.num_days() < 7 {
+        format!("{}d ago", d.num_days())
+    } else {
+        format!("{}w ago", d.num_weeks())
+    }
+}
 
 /// Maximum displayed width of a turn's content preview, in chars.
 const PREVIEW_WIDTH: usize = 60;
@@ -133,6 +177,8 @@ fn truncate(s: &str) -> String {
 pub enum View {
     Document { title: String, body: Vec<View> },
     Tree(Vec<Node>),
+    /// A flat list of pre-formatted rows (no tree connectors).
+    Lines(Vec<String>),
 }
 
 /// One node in a [`View::Tree`].
@@ -186,6 +232,12 @@ fn render_into(view: &View, out: &mut String) {
         View::Tree(nodes) => {
             for (i, node) in nodes.iter().enumerate() {
                 render_node(node, "", i == nodes.len() - 1, out);
+            }
+        }
+        View::Lines(lines) => {
+            for line in lines {
+                out.push_str(line);
+                out.push('\n');
             }
         }
     }
