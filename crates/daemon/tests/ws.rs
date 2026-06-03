@@ -1,6 +1,7 @@
 //! The websocket↔pty bridge, driven against a dummy command (no claude, no tokens).
 
 use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 use eigen_daemon::{app, Config};
@@ -48,6 +49,26 @@ async fn ws_forwards_stdin_and_streams_pty_output() {
         "got: {:?}",
         String::from_utf8_lossy(&got)
     );
+}
+
+#[tokio::test]
+async fn ws_rejects_a_cross_origin_connection() {
+    let url = start().await;
+    let mut req = url.as_str().into_client_request().unwrap();
+    req.headers_mut()
+        .insert("origin", "http://evil.example".parse().unwrap());
+    // A page you visit must not be able to open a shell on your localhost daemon.
+    assert!(tokio_tungstenite::connect_async(req).await.is_err());
+}
+
+#[tokio::test]
+async fn ws_allows_a_localhost_origin() {
+    let url = start().await;
+    let host = url.trim_start_matches("ws://").trim_end_matches("/pty");
+    let mut req = url.as_str().into_client_request().unwrap();
+    req.headers_mut()
+        .insert("origin", format!("http://{host}").parse().unwrap());
+    assert!(tokio_tungstenite::connect_async(req).await.is_ok());
 }
 
 #[tokio::test]

@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
@@ -49,8 +50,37 @@ pub async fn serve(addr: std::net::SocketAddr, config: Config) -> anyhow::Result
     Ok(())
 }
 
-async fn pty_ws(ws: WebSocketUpgrade, State(cfg): State<Arc<Config>>) -> Response {
+async fn pty_ws(
+    ws: WebSocketUpgrade,
+    State(cfg): State<Arc<Config>>,
+    headers: HeaderMap,
+) -> Response {
+    // Defend against CSRF-to-localhost: a page you visit must not be able to open a
+    // shell on this daemon. Browsers always send Origin; reject any that isn't local.
+    // A missing Origin means a non-browser client (curl, our tests) — allowed.
+    if !origin_is_local(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response();
+    }
     ws.on_upgrade(move |socket| bridge(socket, cfg))
+}
+
+fn origin_is_local(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
+        return true; // no Origin → not a browser CSRF
+    };
+    let authority = origin.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    matches!(host_of(authority), "127.0.0.1" | "localhost" | "::1")
+}
+
+/// The host portion of an `authority` (`host`, `host:port`, or `[ipv6]:port`).
+fn host_of(authority: &str) -> &str {
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match authority.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => authority,
+    }
 }
 
 /// Control messages from the browser. Output flows the other way as raw binary frames.
