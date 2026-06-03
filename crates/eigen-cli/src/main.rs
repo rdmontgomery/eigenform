@@ -44,6 +44,9 @@ enum Cmd {
         /// directory of built frontend assets (default: ./web)
         #[arg(long)]
         web: Option<PathBuf>,
+        /// dev mode: inject the live-reload hook and serve /api/dev/reload
+        #[arg(long)]
+        dev: bool,
     },
 }
 
@@ -187,7 +190,7 @@ fn main() -> Result<()> {
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
         Cmd::Surgery { action } => surgery(action),
-        Cmd::Daemon { port, cmd, web } => daemon(port, cmd, web),
+        Cmd::Daemon { port, cmd, web, dev } => daemon(port, cmd, web, dev),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
             SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
@@ -352,7 +355,7 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     Ok(())
 }
 
-fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>) -> Result<()> {
+fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, dev: bool) -> Result<()> {
     let cwd = env::current_dir().context("could not read current dir")?;
 
     // The pty command: explicit --cmd, else the user's shell, else bash. Not claude
@@ -378,9 +381,10 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>) -> Result<()> {
         cwd: Some(cwd),
         web_dir,
         projects_dir: Some(projects_dir()?),
+        dev,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    println!("woland → http://{addr}");
+    println!("woland → http://{addr}{}", if dev { "  (dev: live-reload on)" } else { "" });
 
     let rt = tokio::runtime::Runtime::new().context("starting tokio runtime")?;
     rt.block_on(eigen_daemon::serve(addr, config))

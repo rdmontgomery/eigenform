@@ -29,6 +29,8 @@ pub struct Config {
     pub web_dir: Option<PathBuf>,
     /// `~/.claude/projects` (or a test dir) for session resolution. None = no transcript.
     pub projects_dir: Option<PathBuf>,
+    /// Dev mode: inject the live-reload hook and serve `/api/dev/reload`.
+    pub dev: bool,
 }
 
 /// Build the woland HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a pty;
@@ -41,6 +43,12 @@ pub fn app(config: Config) -> Router {
         .route("/api/recent", get(recent_route))
         .route("/api/watch/:uuid", get(watch_route));
     if let Some(web_dir) = &config.web_dir {
+        // Dev routes take precedence over the static fallback.
+        if config.dev {
+            router = router
+                .route("/", get(dev_index))
+                .route("/api/dev/reload", get(dev_reload));
+        }
         let index = web_dir.join("index.html");
         router = router.fallback_service(
             tower_http::services::ServeDir::new(web_dir)
@@ -129,9 +137,40 @@ async fn watch_route(
         Ok(p) => p,
         Err(_) => return (StatusCode::NOT_FOUND, "no such session").into_response(),
     };
+    let watch_dir = path.parent().unwrap_or(&path).to_path_buf();
+    let target = path.file_name().map(|n| n.to_os_string());
+    watch_sse(watch_dir, target)
+}
 
+/// `GET /` in dev mode: the static index with a live-reload hook injected.
+async fn dev_index(State(cfg): State<Arc<Config>>) -> Response {
+    let Some(web_dir) = &cfg.web_dir else {
+        return (StatusCode::NOT_FOUND, "no web dir").into_response();
+    };
+    let Ok(html) = std::fs::read_to_string(web_dir.join("index.html")) else {
+        return (StatusCode::NOT_FOUND, "no index.html").into_response();
+    };
+    let injected = html.replacen(
+        "<head>",
+        "<head>\n    <meta name=\"eigen-dev\" content=\"1\" />",
+        1,
+    );
+    Html(injected).into_response()
+}
+
+/// `GET /api/dev/reload` — SSE that fires whenever the built frontend bundle changes.
+async fn dev_reload(State(cfg): State<Arc<Config>>) -> Response {
+    let Some(web_dir) = &cfg.web_dir else {
+        return (StatusCode::NOT_FOUND, "no web dir").into_response();
+    };
+    watch_sse(web_dir.join("dist"), None)
+}
+
+/// SSE that emits a `change` event when files in `watch_dir` are written. If `target` is
+/// set, only that filename triggers; otherwise any change in the dir does. A dedicated
+/// thread owns the watcher and lives until the SSE receiver is dropped.
+fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<()>(8);
-    // A dedicated thread owns the watcher; it lives until the SSE receiver is dropped.
     std::thread::spawn(move || {
         let (raw_tx, raw_rx) = std::sync::mpsc::channel();
         let mut watcher = match notify::recommended_watcher(move |res| {
@@ -140,19 +179,17 @@ async fn watch_route(
             Ok(w) => w,
             Err(_) => return,
         };
-        let watch_dir = path.parent().unwrap_or(&path).to_path_buf();
         if notify::Watcher::watch(&mut watcher, &watch_dir, notify::RecursiveMode::NonRecursive)
             .is_err()
         {
             return;
         }
-        let target = path.file_name().map(|n| n.to_os_string());
         for event in raw_rx {
             let Ok(event) = event else { continue };
-            let touches = event
-                .paths
-                .iter()
-                .any(|p| p.file_name().map(|n| n.to_os_string()) == target);
+            let touches = match &target {
+                Some(name) => event.paths.iter().any(|p| p.file_name() == Some(name.as_os_str())),
+                None => true,
+            };
             if touches && tx.blocking_send(()).is_err() {
                 break; // SSE connection gone; drop the watcher
             }
@@ -415,6 +452,7 @@ mod tests {
             cwd: None,
             web_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
+            dev: false,
         };
 
         let resumed = pty_command(&cfg, Some("abcdef00"));

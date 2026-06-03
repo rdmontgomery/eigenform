@@ -77,12 +77,34 @@ function followTranscript(uuid: string) {
   };
 }
 
+let activeSession: string | null = null;
+
 function selectSession(uuid: string) {
+  activeSession = uuid;
   connectPty(uuid);
   followTranscript(uuid);
   document.querySelectorAll<HTMLElement>(".session-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.uuid === uuid);
   });
+}
+
+// Dev live-reload: when the daemon injects the dev meta, listen for bundle changes and
+// refresh — UNLESS a session is live (a full reload would drop the claude pty and respawn
+// it on the next click). Never auto-respawns claude.
+function devLiveReload() {
+  if (!document.querySelector('meta[name="eigen-dev"]')) return;
+  const es = new EventSource("/api/dev/reload");
+  let last = 0;
+  es.onmessage = () => {
+    const now = Date.now();
+    if (now - last < 300) return; // debounce esbuild's multi-file writes
+    last = now;
+    if (activeSession) {
+      console.warn("[woland dev] frontend changed — refresh manually to keep the live session");
+      return;
+    }
+    location.reload();
+  };
 }
 
 interface SessionItem {
@@ -121,6 +143,7 @@ async function loadSidebar() {
 // the forest in the sidebar. Pick a session to resume it.
 connectPty();
 loadSidebar();
+devLiveReload();
 fetch("/api/recent")
   .then((r) => (r.ok ? r.text() : ""))
   .then((u) => {
