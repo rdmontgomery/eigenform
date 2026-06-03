@@ -44,6 +44,15 @@ enum SessionsAction {
         #[arg(long, value_enum, default_value_t = RenderFormat::Text)]
         render: RenderFormat,
     },
+    /// diff two sessions side-by-side (source vs fork, aligned by turn uuid)
+    Diff {
+        /// source session: uuid, prefix, or path
+        a: String,
+        /// fork session: uuid, prefix, or path
+        b: String,
+        #[arg(long, value_enum, default_value_t = RenderFormat::Text)]
+        render: RenderFormat,
+    },
     /// list recent sessions (current project, last 7 days, by default)
     List {
         /// recency window: e.g. 7d, 24h, 30m, 2w, or `all`
@@ -79,6 +88,9 @@ enum SurgeryAction {
         /// replace the turn's content with this file's text (edit-then-fork)
         #[arg(long)]
         edit: Option<PathBuf>,
+        /// also print a source→fork diff to stderr
+        #[arg(long)]
+        diff: bool,
     },
     /// rewind a session to a chosen turn (prefix only)
     Rewind {
@@ -165,6 +177,7 @@ fn main() -> Result<()> {
         Cmd::Surgery { action } => surgery(action),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
+            SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
             SessionsAction::List {
                 since,
                 all_projects,
@@ -275,8 +288,14 @@ fn parse_since(since: Option<&str>) -> Result<Option<chrono::Duration>> {
 }
 
 fn surgery(action: SurgeryAction) -> Result<()> {
-    let (session_path, result) = match action {
-        SurgeryAction::Fork { session, at, edit } => {
+    // `diff_src` is set when the op should print a source→fork diff to stderr.
+    let (session_path, result, diff_src) = match action {
+        SurgeryAction::Fork {
+            session,
+            at,
+            edit,
+            diff,
+        } => {
             let path = resolve_session(&session)?;
             let src = load_session(&path)?;
             let new = match edit {
@@ -286,13 +305,13 @@ fn surgery(action: SurgeryAction) -> Result<()> {
                 }
                 None => eigen_surgery::fork_at(&src, &at),
             };
-            (path, new)
+            (path, new, diff.then_some(src))
         }
         SurgeryAction::Rewind { session, to } => {
             let path = resolve_session(&session)?;
             let src = load_session(&path)?;
             let new = eigen_surgery::rewind_to(&src, &to);
-            (path, new)
+            (path, new, None)
         }
         SurgeryAction::Inject {
             session,
@@ -304,7 +323,7 @@ fn surgery(action: SurgeryAction) -> Result<()> {
             let src = load_session(&path)?;
             let text = read_text(&content)?;
             let new = eigen_surgery::inject(&src, &at, as_role.into(), &text);
-            (path, new)
+            (path, new, None)
         }
     };
 
@@ -314,6 +333,17 @@ fn surgery(action: SurgeryAction) -> Result<()> {
         .context("source session has no parent directory")?;
     let uuid = eigen_surgery::write(&new, projects_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("{uuid}");
+    if let Some(src) = diff_src {
+        eprint!("{}", eigen_render::render_text(&eigen_render::fork_diff_view(&src, &new)));
+    }
+    Ok(())
+}
+
+fn sessions_diff(a: String, b: String, render: RenderFormat) -> Result<()> {
+    require_text(render)?;
+    let source = load_session(&resolve_session(&a)?)?;
+    let fork = load_session(&resolve_session(&b)?)?;
+    print!("{}", eigen_render::render_text(&eigen_render::fork_diff_view(&source, &fork)));
     Ok(())
 }
 

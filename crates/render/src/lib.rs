@@ -36,6 +36,122 @@ pub fn sessions_view(sessions: &[SessionRef], now: DateTime<Utc>, show_project: 
     }
 }
 
+/// Width of the source (left) column in the side-by-side fork diff.
+const DIFF_COL: usize = 46;
+
+/// A side-by-side diff of a source session and a fork, aligned by turn uuid (fork_at
+/// preserves uuids). Source left, fork right; kept turns on both sides, dropped on the
+/// left only, injected on the right only, edited on both with differing content.
+pub fn fork_diff_view(source: &Session, fork: &Session) -> View {
+    let s_turns = visible_turns(source);
+    let f_turns = visible_turns(fork);
+    let s_leaf = visible_leaf(source, &s_turns);
+    let f_leaf = visible_leaf(fork, &f_turns);
+
+    let f_by_uuid: std::collections::HashMap<&str, &Turn> =
+        f_turns.iter().map(|t| (t.uuid.as_str(), *t)).collect();
+    let s_uuids: std::collections::HashSet<&str> =
+        s_turns.iter().map(|t| t.uuid.as_str()).collect();
+
+    let (mut kept, mut dropped, mut injected, mut edited) = (0, 0, 0, 0);
+    let mut rows: Vec<String> = Vec::new();
+
+    // Source order: each turn is kept, edited, or dropped.
+    for s in &s_turns {
+        match f_by_uuid.get(s.uuid.as_str()) {
+            Some(f) if content_text(s) == content_text(f) => {
+                kept += 1;
+                rows.push(diff_row(" ", Some((s, &s_leaf)), Some((f, &f_leaf))));
+            }
+            Some(f) => {
+                edited += 1;
+                rows.push(diff_row("~", Some((s, &s_leaf)), Some((f, &f_leaf))));
+            }
+            None => {
+                dropped += 1;
+                rows.push(diff_row("-", Some((s, &s_leaf)), None));
+            }
+        }
+    }
+    // Fork-only turns (injected), appended in fork order.
+    for f in &f_turns {
+        if !s_uuids.contains(f.uuid.as_str()) {
+            injected += 1;
+            rows.push(diff_row("+", None, Some((f, &f_leaf))));
+        }
+    }
+
+    let title = format!(
+        "diff {} → {}",
+        short_id(&source.session_id),
+        short_id(&fork.session_id)
+    );
+    let summary = vec![
+        format!("kept {kept}, dropped {dropped}, injected {injected}, edited {edited}"),
+        format!(
+            "leaf: {}  ⇒  {}",
+            leaf_desc(&s_turns, &s_leaf),
+            leaf_desc(&f_turns, &f_leaf)
+        ),
+    ];
+
+    View::Document {
+        title,
+        body: vec![View::Lines(summary), View::Lines(rows)],
+    }
+}
+
+/// One diff row: a 1-char status, the left (source) cell fitted to a column, `│`, then the
+/// right (fork) cell. A `None` side renders blank.
+fn diff_row(status: &str, left: Option<(&&Turn, &Option<String>)>, right: Option<(&&Turn, &Option<String>)>) -> String {
+    let left_text = left.map(|(t, leaf)| diff_cell(t, leaf)).unwrap_or_default();
+    let right_text = right.map(|(t, leaf)| diff_cell(t, leaf)).unwrap_or_default();
+    format!("{status} {} │ {}", fit(&left_text, DIFF_COL), right_text)
+}
+
+/// A turn's cell: glyph, role, preview, plus a leaf marker when this turn is the head.
+fn diff_cell(turn: &Turn, leaf: &Option<String>) -> String {
+    let (glyph, label) = turn_glyph_label(turn.role);
+    let preview = match turn.role {
+        Role::System => duration_label(turn),
+        _ => truncate(&content_text(turn)),
+    };
+    let marker = if leaf.as_deref() == Some(turn.uuid.as_str()) {
+        "  ←leaf"
+    } else {
+        ""
+    };
+    format!("{glyph} {label:<9} {preview}{marker}")
+}
+
+fn leaf_desc(turns: &[&Turn], leaf: &Option<String>) -> String {
+    match leaf {
+        Some(uuid) => turns
+            .iter()
+            .find(|t| &t.uuid == uuid)
+            .map(|t| {
+                let (glyph, label) = turn_glyph_label(t.role);
+                format!("{glyph} {label}")
+            })
+            .unwrap_or_else(|| "—".to_string()),
+        None => "—".to_string(),
+    }
+}
+
+/// Pad or truncate (with an ellipsis) a string to exactly `width` display chars.
+fn fit(s: &str, width: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() > width {
+        let mut t: String = chars[..width.saturating_sub(1)].iter().collect();
+        t.push('…');
+        t
+    } else {
+        let mut t = s.to_string();
+        t.extend(std::iter::repeat(' ').take(width - chars.len()));
+        t
+    }
+}
+
 fn relative_time(now: DateTime<Utc>, then: DateTime<Utc>) -> String {
     let d = now - then;
     let secs = d.num_seconds().max(0);
@@ -59,21 +175,8 @@ const PREVIEW_WIDTH: usize = 60;
 /// level, assistant/system replies nested beneath), glyph by role, one-line previews,
 /// resume leaf marked.
 pub fn session_view(session: &Session) -> View {
-    // Only conversational content: user/assistant turns with text, and system rows that
-    // carry a turn duration. Thinking-only rows and meta system rows are noise.
-    let visible: Vec<&Turn> = session
-        .turns()
-        .into_iter()
-        .filter(|t| is_visible(t))
-        .collect();
-
-    // The resume leaf often points at a row we hide (a turn_duration or meta system row).
-    // Mark it where it lands if visible, otherwise fall back to the last visible turn.
-    let leaf = session.resume_leaf();
-    let leaf_target = match &leaf {
-        Some(l) if visible.iter().any(|t| &t.uuid == l) => Some(l.clone()),
-        _ => visible.last().map(|t| t.uuid.clone()),
-    };
+    let visible = visible_turns(session);
+    let leaf_target = visible_leaf(session, &visible);
 
     let exchanges = visible.iter().filter(|t| t.role == Role::User).count();
     let title = format!(
@@ -102,6 +205,30 @@ pub fn session_view(session: &Session) -> View {
     }
 }
 
+/// The conversational turns worth showing: user/assistant with text, system with a
+/// duration. Thinking-only and meta system rows are noise.
+fn visible_turns(session: &Session) -> Vec<&Turn> {
+    session.turns().into_iter().filter(|t| is_visible(t)).collect()
+}
+
+/// The visible turn that carries the resume head: the leaf if it maps to a visible turn,
+/// otherwise the last visible turn (the leaf often points at a hidden system row).
+fn visible_leaf(session: &Session, visible: &[&Turn]) -> Option<String> {
+    match session.resume_leaf() {
+        Some(l) if visible.iter().any(|t| t.uuid == l) => Some(l),
+        _ => visible.last().map(|t| t.uuid.clone()),
+    }
+}
+
+/// The glyph and role label for a turn.
+fn turn_glyph_label(role: Role) -> (&'static str, &'static str) {
+    match role {
+        Role::User => ("●", "user"),
+        Role::Assistant => ("◇", "assistant"),
+        Role::System => ("·", "system"),
+    }
+}
+
 /// Whether a turn carries conversational content worth showing.
 fn is_visible(turn: &Turn) -> bool {
     match turn.role {
@@ -116,11 +243,7 @@ fn has_duration(turn: &Turn) -> bool {
 }
 
 fn turn_node(turn: &Turn, leaf: Option<&str>) -> Node {
-    let (glyph, label) = match turn.role {
-        Role::User => ("●", "user"),
-        Role::Assistant => ("◇", "assistant"),
-        Role::System => ("·", "system"),
-    };
+    let (glyph, label) = turn_glyph_label(turn.role);
     let preview = match turn.role {
         Role::System => duration_label(turn),
         _ => content_preview(turn),
@@ -136,8 +259,8 @@ fn short_id(session_id: &str) -> String {
     session_id.split('-').next().unwrap_or(session_id).to_string()
 }
 
-/// Collapse a turn's message content to a single truncated line.
-fn content_preview(turn: &Turn) -> String {
+/// A turn's full message content as a single whitespace-collapsed line (no truncation).
+fn content_text(turn: &Turn) -> String {
     let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
     let raw = match &value["message"]["content"] {
         serde_json::Value::String(s) => s.clone(),
@@ -148,7 +271,12 @@ fn content_preview(turn: &Turn) -> String {
             .join(" "),
         _ => String::new(),
     };
-    truncate(&collapse_ws(&raw))
+    collapse_ws(&raw)
+}
+
+/// Collapse a turn's message content to a single truncated line for display.
+fn content_preview(turn: &Turn) -> String {
+    truncate(&content_text(turn))
 }
 
 /// A system turn_duration row's duration in seconds, e.g. `4.2s`.
