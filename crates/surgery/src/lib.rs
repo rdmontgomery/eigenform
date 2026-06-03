@@ -4,6 +4,9 @@
 //! modeled; every other row is retained as a verbatim line. See
 //! `docs/plans/2026-06-03-surgery-crate-design.md`.
 
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
@@ -18,6 +21,15 @@ pub enum SurgeryError {
     TurnNotFound(String),
     #[error(transparent)]
     Rewrite(#[from] RewriteError),
+}
+
+#[derive(Debug, Error)]
+pub enum WriteError {
+    /// A session file with this uuid already exists; surgery never overwrites.
+    #[error("session file already exists: {0}")]
+    AlreadyExists(PathBuf),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Error)]
@@ -193,6 +205,25 @@ impl Session {
                 _ => None,
             })
     }
+}
+
+/// Write the session as `<session_id>.jsonl` into `projects_dir`, refusing to clobber
+/// an existing file. Returns the new session id.
+pub fn write(session: &Session, projects_dir: &Path) -> Result<String, WriteError> {
+    let path = projects_dir.join(format!("{}.jsonl", session.session_id));
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(WriteError::AlreadyExists(path));
+        }
+        Err(e) => return Err(WriteError::Io(e)),
+    };
+    file.write_all(session.to_jsonl().as_bytes())?;
+    Ok(session.session_id.clone())
 }
 
 /// Fork the session so it ends at `turn`: keep the prefix through that turn (and any
