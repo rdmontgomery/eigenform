@@ -7,7 +7,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -112,6 +112,13 @@ pub struct Turn {
     pub is_sidechain: bool,
     pub role: Role,
     raw: String,
+}
+
+impl Turn {
+    /// The original JSONL line for this turn.
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
 }
 
 /// A `last-prompt` row: carries the resume-head pointer (`leafUuid`).
@@ -230,13 +237,34 @@ pub fn write(session: &Session, projects_dir: &Path) -> Result<String, WriteErro
 /// `system` row that closes it), drop everything after, re-point the resume head, and
 /// mint a fresh session id. Validated by spike 03 (mid-tree cold-load).
 pub fn fork_at(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
+    let cut = cut_through(src, turn)?;
+    finish(&src.rows[..=cut], &[], turn_uuid(&src.rows[cut]), &src.session_id)
+}
+
+/// Rewind is a fork with no resume seed beyond the re-point — the same prefix operation.
+pub fn rewind_to(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
+    fork_at(src, turn)
+}
+
+/// Inject a synthetic turn after `after`: keep the prefix through that turn, append a
+/// freshly-authored `role` turn parented on the cut tip, and make it the new resume
+/// head. The original tail is dropped. Validated by spike 03 Run 2.
+pub fn inject(src: &Session, after: &str, role: Role, text: &str) -> Result<Session, SurgeryError> {
+    let cut = cut_through(src, after)?;
+    let parent = turn_uuid(&src.rows[cut]);
+    let new_uuid = Uuid::new_v4().to_string();
+    let synthetic = build_turn_line(role, &new_uuid, &parent, text, &src.session_id);
+    finish(&src.rows[..=cut], &[synthetic], new_uuid, &src.session_id)
+}
+
+/// Index of the prefix cut for forking/injecting at `turn`: the turn's own row,
+/// extended over any trailing `system` rows (e.g. turn_duration) that close it.
+fn cut_through(src: &Session, turn: &str) -> Result<usize, SurgeryError> {
     let target = src
         .rows
         .iter()
         .position(|r| matches!(r, Row::Turn(t) if t.uuid == turn))
         .ok_or_else(|| SurgeryError::TurnNotFound(turn.to_string()))?;
-    // Extend the cut over any trailing `system` rows (e.g. turn_duration) that belong
-    // to the kept turn, stopping before the next user/assistant turn.
     let mut cut = target;
     while let Some(Row::Turn(t)) = src.rows.get(cut + 1) {
         if t.role == Role::System {
@@ -245,34 +273,88 @@ pub fn fork_at(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
             break;
         }
     }
-    seal_prefix(src, cut)
+    Ok(cut)
 }
 
-/// Rewind is a fork with no resume seed beyond the re-point — the same prefix operation.
-pub fn rewind_to(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
-    fork_at(src, turn)
-}
-
-/// Keep `src.rows[..=cut]`, append a fresh `last-prompt` pointing at the cut row, and
-/// rewrite the session id across the whole result.
-fn seal_prefix(src: &Session, cut: usize) -> Result<Session, SurgeryError> {
-    let tip = match &src.rows[cut] {
+fn turn_uuid(row: &Row) -> String {
+    match row {
         Row::Turn(t) => t.uuid.clone(),
         _ => unreachable!("cut always lands on a turn"),
-    };
-    let old = &src.session_id;
-    let new = Uuid::new_v4().to_string();
+    }
+}
 
-    let mut lines: Vec<String> = Vec::with_capacity(cut + 2);
-    for row in &src.rows[..=cut] {
+/// Assemble a sealed session: the kept `prefix` rows, then any `synthetic` rows, then a
+/// fresh `last-prompt` pointing at `tip`, with the session id rewritten old → new
+/// across the whole result.
+fn finish(
+    prefix: &[Row],
+    synthetic: &[String],
+    tip: String,
+    old: &str,
+) -> Result<Session, SurgeryError> {
+    let new = Uuid::new_v4().to_string();
+    let mut lines: Vec<String> = Vec::with_capacity(prefix.len() + synthetic.len() + 1);
+    for row in prefix {
         lines.push(rewrite_session_id(row.raw(), old, &new)?);
+    }
+    for line in synthetic {
+        lines.push(rewrite_session_id(line, old, &new)?);
     }
     lines.push(format!(
         r#"{{"type":"last-prompt","leafUuid":"{tip}","sessionId":"{new}"}}"#
     ));
 
     let text = lines.join("\n") + "\n";
-    Ok(Session::parse_str(&text).expect("re-parse of sealed prefix"))
+    Ok(Session::parse_str(&text).expect("re-parse of sealed session"))
+}
+
+/// Build a synthetic turn line in the field shape Claude Code accepts (spike 03 Run 2).
+/// Built with the source `session_id`; `finish` swaps it to the new id uniformly.
+fn build_turn_line(role: Role, uuid: &str, parent: &str, text: &str, session_id: &str) -> String {
+    let value = match role {
+        Role::User => json!({
+            "parentUuid": parent,
+            "isSidechain": false,
+            "promptId": Uuid::new_v4().to_string(),
+            "type": "user",
+            "message": { "role": "user", "content": text },
+            "uuid": uuid,
+            "permissionMode": "auto",
+            "promptSource": "typed",
+            "userType": "external",
+            "sessionId": session_id,
+        }),
+        Role::Assistant => json!({
+            "parentUuid": parent,
+            "isSidechain": false,
+            "message": {
+                "model": "claude-opus-4-8",
+                "id": format!("msg_{}", Uuid::new_v4().simple()),
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "text", "text": text }],
+                "stop_reason": "end_turn",
+                "stop_sequence": Value::Null,
+                "usage": { "input_tokens": 0, "output_tokens": 0, "service_tier": "standard" },
+            },
+            "requestId": format!("req_{}", Uuid::new_v4().simple()),
+            "type": "assistant",
+            "uuid": uuid,
+            "userType": "external",
+            "sessionId": session_id,
+        }),
+        Role::System => json!({
+            "parentUuid": parent,
+            "isSidechain": false,
+            "type": "system",
+            "subtype": "turn_duration",
+            "uuid": uuid,
+            "isMeta": false,
+            "userType": "external",
+            "sessionId": session_id,
+        }),
+    };
+    serde_json::to_string(&value).expect("synthetic row serializes")
 }
 
 /// Classify a line into a modeled or opaque row. Invalid JSON or unmodeled `type`
