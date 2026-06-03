@@ -1,0 +1,10 @@
+[package]
+name = "eigen-daemon"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow       = { workspace = true }
+thiserror    = { workspace = true }
+portable-pty = { workspace = true }
