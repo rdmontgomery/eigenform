@@ -64,6 +64,14 @@ async fn sessions_route_lists_sessions_with_titles() {
 }
 
 #[tokio::test]
+async fn projects_route_lists_distinct_cwds() {
+    let (_d, cfg) = fixture();
+    let base = start(cfg).await;
+    let body = reqwest_get(&format!("{base}/api/projects")).await;
+    assert!(body.contains("/home/me/p"), "project cwd listed:\n{body}");
+}
+
+#[tokio::test]
 async fn recent_route_reports_the_latest_uuid() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;

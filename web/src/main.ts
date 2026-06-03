@@ -29,16 +29,15 @@ function sendResize() {
 }
 window.addEventListener("resize", sendResize);
 
-// (Re)connect the center pty. No session = the daemon's default shell (no tokens);
-// a session = `claude --resume <uuid>`.
-function connectPty(session?: string) {
+// (Re)connect the center pty. query = "" (default shell), "?session=<uuid>" (resume), or
+// "?new=<cwd>" (fresh claude). Only a real connection spawns anything.
+function connectPty(query = "") {
   if (ws) { ws.onclose = null; ws.close(); }
   if (onData) { onData.dispose(); onData = null; }
   term.reset();
 
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const q = session ? `?session=${encodeURIComponent(session)}` : "";
-  const sock = new WebSocket(`${proto}://${location.host}/pty${q}`);
+  const sock = new WebSocket(`${proto}://${location.host}/pty${query}`);
   sock.binaryType = "arraybuffer";
   ws = sock;
 
@@ -52,8 +51,17 @@ function connectPty(session?: string) {
     term.focus();
   };
   sock.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) term.write(new Uint8Array(ev.data));
-    else term.write(ev.data as string);
+    if (ev.data instanceof ArrayBuffer) {
+      term.write(new Uint8Array(ev.data));
+      return;
+    }
+    // Text frame = a control message from the daemon (e.g. a new session's uuid).
+    try {
+      const msg = JSON.parse(ev.data as string);
+      if (msg.type === "session" && typeof msg.uuid === "string") onSessionBorn(msg.uuid);
+    } catch {
+      /* ignore non-JSON */
+    }
   };
   sock.onclose = () => term.write("\r\n\x1b[2m[woland: pty disconnected]\x1b[0m\r\n");
 }
@@ -81,38 +89,118 @@ function followManuscript(uuid: string) {
   es.onmessage = () => void renderManuscript(uuid);
 }
 
+// Send a prompt to the live pty. claude's TUI only submits on a discrete Enter, separate
+// from the input text. Bracketed paste (ESC[200~ … ESC[201~) frames the text as a paste —
+// so claude inserts it literally (multi-line and all), and the trailing \r after the
+// close marker is an unambiguous Enter. The marker provides the separation, so this is one
+// atomic write with no timing hack.
+function sendPrompt(text: string): boolean {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  const sock = ws;
+  // Bracketed paste so the (possibly multi-line) text inserts literally with no escape
+  // leak. The Enter must arrive as a SEPARATE read for claude's TUI to treat it as a
+  // discrete keypress and submit — same reason `tmux send-keys` sends keys separately.
+  sock.send(JSON.stringify({ type: "stdin", data: `\x1b[200~${text}\x1b[201~` }));
+  setTimeout(() => {
+    if (sock.readyState === WebSocket.OPEN) {
+      sock.send(JSON.stringify({ type: "stdin", data: "\r" }));
+    }
+  }, 60);
+  return true;
+}
+
 // The leaf input: type into the Manuscript, pipe to the live session's pty (claude).
 function setupLeafInput() {
   const input = document.getElementById("leaf-input") as HTMLTextAreaElement;
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      const text = input.value;
-      if (text && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "stdin", data: text + "\r" }));
+      if (input.value && sendPrompt(input.value)) {
         input.value = "";
       }
     }
   });
 }
 
-function enableLeafInput(session: string) {
+function enableLeafInput(label: string) {
   const input = document.getElementById("leaf-input") as HTMLTextAreaElement;
   input.disabled = false;
-  input.placeholder = `write to ${session.slice(0, 8)} — Enter to send, Shift+Enter for newline`;
+  input.placeholder = `write to ${label} — Enter to send, Shift+Enter for newline`;
   input.focus();
+}
+
+// The "+ new session" control: a directory input with a datalist of known project cwds.
+async function loadProjectDirs() {
+  const datalist = document.getElementById("project-dirs")!;
+  try {
+    const dirs: string[] = await (await fetch("/api/projects")).json();
+    datalist.replaceChildren();
+    for (const d of dirs) {
+      const opt = document.createElement("option");
+      opt.value = d;
+      datalist.append(opt);
+    }
+  } catch {
+    /* none */
+  }
+}
+
+function setupNewSession() {
+  const btn = document.getElementById("new-session-btn") as HTMLButtonElement;
+  const form = document.getElementById("new-session-form") as HTMLFormElement;
+  const input = document.getElementById("new-session-dir") as HTMLInputElement;
+  btn.addEventListener("click", () => {
+    form.hidden = !form.hidden;
+    if (!form.hidden) input.focus();
+  });
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const cwd = input.value.trim();
+    if (cwd) {
+      startNewSession(cwd);
+      form.hidden = true;
+      input.value = "";
+    }
+  });
+  void loadProjectDirs();
 }
 
 let activeSession: string | null = null;
 
-function selectSession(uuid: string) {
-  activeSession = uuid;
-  connectPty(uuid);
-  followManuscript(uuid);
-  enableLeafInput(uuid);
+function highlightSession(uuid: string | null) {
   document.querySelectorAll<HTMLElement>(".session-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.uuid === uuid);
   });
+}
+
+function selectSession(uuid: string) {
+  activeSession = uuid;
+  connectPty(`?session=${encodeURIComponent(uuid)}`);
+  followManuscript(uuid);
+  enableLeafInput(uuid.slice(0, 8));
+  highlightSession(uuid);
+}
+
+// Start a fresh claude session in `cwd`. The uuid doesn't exist yet; the daemon detects
+// the new JSONL and reports it via onSessionBorn, which then follows it.
+function startNewSession(cwd: string) {
+  activeSession = null;
+  connectPty(`?new=${encodeURIComponent(cwd)}`);
+  enableLeafInput("new session");
+  highlightSession(null);
+  const m = manuscript();
+  const note = document.createElement("div");
+  note.className = "placeholder";
+  note.textContent = `starting a new session in ${cwd} …`;
+  m.replaceChildren(note);
+}
+
+// The daemon found the new session's JSONL — bind everything to it.
+function onSessionBorn(uuid: string) {
+  activeSession = uuid;
+  followManuscript(uuid);
+  enableLeafInput(uuid.slice(0, 8));
+  void loadSidebar().then(() => highlightSession(uuid));
 }
 
 // Dev live-reload: when the daemon injects the dev meta, listen for bundle changes and
@@ -171,6 +259,7 @@ async function loadSidebar() {
 connectPty();
 loadSidebar();
 setupLeafInput();
+setupNewSession();
 devLiveReload();
 fetch("/api/recent")
   .then((r) => (r.ok ? r.text() : ""))

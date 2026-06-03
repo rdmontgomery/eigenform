@@ -41,6 +41,7 @@ pub fn app(config: Config) -> Router {
         .route("/session/:uuid", get(session_route))
         .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/sessions", get(sessions_route))
+        .route("/api/projects", get(projects_route))
         .route("/api/recent", get(recent_route))
         .route("/api/watch/:uuid", get(watch_route));
     if let Some(web_dir) = &config.web_dir {
@@ -122,6 +123,26 @@ async fn sessions_route(State(cfg): State<Arc<Config>>) -> Response {
                 })
                 .collect();
             axum::Json(items).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
+    }
+}
+
+/// `GET /api/projects` — distinct project cwds (recent-first), for the new-session
+/// directory datalist.
+async fn projects_route(State(cfg): State<Arc<Config>>) -> Response {
+    let Some(dir) = &cfg.projects_dir else {
+        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
+    };
+    match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+        Ok(sessions) => {
+            let mut seen = std::collections::HashSet::new();
+            let cwds: Vec<String> = sessions
+                .iter()
+                .map(|s| s.cwd.display().to_string())
+                .filter(|c| seen.insert(c.clone()))
+                .collect();
+            axum::Json(cwds).into_response()
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
     }
@@ -240,9 +261,11 @@ summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:n
 
 #[derive(serde::Deserialize)]
 struct PtyQuery {
-    /// Resume this session in the pty (spawns `claude --resume`). Absent = the default
-    /// command (a shell). Only a real connection spawns anything.
+    /// Resume this session in the pty (spawns `claude --resume`).
     session: Option<String>,
+    /// Start a fresh session: spawn `claude` in this cwd. Takes precedence over `session`.
+    new: Option<String>,
+    // Absent both = the default command (a shell). Only a real connection spawns anything.
 }
 
 async fn pty_ws(
@@ -257,21 +280,30 @@ async fn pty_ws(
     if !origin_is_local(&headers) {
         return (StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response();
     }
-    let command = pty_command(&cfg, query.session.as_deref());
+    let command = pty_command(&cfg, &query);
     ws.on_upgrade(move |socket| bridge(socket, command))
 }
 
-/// Resolve which command a pty connection should run. `session` → `claude --resume
-/// <full-uuid>` in that session's cwd (the user-initiated, token-spending path). No
-/// session → the configured default (a shell in dev, a dummy in tests). Pure: spawns
-/// nothing.
-fn pty_command(cfg: &Config, session: Option<&str>) -> PtyCommand {
-    if let (Some(uuid), Some(dir)) = (session, &cfg.projects_dir) {
+/// Resolve which command a pty connection should run, spawning nothing.
+/// - `new=<cwd>` → `claude` in that dir (fresh session); watch for its new JSONL.
+/// - `session=<uuid>` → `claude --resume <full-uuid>` in that session's cwd.
+/// - neither → the configured default (a shell in dev, a dummy in tests).
+fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
+    if let (Some(cwd), Some(projects)) = (&query.new, &cfg.projects_dir) {
+        return PtyCommand {
+            program: "claude".to_string(),
+            args: vec![],
+            cwd: Some(PathBuf::from(cwd)),
+            watch: Some((projects.clone(), escaped_cwd(cwd))),
+        };
+    }
+    if let (Some(uuid), Some(dir)) = (&query.session, &cfg.projects_dir) {
         if let Ok(stub) = eigen_forest::resolve_stub(dir, uuid) {
             return PtyCommand {
                 program: "claude".to_string(),
                 args: vec!["--resume".to_string(), stub.uuid],
                 cwd: Some(stub.cwd),
+                watch: None,
             };
         }
     }
@@ -279,6 +311,72 @@ fn pty_command(cfg: &Config, session: Option<&str>) -> PtyCommand {
         program: cfg.program.clone(),
         args: cfg.args.clone(),
         cwd: cfg.cwd.clone(),
+        watch: None,
+    }
+}
+
+/// Claude Code's project dir name for a cwd: `/` → `-` (e.g. `/home/me/p` → `-home-me-p`).
+fn escaped_cwd(cwd: &str) -> String {
+    cwd.replace('/', "-")
+}
+
+/// If `path` is a `<uuid>.jsonl` directly under `<projects>/<dir_name>/` and its uuid is
+/// not in `baseline`, return that uuid — the freshly-created session.
+fn new_session_uuid(
+    path: &Path,
+    projects: &Path,
+    dir_name: &str,
+    baseline: &std::collections::HashSet<String>,
+) -> Option<String> {
+    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return None;
+    }
+    if path.parent() != Some(&projects.join(dir_name)) {
+        return None;
+    }
+    let uuid = path.file_stem().and_then(|s| s.to_str())?;
+    (!baseline.contains(uuid)).then(|| uuid.to_string())
+}
+
+/// Block until a new `<uuid>.jsonl` appears under `<projects>/<dir_name>/` that wasn't
+/// there at the start, returning its uuid. Runs on a dedicated thread.
+fn watch_new_session(projects: PathBuf, dir_name: String) -> Option<String> {
+    let project_dir = projects.join(&dir_name);
+    let baseline: std::collections::HashSet<String> = std::fs::read_dir(&project_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            (p.extension().and_then(|x| x.to_str()) == Some("jsonl"))
+                .then(|| p.file_stem()?.to_str().map(str::to_string))
+                .flatten()
+        })
+        .collect();
+
+    let (raw_tx, raw_rx) = std::sync::mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        let _ = raw_tx.send(res);
+    })
+    .ok()?;
+    // Watch the projects root recursively so a brand-new project dir is covered too.
+    notify::Watcher::watch(&mut watcher, &projects, notify::RecursiveMode::Recursive).ok()?;
+
+    // Bound the wait so an abandoned "new session" connection can't leak this thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let remaining = deadline.checked_duration_since(std::time::Instant::now())?;
+        match raw_rx.recv_timeout(remaining) {
+            Ok(Ok(event)) => {
+                for path in &event.paths {
+                    if let Some(uuid) = new_session_uuid(path, &projects, &dir_name, &baseline) {
+                        return Some(uuid);
+                    }
+                }
+            }
+            Ok(Err(_)) => continue,
+            Err(_) => return None, // timeout or watcher gone
+        }
     }
 }
 
@@ -287,6 +385,16 @@ struct PtyCommand {
     program: String,
     args: Vec<String>,
     cwd: Option<PathBuf>,
+    /// For a fresh session: (projects_dir, escaped-cwd dir name) to watch for the new JSONL.
+    watch: Option<(PathBuf, String)>,
+}
+
+/// What the daemon pushes to the browser over the pty websocket.
+enum Outbound {
+    /// Raw pty output.
+    Binary(Vec<u8>),
+    /// A JSON control message (e.g. a new session's uuid).
+    Text(String),
 }
 
 fn origin_is_local(headers: &HeaderMap) -> bool {
@@ -331,8 +439,11 @@ async fn bridge(socket: WebSocket, command: PtyCommand) {
 
     let (mut sink, mut stream) = socket.split();
 
-    // Blocking pty reads live on a dedicated thread, forwarded over a channel.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    // pty output → binary frames; control messages (e.g. a new session's uuid) → text.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Outbound>(64);
+
+    // Blocking pty reads live on a dedicated thread.
+    let read_tx = tx.clone();
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 4096];
@@ -340,7 +451,7 @@ async fn bridge(socket: WebSocket, command: PtyCommand) {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                    if read_tx.blocking_send(Outbound::Binary(buf[..n].to_vec())).is_err() {
                         break;
                     }
                 }
@@ -348,9 +459,25 @@ async fn bridge(socket: WebSocket, command: PtyCommand) {
         }
     });
 
+    // For a fresh session: watch for its new JSONL and report the uuid to the client.
+    if let Some((projects, dir_name)) = command.watch.clone() {
+        let detect_tx = tx.clone();
+        std::thread::spawn(move || {
+            if let Some(uuid) = watch_new_session(projects, dir_name) {
+                let msg = format!(r#"{{"type":"session","uuid":"{uuid}"}}"#);
+                let _ = detect_tx.blocking_send(Outbound::Text(msg));
+            }
+        });
+    }
+    drop(tx); // only the worker threads keep senders; rx closes when they're done
+
     let send_task = tokio::spawn(async move {
-        while let Some(bytes) = rx.recv().await {
-            if sink.send(Message::Binary(bytes)).await.is_err() {
+        while let Some(out) = rx.recv().await {
+            let msg = match out {
+                Outbound::Binary(b) => Message::Binary(b),
+                Outbound::Text(t) => Message::Text(t),
+            };
+            if sink.send(msg).await.is_err() {
                 break;
             }
         }
@@ -472,13 +599,47 @@ mod tests {
             dev: false,
         };
 
-        let resumed = pty_command(&cfg, Some("abcdef00"));
+        let resumed = pty_command(
+            &cfg,
+            &PtyQuery { session: Some("abcdef00".into()), new: None },
+        );
         assert_eq!(resumed.program, "claude");
         assert_eq!(resumed.args, vec!["--resume".to_string(), uuid.to_string()]);
         assert_eq!(resumed.cwd.as_deref(), Some(std::path::Path::new("/home/me/proj")));
 
         // No session → the configured default, never claude.
-        let default = pty_command(&cfg, None);
+        let default = pty_command(&cfg, &PtyQuery { session: None, new: None });
         assert_eq!(default.program, "bash");
+
+        // new=<cwd> → fresh claude in that dir, with a watch target for its new JSONL.
+        let fresh = pty_command(
+            &cfg,
+            &PtyQuery { session: None, new: Some("/home/me/fresh".into()) },
+        );
+        assert_eq!(fresh.program, "claude");
+        assert!(fresh.args.is_empty());
+        assert_eq!(fresh.cwd.as_deref(), Some(std::path::Path::new("/home/me/fresh")));
+        assert_eq!(fresh.watch.as_ref().map(|(_, d)| d.as_str()), Some("-home-me-fresh"));
+    }
+
+    #[test]
+    fn detects_a_new_session_jsonl_under_the_project_dir() {
+        let baseline: std::collections::HashSet<String> =
+            ["old1".to_string()].into_iter().collect();
+        let projects = std::path::Path::new("/x/.claude/projects");
+        let dir_name = "-home-me-fresh";
+
+        // a brand-new jsonl under the matching project dir → its uuid
+        let fresh = projects.join(dir_name).join("new-uuid-123.jsonl");
+        assert_eq!(
+            new_session_uuid(&fresh, projects, dir_name, &baseline).as_deref(),
+            Some("new-uuid-123")
+        );
+        // a pre-existing one (in baseline) → ignored
+        let old = projects.join(dir_name).join("old1.jsonl");
+        assert_eq!(new_session_uuid(&old, projects, dir_name, &baseline), None);
+        // a file under a different project → ignored
+        let other = projects.join("-other").join("x.jsonl");
+        assert_eq!(new_session_uuid(&other, projects, dir_name, &baseline), None);
     }
 }
