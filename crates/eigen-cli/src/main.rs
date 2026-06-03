@@ -71,8 +71,8 @@ enum RenderFormat {
 enum SurgeryAction {
     /// fork a session so it ends at a chosen turn (optionally editing that turn)
     Fork {
-        /// path to the source session JSONL
-        session: PathBuf,
+        /// source session: uuid, unique prefix, or a path
+        session: String,
         /// uuid of the turn to fork at
         #[arg(long)]
         at: String,
@@ -82,14 +82,16 @@ enum SurgeryAction {
     },
     /// rewind a session to a chosen turn (prefix only)
     Rewind {
-        session: PathBuf,
+        /// source session: uuid, unique prefix, or a path
+        session: String,
         /// uuid of the turn to rewind to
         #[arg(long)]
         to: String,
     },
     /// inject a synthetic turn after a chosen turn, as the new resume head
     Inject {
-        session: PathBuf,
+        /// source session: uuid, unique prefix, or a path
+        session: String,
         /// uuid of the turn to inject after
         #[arg(long)]
         at: String,
@@ -190,30 +192,33 @@ fn projects_dir() -> Result<PathBuf> {
         .join(".claude/projects"))
 }
 
+/// Resolve a `<uuid|prefix|path>` argument to a session file path. A literal existing
+/// file wins; otherwise resolve as a uuid/prefix machine-wide, printing candidates on
+/// ambiguity.
+fn resolve_session(session: &str) -> Result<PathBuf> {
+    if PathBuf::from(session).is_file() {
+        return Ok(PathBuf::from(session));
+    }
+    let dir = projects_dir()?;
+    match eigen_forest::resolve(&dir, session) {
+        Ok(p) => Ok(p),
+        Err(eigen_forest::ResolveError::Ambiguous(candidates)) => {
+            eprintln!("`{session}` is ambiguous — {} sessions match:", candidates.len());
+            for c in &candidates {
+                let title = eigen_forest::session_ref(c)
+                    .title
+                    .unwrap_or_else(|| "(untitled)".to_string());
+                eprintln!("  {}  {}", &c.uuid[..c.uuid.len().min(8)], title);
+            }
+            anyhow::bail!("specify more of the uuid");
+        }
+        Err(e) => Err(anyhow::anyhow!("{e}")),
+    }
+}
+
 fn sessions_show(session: String, render: RenderFormat) -> Result<()> {
     require_text(render)?;
-
-    // A literal path wins; otherwise resolve as a uuid/prefix machine-wide.
-    let path = if PathBuf::from(&session).is_file() {
-        PathBuf::from(&session)
-    } else {
-        let dir = projects_dir()?;
-        match eigen_forest::resolve(&dir, &session) {
-            Ok(p) => p,
-            Err(eigen_forest::ResolveError::Ambiguous(candidates)) => {
-                eprintln!("`{session}` is ambiguous — {} sessions match:", candidates.len());
-                for c in &candidates {
-                    let title = eigen_forest::session_ref(c)
-                        .title
-                        .unwrap_or_else(|| "(untitled)".to_string());
-                    eprintln!("  {}  {}", &c.uuid[..c.uuid.len().min(8)], title);
-                }
-                anyhow::bail!("specify more of the uuid");
-            }
-            Err(e) => return Err(anyhow::anyhow!("{e}")),
-        }
-    };
-
+    let path = resolve_session(&session)?;
     let src = load_session(&path)?;
     let view = eigen_render::session_view(&src);
     print!("{}", eigen_render::render_text(&view));
@@ -272,7 +277,8 @@ fn parse_since(since: Option<&str>) -> Result<Option<chrono::Duration>> {
 fn surgery(action: SurgeryAction) -> Result<()> {
     let (session_path, result) = match action {
         SurgeryAction::Fork { session, at, edit } => {
-            let src = load_session(&session)?;
+            let path = resolve_session(&session)?;
+            let src = load_session(&path)?;
             let new = match edit {
                 Some(edit_path) => {
                     let text = read_text(&edit_path)?;
@@ -280,12 +286,13 @@ fn surgery(action: SurgeryAction) -> Result<()> {
                 }
                 None => eigen_surgery::fork_at(&src, &at),
             };
-            (session, new)
+            (path, new)
         }
         SurgeryAction::Rewind { session, to } => {
-            let src = load_session(&session)?;
+            let path = resolve_session(&session)?;
+            let src = load_session(&path)?;
             let new = eigen_surgery::rewind_to(&src, &to);
-            (session, new)
+            (path, new)
         }
         SurgeryAction::Inject {
             session,
@@ -293,10 +300,11 @@ fn surgery(action: SurgeryAction) -> Result<()> {
             as_role,
             content,
         } => {
-            let src = load_session(&session)?;
+            let path = resolve_session(&session)?;
+            let src = load_session(&path)?;
             let text = read_text(&content)?;
             let new = eigen_surgery::inject(&src, &at, as_role.into(), &text);
-            (session, new)
+            (path, new)
         }
     };
 

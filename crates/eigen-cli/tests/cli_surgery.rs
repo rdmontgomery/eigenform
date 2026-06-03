@@ -72,6 +72,27 @@ fn inject_reads_content_from_a_file() {
 }
 
 #[test]
+fn fork_resolves_the_source_by_uuid_prefix() {
+    // Source lives in a HOME/.claude/projects tree; surgery should resolve it by uuid
+    // prefix, not require a path, and write the fork beside it.
+    let home = tempdir().unwrap();
+    let pdir = home.path().join(".claude/projects/-home-me-p");
+    std::fs::create_dir_all(&pdir).unwrap();
+    std::fs::write(pdir.join(format!("{OLD}.jsonl")), session_text()).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_eigen"))
+        .env("HOME", home.path())
+        .args(["surgery", "fork", "11111111", "--at", A1])
+        .output()
+        .expect("run eigen");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+
+    let new_uuid = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert_ne!(new_uuid, OLD);
+    assert!(pdir.join(format!("{new_uuid}.jsonl")).exists(), "fork written beside source");
+}
+
+#[test]
 fn unknown_turn_exits_nonzero() {
     let dir = tempdir().unwrap();
     let src = dir.path().join(format!("{OLD}.jsonl"));
