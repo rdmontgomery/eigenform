@@ -27,7 +27,7 @@ fn canonical_roots_includes_repo_skills_dir_even_if_absent() {
 
     assert!(roots
         .iter()
-        .any(|(l, p)| matches!(l, Layer::Repo) && p == &cwd.path().join(".claude/skills")));
+        .any(|(l, p)| matches!(l, Layer::Repo { project: None }) && p == &cwd.path().join(".claude/skills")));
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn canonical_roots_ordered_global_then_plugins_then_repo() {
         .unwrap();
     let repo_idx = roots
         .iter()
-        .position(|(l, _)| matches!(l, Layer::Repo))
+        .position(|(l, _)| matches!(l, Layer::Repo { project: None }))
         .unwrap();
 
     assert!(global_idx < plugin_idx);

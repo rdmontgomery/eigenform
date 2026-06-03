@@ -19,8 +19,15 @@ pub struct Skill {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Layer {
     Global,
-    Plugin { name: String },
-    Repo,
+    Plugin {
+        name: String,
+    },
+    /// A project's local `.claude/skills/`. `project: None` means "the
+    /// current cwd"; `project: Some(cwd)` is used when scanning multiple
+    /// projects, so the rendered output can distinguish them.
+    Repo {
+        project: Option<PathBuf>,
+    },
     Cwd,
 }
 
@@ -206,8 +213,32 @@ pub fn canonical_roots(home: &Path, cwd: &Path) -> Vec<(Layer, PathBuf)> {
         roots.push((Layer::Plugin { name }, path));
     }
 
-    roots.push((Layer::Repo, cwd.join(".claude/skills")));
+    roots.push((Layer::Repo { project: None }, cwd.join(".claude/skills")));
     roots
+}
+
+/// Like `canonical_roots`, but emits one `Layer::Repo { project: Some(cwd) }`
+/// entry per supplied project cwd. Global + plugin layers are included once
+/// (they're shared across all projects). Repo entries appear in the supplied
+/// order, after global and plugin.
+pub fn all_projects_roots(home: &Path, project_cwds: &[PathBuf]) -> Vec<(Layer, PathBuf)> {
+    // Use a throwaway cwd so we get the shared global+plugin entries,
+    // then strip the dummy Repo at the end and re-emit one per project.
+    let dummy = std::path::PathBuf::from("/");
+    let mut shared = canonical_roots(home, &dummy);
+    // Drop the trailing Repo { project: None } slot.
+    if matches!(shared.last(), Some((Layer::Repo { project: None }, _))) {
+        shared.pop();
+    }
+    for cwd in project_cwds {
+        shared.push((
+            Layer::Repo {
+                project: Some(cwd.clone()),
+            },
+            cwd.join(".claude/skills"),
+        ));
+    }
+    shared
 }
 
 /// Render a layered scan as a text tree: skills grouped by name (alphabetic),
@@ -246,7 +277,16 @@ fn layer_tag(l: &Layer) -> String {
     match l {
         Layer::Global => "global".into(),
         Layer::Plugin { name } => format!("plugin:{name}"),
-        Layer::Repo => "repo".into(),
+        Layer::Repo { project: None } => "repo".into(),
+        Layer::Repo {
+            project: Some(cwd),
+        } => {
+            let label = cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?");
+            format!("repo:{label}")
+        }
         Layer::Cwd => "cwd".into(),
     }
 }

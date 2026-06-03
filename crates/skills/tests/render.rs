@@ -44,7 +44,7 @@ fn render_tree_collides_two_layers_marks_last_as_winner() {
             },
             "/h/plug/foo.md",
         ),
-        sk("foo", Layer::Repo, "/r/foo.md"),
+        sk("foo", Layer::Repo { project: None }, "/r/foo.md"),
     ];
     let out = render_tree(&scan);
 
@@ -71,7 +71,7 @@ fn render_tree_collides_two_layers_marks_last_as_winner() {
 fn render_tree_no_collision_does_not_emit_wins_marker() {
     let scan = vec![
         sk("alpha", Layer::Global, "/h/alpha.md"),
-        sk("beta", Layer::Repo, "/r/beta.md"),
+        sk("beta", Layer::Repo { project: None }, "/r/beta.md"),
     ];
     let out = render_tree(&scan);
     assert!(!out.contains("WINS"), "no collisions, no WINS marker: {out}");
@@ -82,7 +82,7 @@ fn render_tree_skills_grouped_alphabetically() {
     let scan = vec![
         sk("zeta", Layer::Global, "/h/zeta.md"),
         sk("alpha", Layer::Global, "/h/alpha.md"),
-        sk("mid", Layer::Repo, "/r/mid.md"),
+        sk("mid", Layer::Repo { project: None }, "/r/mid.md"),
     ];
     let out = render_tree(&scan);
     let p_a = out.find("\nalpha\n").unwrap();
@@ -90,4 +90,29 @@ fn render_tree_skills_grouped_alphabetically() {
     let p_z = out.find("\nzeta\n").unwrap();
     assert!(p_a < p_m);
     assert!(p_m < p_z);
+}
+
+#[test]
+fn render_tree_tags_named_projects_distinctly() {
+    let scan = vec![
+        sk(
+            "drift",
+            Layer::Repo {
+                project: Some(PathBuf::from("/tmp/proj-a")),
+            },
+            "/tmp/proj-a/.claude/skills/drift.md",
+        ),
+        sk(
+            "drift",
+            Layer::Repo {
+                project: Some(PathBuf::from("/tmp/proj-b")),
+            },
+            "/tmp/proj-b/.claude/skills/drift.md",
+        ),
+    ];
+    let out = render_tree(&scan);
+
+    assert!(out.contains("[repo:proj-a]"), "render: {out}");
+    assert!(out.contains("[repo:proj-b]"), "render: {out}");
+    assert!(out.contains("WINS"));
 }

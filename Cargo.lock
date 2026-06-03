@@ -122,7 +122,29 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "eigen-memory",
+ "eigen-projects",
  "eigen-skills",
+]
+
+[[package]]
+name = "eigen-memory"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "eigen-projects"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

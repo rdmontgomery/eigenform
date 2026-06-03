@@ -43,7 +43,7 @@ fn scan_layered_missing_dir_returns_empty_not_error() {
     let dir = tempdir().unwrap();
     let missing = dir.path().join("nonexistent");
 
-    let found = scan_layered(Layer::Repo, &missing).unwrap();
+    let found = scan_layered(Layer::Repo { project: None }, &missing).unwrap();
     assert!(found.is_empty());
 }
 
@@ -56,14 +56,14 @@ fn scan_many_concatenates_in_supplied_order() {
 
     let roots: Vec<(Layer, PathBuf)> = vec![
         (Layer::Global, g.path().to_path_buf()),
-        (Layer::Repo, r.path().to_path_buf()),
+        (Layer::Repo { project: None }, r.path().to_path_buf()),
     ];
     let all = scan_many(&roots).unwrap();
 
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].layer, Layer::Global);
     assert_eq!(all[0].skill.name, "x");
-    assert_eq!(all[1].layer, Layer::Repo);
+    assert_eq!(all[1].layer, Layer::Repo { project: None });
     assert_eq!(all[1].skill.name, "y");
 }
 
@@ -74,7 +74,7 @@ fn scan_many_handles_missing_dirs_gracefully() {
 
     let roots: Vec<(Layer, PathBuf)> = vec![
         (Layer::Global, g.path().to_path_buf()),
-        (Layer::Repo, g.path().join("does/not/exist")),
+        (Layer::Repo { project: None }, g.path().join("does/not/exist")),
     ];
     let all = scan_many(&roots).unwrap();
 
