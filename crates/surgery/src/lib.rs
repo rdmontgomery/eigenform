@@ -6,9 +6,19 @@
 
 use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum ParseError {}
+
+#[derive(Debug, Error)]
+pub enum SurgeryError {
+    /// No modeled turn (user/assistant/system) carries the requested uuid.
+    #[error("no turn with uuid `{0}` in session")]
+    TurnNotFound(String),
+    #[error(transparent)]
+    Rewrite(#[from] RewriteError),
+}
 
 #[derive(Debug, Error)]
 pub enum RewriteError {
@@ -183,6 +193,55 @@ impl Session {
                 _ => None,
             })
     }
+}
+
+/// Fork the session so it ends at `turn`: keep the prefix through that turn (and any
+/// `system` row that closes it), drop everything after, re-point the resume head, and
+/// mint a fresh session id. Validated by spike 03 (mid-tree cold-load).
+pub fn fork_at(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
+    let target = src
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Turn(t) if t.uuid == turn))
+        .ok_or_else(|| SurgeryError::TurnNotFound(turn.to_string()))?;
+    // Extend the cut over any trailing `system` rows (e.g. turn_duration) that belong
+    // to the kept turn, stopping before the next user/assistant turn.
+    let mut cut = target;
+    while let Some(Row::Turn(t)) = src.rows.get(cut + 1) {
+        if t.role == Role::System {
+            cut += 1;
+        } else {
+            break;
+        }
+    }
+    seal_prefix(src, cut)
+}
+
+/// Rewind is a fork with no resume seed beyond the re-point — the same prefix operation.
+pub fn rewind_to(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
+    fork_at(src, turn)
+}
+
+/// Keep `src.rows[..=cut]`, append a fresh `last-prompt` pointing at the cut row, and
+/// rewrite the session id across the whole result.
+fn seal_prefix(src: &Session, cut: usize) -> Result<Session, SurgeryError> {
+    let tip = match &src.rows[cut] {
+        Row::Turn(t) => t.uuid.clone(),
+        _ => unreachable!("cut always lands on a turn"),
+    };
+    let old = &src.session_id;
+    let new = Uuid::new_v4().to_string();
+
+    let mut lines: Vec<String> = Vec::with_capacity(cut + 2);
+    for row in &src.rows[..=cut] {
+        lines.push(rewrite_session_id(row.raw(), old, &new)?);
+    }
+    lines.push(format!(
+        r#"{{"type":"last-prompt","leafUuid":"{tip}","sessionId":"{new}"}}"#
+    ));
+
+    let text = lines.join("\n") + "\n";
+    Ok(Session::parse_str(&text).expect("re-parse of sealed prefix"))
 }
 
 /// Classify a line into a modeled or opaque row. Invalid JSON or unmodeled `type`
