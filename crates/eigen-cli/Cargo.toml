@@ -17,7 +17,9 @@ eigen-memory   = { path = "../memory" }
 eigen-surgery  = { path = "../surgery" }
 eigen-render   = { path = "../render" }
 eigen-forest   = { path = "../forest" }
+eigen-daemon   = { path = "../daemon" }
 chrono         = { workspace = true }
+tokio          = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -33,6 +33,18 @@ enum Cmd {
         #[command(subcommand)]
         action: SessionsAction,
     },
+    /// run woland: the browser workbench (serves a pty terminal at localhost)
+    Daemon {
+        /// port to bind on localhost
+        #[arg(long, default_value_t = 4317)]
+        port: u16,
+        /// command to run in the pty (default: $SHELL, else bash). NOT claude unless you ask.
+        #[arg(long)]
+        cmd: Option<String>,
+        /// directory of built frontend assets (default: ./web)
+        #[arg(long)]
+        web: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -175,6 +187,7 @@ fn main() -> Result<()> {
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
         Cmd::Surgery { action } => surgery(action),
+        Cmd::Daemon { port, cmd, web } => daemon(port, cmd, web),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
             SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
@@ -337,6 +350,40 @@ fn surgery(action: SurgeryAction) -> Result<()> {
         eprint!("{}", eigen_render::render_text(&eigen_render::fork_diff_view(&src, &new)));
     }
     Ok(())
+}
+
+fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>) -> Result<()> {
+    let cwd = env::current_dir().context("could not read current dir")?;
+
+    // The pty command: explicit --cmd, else the user's shell, else bash. Not claude
+    // unless the user asks for it explicitly.
+    let program = cmd
+        .or_else(|| env::var("SHELL").ok())
+        .unwrap_or_else(|| "bash".to_string());
+
+    // Frontend assets: explicit --web, else ./web if it has a built bundle.
+    let web_dir = web.or_else(|| {
+        let candidate = cwd.join("web");
+        candidate.join("dist/main.js").is_file().then_some(candidate)
+    });
+    if web_dir.is_none() {
+        eprintln!(
+            "note: no built frontend found (run `just build-web`); serving the /pty API only"
+        );
+    }
+
+    let config = eigen_daemon::Config {
+        program,
+        args: Vec::new(),
+        cwd: Some(cwd),
+        web_dir,
+    };
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    println!("woland → http://{addr}");
+
+    let rt = tokio::runtime::Runtime::new().context("starting tokio runtime")?;
+    rt.block_on(eigen_daemon::serve(addr, config))
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 fn sessions_diff(a: String, b: String, render: RenderFormat) -> Result<()> {

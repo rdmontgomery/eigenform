@@ -38,6 +38,17 @@ spike-04:
     @echo "spike-04 is pure observation. see notes/spikes/04-billing-flip.md"
     @echo "track /cost before and after one --print invocation."
 
+# --- woland (browser workbench) ------------------------------------------
+
+# Build the TypeScript + xterm.js frontend bundle (web/dist).
+build-web:
+    cd web && npm install && npm run build
+
+# Run woland: a live pty (your shell) rendered in the browser. Open the URL it prints.
+# Spawns your $SHELL, NOT claude — wiring claude --resume is a later, user-initiated slice.
+woland port="4317": build-web
+    cargo run -q -p eigen-cli -- daemon --port {{port}}
+
 # --- testing -------------------------------------------------------------
 
 # Safe default: unit tests only.

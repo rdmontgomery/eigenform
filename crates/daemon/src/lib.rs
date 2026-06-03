@@ -24,13 +24,29 @@ pub struct Config {
     pub program: String,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    /// Directory of static frontend assets to serve at `/`. None = API only.
+    pub web_dir: Option<PathBuf>,
 }
 
-/// Build the woland HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a pty.
+/// Build the woland HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a pty;
+/// `web_dir`, if set, is served as static files at `/`.
 pub fn app(config: Config) -> Router {
-    Router::new()
-        .route("/pty", get(pty_ws))
-        .with_state(Arc::new(config))
+    let mut router = Router::new().route("/pty", get(pty_ws));
+    if let Some(web_dir) = &config.web_dir {
+        let index = web_dir.join("index.html");
+        router = router.fallback_service(
+            tower_http::services::ServeDir::new(web_dir)
+                .fallback(tower_http::services::ServeFile::new(index)),
+        );
+    }
+    router.with_state(Arc::new(config))
+}
+
+/// Bind `addr` and serve woland until the process is killed.
+pub async fn serve(addr: std::net::SocketAddr, config: Config) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app(config)).await?;
+    Ok(())
 }
 
 async fn pty_ws(ws: WebSocketUpgrade, State(cfg): State<Arc<Config>>) -> Response {

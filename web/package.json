@@ -1,0 +1,17 @@
+{
+  "name": "woland-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --outdir=dist --format=esm --minify",
+    "watch": "esbuild src/main.ts --bundle --outdir=dist --format=esm --watch"
+  },
+  "dependencies": {
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.1",
+    "typescript": "^5.5.4"
+  }
+}
