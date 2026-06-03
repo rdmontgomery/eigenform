@@ -14,3 +14,7 @@ clap           = { workspace = true }
 eigen-skills   = { path = "../skills" }
 eigen-projects = { path = "../projects" }
 eigen-memory   = { path = "../memory" }
+eigen-surgery  = { path = "../surgery" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

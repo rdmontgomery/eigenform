@@ -281,12 +281,7 @@ pub fn inject(src: &Session, after: &str, role: Role, text: &str) -> Result<Sess
 /// Edit a turn's content and fork at it: keep the prefix *before* the turn, re-author
 /// the turn with `text` (keeping its uuid, parent, and role), drop the tail, and make
 /// the edited turn the new resume head.
-pub fn edit_then_fork(
-    src: &Session,
-    turn: &str,
-    role: Role,
-    text: &str,
-) -> Result<Session, SurgeryError> {
+pub fn edit_then_fork(src: &Session, turn: &str, text: &str) -> Result<Session, SurgeryError> {
     let idx = src
         .rows
         .iter()
@@ -295,8 +290,10 @@ pub fn edit_then_fork(
     let Row::Turn(target) = &src.rows[idx] else {
         unreachable!("position matched a Turn");
     };
+    // Editing keeps the turn's existing role — we're rewriting what was said, not
+    // changing who said it.
     let edited = build_turn_line(
-        role,
+        target.role,
         &target.uuid,
         target.parent_uuid.as_deref(),
         text,

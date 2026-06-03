@@ -2,7 +2,7 @@
 //! and fork. The edited turn keeps its identity (uuid + parent) and becomes the new
 //! resume head — so resuming replays history as if you'd said the edited thing.
 
-use eigen_surgery::{edit_then_fork, Role, Session, SurgeryError};
+use eigen_surgery::{edit_then_fork, Session, SurgeryError};
 
 const OLD: &str = "sess-old-aaaa";
 const U1: &str = "turn-u1";
@@ -33,7 +33,7 @@ fn last_value(s: &Session) -> serde_json::Value {
 
 #[test]
 fn edit_replaces_content_keeps_uuid_and_drops_tail() {
-    let edited = edit_then_fork(&two_turns(), U2, Role::User, "two, but better").unwrap();
+    let edited = edit_then_fork(&two_turns(), U2, "two, but better").unwrap();
 
     let last = *edited.turns().last().unwrap();
     assert_eq!(last.uuid, U2, "edited turn keeps its identity");
@@ -47,13 +47,13 @@ fn edit_replaces_content_keeps_uuid_and_drops_tail() {
 
 #[test]
 fn edit_keeps_the_turns_parent() {
-    let edited = edit_then_fork(&two_turns(), U2, Role::User, "x").unwrap();
+    let edited = edit_then_fork(&two_turns(), U2, "x").unwrap();
     assert_eq!(last_value(&edited)["parentUuid"], S1);
 }
 
 #[test]
 fn edit_repoints_resume_head_and_mints_new_id() {
-    let edited = edit_then_fork(&two_turns(), U2, Role::User, "x").unwrap();
+    let edited = edit_then_fork(&two_turns(), U2, "x").unwrap();
     assert_eq!(edited.resume_leaf().as_deref(), Some(U2));
     assert_ne!(edited.session_id, OLD);
     assert!(!edited.to_jsonl().contains(OLD));
@@ -61,7 +61,7 @@ fn edit_repoints_resume_head_and_mints_new_id() {
 
 #[test]
 fn edit_the_first_turn_preserves_null_parent() {
-    let edited = edit_then_fork(&two_turns(), U1, Role::User, "fresh start").unwrap();
+    let edited = edit_then_fork(&two_turns(), U1, "fresh start").unwrap();
     let last = *edited.turns().last().unwrap();
     assert_eq!(last.uuid, U1);
     assert!(last.parent_uuid.is_none());
@@ -69,9 +69,19 @@ fn edit_the_first_turn_preserves_null_parent() {
 }
 
 #[test]
+fn edit_derives_the_role_from_the_target_turn() {
+    use eigen_surgery::Role;
+    // A1 is an assistant turn; editing it must keep an assistant content block.
+    let edited = edit_then_fork(&two_turns(), A1, "as if I'd said this").unwrap();
+    let last = *edited.turns().last().unwrap();
+    assert_eq!(last.role, Role::Assistant);
+    assert_eq!(last_value(&edited)["message"]["content"][0]["text"], "as if I'd said this");
+}
+
+#[test]
 fn edit_unknown_turn_is_an_error() {
     assert!(matches!(
-        edit_then_fork(&two_turns(), "nope", Role::User, "x").unwrap_err(),
+        edit_then_fork(&two_turns(), "nope", "x").unwrap_err(),
         SurgeryError::TurnNotFound(_)
     ));
 }

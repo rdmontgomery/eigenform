@@ -23,6 +23,63 @@ enum Cmd {
         #[command(subcommand)]
         action: MemoryAction,
     },
+    /// context surgery on a session JSONL: fork, rewind, inject (prints the new uuid)
+    Surgery {
+        #[command(subcommand)]
+        action: SurgeryAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SurgeryAction {
+    /// fork a session so it ends at a chosen turn (optionally editing that turn)
+    Fork {
+        /// path to the source session JSONL
+        session: PathBuf,
+        /// uuid of the turn to fork at
+        #[arg(long)]
+        at: String,
+        /// replace the turn's content with this file's text (edit-then-fork)
+        #[arg(long)]
+        edit: Option<PathBuf>,
+    },
+    /// rewind a session to a chosen turn (prefix only)
+    Rewind {
+        session: PathBuf,
+        /// uuid of the turn to rewind to
+        #[arg(long)]
+        to: String,
+    },
+    /// inject a synthetic turn after a chosen turn, as the new resume head
+    Inject {
+        session: PathBuf,
+        /// uuid of the turn to inject after
+        #[arg(long)]
+        at: String,
+        /// role of the injected turn
+        #[arg(long = "as", value_enum)]
+        as_role: RoleArg,
+        /// file whose text becomes the injected turn's content
+        #[arg(long)]
+        content: PathBuf,
+    },
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum RoleArg {
+    User,
+    Assistant,
+    System,
+}
+
+impl From<RoleArg> for eigen_surgery::Role {
+    fn from(r: RoleArg) -> Self {
+        match r {
+            RoleArg::User => eigen_surgery::Role::User,
+            RoleArg::Assistant => eigen_surgery::Role::Assistant,
+            RoleArg::System => eigen_surgery::Role::System,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -66,7 +123,58 @@ fn main() -> Result<()> {
             MemoryAction::Tree { cwd } => memory_tree(cwd),
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
+        Cmd::Surgery { action } => surgery(action),
     }
+}
+
+fn surgery(action: SurgeryAction) -> Result<()> {
+    let (session_path, result) = match action {
+        SurgeryAction::Fork { session, at, edit } => {
+            let src = load_session(&session)?;
+            let new = match edit {
+                Some(edit_path) => {
+                    let text = read_text(&edit_path)?;
+                    eigen_surgery::edit_then_fork(&src, &at, &text)
+                }
+                None => eigen_surgery::fork_at(&src, &at),
+            };
+            (session, new)
+        }
+        SurgeryAction::Rewind { session, to } => {
+            let src = load_session(&session)?;
+            let new = eigen_surgery::rewind_to(&src, &to);
+            (session, new)
+        }
+        SurgeryAction::Inject {
+            session,
+            at,
+            as_role,
+            content,
+        } => {
+            let src = load_session(&session)?;
+            let text = read_text(&content)?;
+            let new = eigen_surgery::inject(&src, &at, as_role.into(), &text);
+            (session, new)
+        }
+    };
+
+    let new = result.map_err(|e| anyhow::anyhow!("{e}"))?;
+    let projects_dir = session_path
+        .parent()
+        .context("source session has no parent directory")?;
+    let uuid = eigen_surgery::write(&new, projects_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!("{uuid}");
+    Ok(())
+}
+
+fn load_session(path: &PathBuf) -> Result<eigen_surgery::Session> {
+    let contents =
+        std::fs::read_to_string(path).with_context(|| format!("reading session {path:?}"))?;
+    eigen_surgery::Session::parse_str(&contents).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+fn read_text(path: &PathBuf) -> Result<String> {
+    std::fs::read_to_string(path).with_context(|| format!("reading {path:?}"))
 }
 
 fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
