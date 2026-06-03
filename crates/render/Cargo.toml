@@ -1,0 +1,9 @@
+[package]
+name = "eigen-render"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde_json    = { workspace = true }
+eigen-surgery = { path = "../surgery" }
