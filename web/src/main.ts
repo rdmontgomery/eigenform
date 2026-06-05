@@ -118,11 +118,14 @@ function sendLeaf(text: string): void {
 }
 
 // ── the live pty (the real Furnace stream) ──────────────────────────────────
+// The Furnace is a dark instrument in BOTH themes (its bg is dark in paper too), so the
+// terminal foreground is always light — never the page ink, which would go dark-on-dark.
+const TERM_FG = PALETTES.furnace.ink;
 const term = new Terminal({
   fontFamily: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
   fontSize: 12,
   cursorBlink: true,
-  theme: { background: PALETTES[theme].furnaceBg, foreground: PALETTES[theme].ink },
+  theme: { background: PALETTES[theme].furnaceBg, foreground: TERM_FG },
 });
 const fit = new FitAddon();
 term.loadAddon(fit);
@@ -138,7 +141,7 @@ furnace.setOpen = (open: boolean) => {
 };
 
 function retheme(): void {
-  term.options.theme = { background: PALETTES[theme].furnaceBg, foreground: PALETTES[theme].ink };
+  term.options.theme = { background: PALETTES[theme].furnaceBg, foreground: TERM_FG };
 }
 
 let ws: WebSocket | null = null;

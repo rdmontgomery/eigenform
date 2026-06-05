@@ -129,7 +129,7 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .lens-toggle.on { background: color-mix(in oklab, var(--ink) 8%, transparent); border-color: var(--line); color: var(--ink); }
 
 .ms-scroll { flex: 1; overflow: auto; padding: 22px 44px 40px; }
-.ms-col { max-width: 880px; }
+.ms-col { max-width: 1180px; }
 
 /* exchange */
 .xchg { display: flex; gap: 22px; margin-bottom: 4px; }
@@ -185,7 +185,9 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .btn-secondary { font-family: var(--mono); font-size: 11.5px; color: var(--dim); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 7px 14px; cursor: pointer; }
 
 /* margin readings */
-.margin .reading { padding-top: 3px; opacity: 0; transition: opacity .16s; pointer-events: none; }
+/* the sidenote gutter carries the fork-cost reading: quiet at rest (Tufte marginalia,
+   not dead space), full on hover/edit. */
+.margin .reading { padding-top: 3px; opacity: 0.34; transition: opacity .16s; pointer-events: none; }
 .xchg:hover .margin .reading, .xchg.editing .margin .reading { opacity: 1; }
 .margin .reading .drops { font-family: var(--serif); font-size: 12.5px; font-style: italic; color: var(--dim); line-height: 1.42; }
 .margin .reading .drops b { color: var(--ink); font-style: normal; font-weight: 400; }
