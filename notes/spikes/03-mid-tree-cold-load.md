@@ -1,9 +1,9 @@
 # 03 — Mid-tree cold-load
 
 **Claim:** A hand-built JSONL — source prefix truncated at turn N, new uuid in the header, dropped into the cwd's projects dir — can be resumed by `claude --resume <new-uuid>`, AND the resumed model has no knowledge of turns dropped after N.
-**Status:** CONFIRMED @2.1.161 — ⚠ RE-VET PENDING @2.1.165 (see "Re-vet 2026-06-05" below)
-**claude version:** 2.1.161
-**Date:** 2026-06-03
+**Status:** CONFIRMED — RE-VETTED @2.1.165 2026-06-05 (claim holds; the woland defect is surgery's output shape, not the engine — see "Re-vet 2026-06-05")
+**claude version:** 2.1.165
+**Date:** 2026-06-03 (re-vetted 2026-06-05)
 
 **This is the load-bearing spike. If REFUTED, the entire mid-tree fork approach changes.**
 
@@ -179,16 +179,25 @@ mechanism notes: "leafUuid = the trailing system row, not the assistant text row
 "append a fresh last-prompt + ai-title + mode + permission-mode block"). That alone could
 explain the rejection independent of any version change.
 
-**Decisive test still owed (engine, needs user auth):** resume a *previously-CONFIRMED*
-hand-built fork that still exists on disk —
-`claude --resume cbc165d9-8ca5-4942-9c30-826a47f82bfc`:
-- **loads** ⇒ claude unchanged; defect is ours — fix `surgery::finish` to emit the full
-  trailing `ai-title/mode/permission-mode` block and resolve the resume head per the
-  source convention. Re-confirm, bump stamp.
-- **"No conversation found"** ⇒ claude's resume/discovery changed at 2.1.16x; flip this
-  spike to REFUTED, reassess the write-a-JSONL approach (consider spike 02 `--fork-session`
-  as the resumable-fork primitive), and pause woland's fork-then-resume wiring.
+**Decisive test RESULT (2026-06-05, user-run on 2.1.165):** resumed the previously-CONFIRMED
+hand-built fork `claude --resume cbc165d9-8ca5-4942-9c30-826a47f82bfc` → **LOADED CLEAN.**
+The stored T1 (eigen-vs-aleph haiku) replayed; the model was correctly unaware of dropped
+content ("Before that, this session just opened"). So the claim **still holds at 2.1.165** —
+claude's resume is unchanged. The woland rejection is **our** output shape.
 
-Until that run: treating as **CONFIRMED-but-suspect**. woland's fork endpoint writes a
-correct copy-on-fork file (source untouched, verified) but the resume handoff is not
-trustworthy on 2.1.165.
+**Root cause (filesystem, verified across all on-disk sessions):** a resumable session's
+`last-prompt.leafUuid` ALWAYS resolves to a **system** row (`turn_duration`/`away_summary`)
+— the row that *closes* a turn. `d5f0cded` is the only session whose leaf points at a bare
+**user** row. `surgery::edit_then_fork` makes the re-authored user turn the leaf, which is a
+shape claude never emits and won't resume. Two concrete defects:
+1. `finish` points `leafUuid` at the cut tip directly; for `edit_then_fork` that tip is a
+   *user* row. The resume head must be a completed turn's closing system row.
+2. `finish` appends a bare `last-prompt` only — real sessions / the working fork end with a
+   `last-prompt + ai-title + mode + permission-mode` block.
+
+**Implication for `crates/surgery`:** "edit a user turn and re-ask" cannot be a dangling
+user leaf. The claude-native shape is *rewind to the completed-turn boundary before turn N*
+(leaf = the prior turn's `turn_duration` system row) and deliver the edited text as a fresh
+prompt into the resumed session (woland already has the leaf→pty path). `fork_at` already
+extends the cut over trailing system rows so its leaf is a system row, but it too should
+emit the full trailing block. Fix is ours; the spike stands.
