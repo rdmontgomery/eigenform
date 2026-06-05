@@ -1,270 +1,223 @@
-// woland: three panes — the forest (pick), the live pty (resume), the re-render (follow).
-// Selecting a session resumes it via `claude --resume` (your token-spending click), and
-// points the right pane at the same session, following it live over SSE.
-
+// main.ts — composes the workbench and owns the live cache clock + interaction state.
+// The furnace cools in real time; typing the leaf or committing a fork re-lights it.
+// The Manuscript/Mind/costs are stubbed (see data.ts); the Furnace pane, the Forest,
+// new-session and the leaf→pty path are LIVE, preserved from the original surface.
+import "@xterm/xterm/css/xterm.css";
+import "./woland.css";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
 
+import { el } from "./dom.ts";
+import { applyTheme, currentTheme, PALETTES, type ThemeName } from "./theme.ts";
+import { cacheReading, forkReading, tempColor, type CacheReading, SEED_IDLE, TTL_DEFAULT, TTL_EXTENDED } from "./cooling.ts";
+import { loadSession, loadForest, type ForestEntry } from "./data.ts";
+import { buildClock } from "./clock.ts";
+import { buildMind } from "./mind.ts";
+import { Manuscript } from "./manuscript.ts";
+import { buildMasthead, buildForest, buildFurnace, buildColdConfirm, buildForkToast, type ToastInfo } from "./shell.ts";
+import { mindGlyph } from "./marks.ts";
+
+// ── state ──────────────────────────────────────────────────────────────────
+let idle = SEED_IDLE;
+let ttl = TTL_DEFAULT;
+let theme: ThemeName = "furnace";
+let lensOn = false;
+let toastTimer: number | undefined;
+const session = loadSession();
+const cache = (): CacheReading => cacheReading(idle, ttl);
+
+applyTheme(theme);
+
+// ── components ───────────────────────────────────────────────────────────
+const masthead = buildMasthead(session, theme, () => {
+  theme = theme === "furnace" ? "paper" : "furnace";
+  applyTheme(theme);
+  masthead.setTheme(theme);
+  retheme();
+});
+
+const clock = buildClock({
+  onMind: () => mind.setOpen(true),
+  onExtend: () => { ttl = ttl === TTL_DEFAULT ? TTL_EXTENDED : TTL_DEFAULT; applyCache(); },
+  extended: () => ttl === TTL_EXTENDED,
+});
+
+const mind = buildMind(() => mind.setOpen(!mind.isOpen()));
+
+const manuscript = new Manuscript(session, {
+  getCache: cache,
+  onCommit: (n) => commit(n),
+  onLeafSend: (text) => sendLeaf(text),
+});
+
+const forest = buildForest((entry) => selectSession(entry));
+const furnace = buildFurnace();
+furnace.onToggle(() => { furnace.setOpen(!furnaceOpen()); });
+
+const lensBtn = el("button", { class: "ghost lens-toggle", title: "show what entered/left the mind at each turn", onclick: () => {
+  lensOn = !lensOn;
+  lensBtn.classList.toggle("on", lensOn);
+  manuscript.setLens(lensOn);
+} }, mindGlyph("var(--dim)", 12), "per-turn Δ");
+
+const center = el("div", { class: "center" },
+  el("div", { class: "ms-head" },
+    el("div", { class: "eyebrow", text: "The Manuscript" }),
+    el("div", { class: "right" },
+      el("span", { class: "tag", text: "one session · one cache · one clock" }),
+      lensBtn)),
+  mind.node,
+  manuscript.node);
+
+const root = el("div", { class: "wb" },
+  masthead.node, clock.node,
+  el("div", { class: "body" }, forest.node, center, furnace.node));
+
+document.getElementById("root")!.replaceChildren(root);
+
+// ── the cooling tick — the only per-second update ──────────────────────────
+function applyCache(): void {
+  const c = cache();
+  root.style.setProperty("--temp", String(c.temp));
+  root.style.setProperty("--temp-color", tempColor(c.temp));
+  root.classList.toggle("cold", c.cold);
+  root.classList.toggle("urgent", !c.cold && c.remaining <= 45);
+  clock.update(c);
+  manuscript.tick(c);
+}
+applyCache();
+window.setInterval(() => { idle += 1; applyCache(); }, 1000);
+
+function relight(): void { idle = 0; applyCache(); }
+
+// ── fork / leaf moments ────────────────────────────────────────────────────
+function showToast(info: ToastInfo): void {
+  const t = buildForkToast(info, session);
+  center.appendChild(t);
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => t.remove(), 4200);
+}
+
+function commit(n: number): void {
+  const c = cache();
+  const fork = forkReading(n, c);
+  manuscript.closeEdit();
+  if (c.cold) {
+    const scrim = buildColdConfirm(fork, c, () => { scrim.remove(); showToast({ kind: "fork", n, drops: fork.drops, prefix: fork.prefix, cold: true }); relight(); }, () => scrim.remove(), session);
+    center.appendChild(scrim);
+    return;
+  }
+  showToast({ kind: "fork", n, drops: fork.drops, prefix: fork.prefix, cold: false });
+  relight();
+}
+
+function sendLeaf(text: string): void {
+  if (sendPrompt(text)) { /* piped to the live pty */ }
+  relight();
+  showToast({ kind: "send" });
+}
+
+// ── the live pty (the real Furnace stream) ──────────────────────────────────
 const term = new Terminal({
-  fontFamily: "ui-monospace, Menlo, Consolas, monospace",
-  fontSize: 13,
+  fontFamily: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
+  fontSize: 12,
   cursorBlink: true,
-  theme: { background: "#0b0b0e", foreground: "#e6e6e6" },
+  theme: { background: PALETTES[theme].furnaceBg, foreground: PALETTES[theme].ink },
 });
 const fit = new FitAddon();
 term.loadAddon(fit);
-term.open(document.getElementById("terminal")!);
-fit.fit();
+term.open(furnace.termHost);
+
+let furnaceIsOpen = false;
+function furnaceOpen(): boolean { return furnaceIsOpen; }
+const realSetOpen = furnace.setOpen;
+furnace.setOpen = (open: boolean) => {
+  furnaceIsOpen = open;
+  realSetOpen(open);
+  if (open) queueMicrotask(() => { try { fit.fit(); sendResize(); term.focus(); } catch { /* not yet sized */ } });
+};
+
+function retheme(): void {
+  term.options.theme = { background: PALETTES[theme].furnaceBg, foreground: PALETTES[theme].ink };
+}
 
 let ws: WebSocket | null = null;
 let onData: { dispose(): void } | null = null;
 let es: EventSource | null = null;
+let activeSession: string | null = null;
 
-function sendResize() {
-  fit.fit();
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-  }
+function sendResize(): void {
+  try { fit.fit(); } catch { /* hidden */ }
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
 }
 window.addEventListener("resize", sendResize);
 
-// (Re)connect the center pty. query = "" (default shell), "?session=<uuid>" (resume), or
-// "?new=<cwd>" (fresh claude). Only a real connection spawns anything.
-function connectPty(query = "") {
+function connectPty(query = ""): void {
   if (ws) { ws.onclose = null; ws.close(); }
   if (onData) { onData.dispose(); onData = null; }
   term.reset();
-
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const sock = new WebSocket(`${proto}://${location.host}/pty${query}`);
   sock.binaryType = "arraybuffer";
   ws = sock;
-
   sock.onopen = () => {
     sendResize();
-    onData = term.onData((d) => {
-      if (sock.readyState === WebSocket.OPEN) {
-        sock.send(JSON.stringify({ type: "stdin", data: d }));
-      }
-    });
+    onData = term.onData((d) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: "stdin", data: d })); });
     term.focus();
   };
   sock.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) {
-      term.write(new Uint8Array(ev.data));
-      return;
-    }
-    // Text frame = a control message from the daemon (e.g. a new session's uuid).
-    try {
-      const msg = JSON.parse(ev.data as string);
-      if (msg.type === "session" && typeof msg.uuid === "string") onSessionBorn(msg.uuid);
-    } catch {
-      /* ignore non-JSON */
-    }
+    if (ev.data instanceof ArrayBuffer) { term.write(new Uint8Array(ev.data)); return; }
+    try { const msg = JSON.parse(ev.data as string); if (msg.type === "session" && typeof msg.uuid === "string") onSessionBorn(msg.uuid); } catch { /* non-JSON */ }
   };
   sock.onclose = () => term.write("\r\n\x1b[2m[woland: pty disconnected]\x1b[0m\r\n");
 }
 
-const manuscript = () => document.getElementById("manuscript") as HTMLElement;
-
-// Render the Manuscript in-page (not an iframe) so it can become a writing surface.
-// Re-fetch the fragment on each SSE 'change'; stay pinned to the leaf if we were near it.
-async function renderManuscript(uuid: string) {
-  const m = manuscript();
-  const nearBottom = m.scrollHeight - m.scrollTop - m.clientHeight < 80;
-  const prev = m.scrollTop;
-  try {
-    m.innerHTML = await (await fetch(`/api/session/${encodeURIComponent(uuid)}`)).text();
-    m.scrollTop = nearBottom ? m.scrollHeight : prev;
-  } catch {
-    m.innerHTML = `<div class="placeholder">could not load session</div>`;
-  }
-}
-
-function followManuscript(uuid: string) {
-  void renderManuscript(uuid);
-  if (es) es.close();
-  es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
-  es.onmessage = () => void renderManuscript(uuid);
-}
-
-// Send a prompt to the live pty. claude's TUI only submits on a discrete Enter, separate
-// from the input text. Bracketed paste (ESC[200~ … ESC[201~) frames the text as a paste —
-// so claude inserts it literally (multi-line and all), and the trailing \r after the
-// close marker is an unambiguous Enter. The marker provides the separation, so this is one
-// atomic write with no timing hack.
+// Bracketed-paste the (possibly multi-line) text so claude's TUI inserts it literally,
+// then a SEPARATE \r so it reads as a discrete Enter — same idea as tmux send-keys.
 function sendPrompt(text: string): boolean {
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   const sock = ws;
-  // Bracketed paste so the (possibly multi-line) text inserts literally with no escape
-  // leak. The Enter must arrive as a SEPARATE read for claude's TUI to treat it as a
-  // discrete keypress and submit — same reason `tmux send-keys` sends keys separately.
   sock.send(JSON.stringify({ type: "stdin", data: `\x1b[200~${text}\x1b[201~` }));
-  setTimeout(() => {
-    if (sock.readyState === WebSocket.OPEN) {
-      sock.send(JSON.stringify({ type: "stdin", data: "\r" }));
-    }
-  }, 60);
+  window.setTimeout(() => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: "stdin", data: "\r" })); }, 60);
   return true;
 }
 
-// The leaf input: type into the Manuscript, pipe to the live session's pty (claude).
-function setupLeafInput() {
-  const input = document.getElementById("leaf-input") as HTMLTextAreaElement;
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (input.value && sendPrompt(input.value)) {
-        input.value = "";
-      }
-    }
-  });
+function selectSession(entry: ForestEntry): void {
+  if (!entry.uuid) return;
+  activeSession = entry.uuid;
+  connectPty(`?session=${encodeURIComponent(entry.uuid)}`);
+  furnace.setOpen(true);
+  void refreshForest(entry.uuid);
 }
 
-function enableLeafInput(label: string) {
-  const input = document.getElementById("leaf-input") as HTMLTextAreaElement;
-  input.disabled = false;
-  input.placeholder = `write to ${label} — Enter to send, Shift+Enter for newline`;
-  input.focus();
-}
-
-// The "+ new session" control: a directory input with a datalist of known project cwds.
-async function loadProjectDirs() {
-  const datalist = document.getElementById("project-dirs")!;
-  try {
-    const dirs: string[] = await (await fetch("/api/projects")).json();
-    datalist.replaceChildren();
-    for (const d of dirs) {
-      const opt = document.createElement("option");
-      opt.value = d;
-      datalist.append(opt);
-    }
-  } catch {
-    /* none */
-  }
-}
-
-function setupNewSession() {
-  const btn = document.getElementById("new-session-btn") as HTMLButtonElement;
-  const form = document.getElementById("new-session-form") as HTMLFormElement;
-  const input = document.getElementById("new-session-dir") as HTMLInputElement;
-  btn.addEventListener("click", () => {
-    form.hidden = !form.hidden;
-    if (!form.hidden) input.focus();
-  });
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const cwd = input.value.trim();
-    if (cwd) {
-      startNewSession(cwd);
-      form.hidden = true;
-      input.value = "";
-    }
-  });
-  void loadProjectDirs();
-}
-
-let activeSession: string | null = null;
-
-function highlightSession(uuid: string | null) {
-  document.querySelectorAll<HTMLElement>(".session-item").forEach((el) => {
-    el.classList.toggle("active", el.dataset.uuid === uuid);
-  });
-}
-
-function selectSession(uuid: string) {
+function onSessionBorn(uuid: string): void {
   activeSession = uuid;
-  connectPty(`?session=${encodeURIComponent(uuid)}`);
-  followManuscript(uuid);
-  enableLeafInput(uuid.slice(0, 8));
-  highlightSession(uuid);
+  void refreshForest(uuid);
 }
 
-// Start a fresh claude session in `cwd`. The uuid doesn't exist yet; the daemon detects
-// the new JSONL and reports it via onSessionBorn, which then follows it.
-function startNewSession(cwd: string) {
-  activeSession = null;
-  connectPty(`?new=${encodeURIComponent(cwd)}`);
-  enableLeafInput("new session");
-  highlightSession(null);
-  const m = manuscript();
-  const note = document.createElement("div");
-  note.className = "placeholder";
-  note.textContent = `starting a new session in ${cwd} …`;
-  m.replaceChildren(note);
+async function refreshForest(activeUuid?: string): Promise<void> {
+  const entries = await loadForest();
+  if (activeUuid) for (const e of entries) e.active = e.uuid === activeUuid;
+  forest.fill(entries);
 }
 
-// The daemon found the new session's JSONL — bind everything to it.
-function onSessionBorn(uuid: string) {
-  activeSession = uuid;
-  followManuscript(uuid);
-  enableLeafInput(uuid.slice(0, 8));
-  void loadSidebar().then(() => highlightSession(uuid));
-}
-
-// Dev live-reload: when the daemon injects the dev meta, listen for bundle changes and
-// refresh — UNLESS a session is live (a full reload would drop the claude pty and respawn
-// it on the next click). Never auto-respawns claude.
-function devLiveReload() {
+// ── dev live-reload — never drops a live session ────────────────────────────
+function devLiveReload(): void {
   if (!document.querySelector('meta[name="eigen-dev"]')) return;
-  const es = new EventSource("/api/dev/reload");
+  const ev = new EventSource("/api/dev/reload");
   let last = 0;
-  es.onmessage = () => {
+  ev.onmessage = () => {
     const now = Date.now();
-    if (now - last < 300) return; // debounce esbuild's multi-file writes
+    if (now - last < 300) return;
     last = now;
-    if (activeSession) {
-      console.warn("[woland dev] frontend changed — refresh manually to keep the live session");
-      return;
-    }
+    if (activeSession) { console.warn("[woland dev] frontend changed — refresh manually to keep the live session"); return; }
     location.reload();
   };
 }
 
-interface SessionItem {
-  uuid: string;
-  title: string;
-  cwd: string;
-  recency: string;
-}
-
-async function loadSidebar() {
-  const list = document.getElementById("sessions")!;
-  try {
-    const items: SessionItem[] = await (await fetch("/api/sessions")).json();
-    list.replaceChildren();
-    for (const it of items) {
-      const btn = document.createElement("button");
-      btn.className = "session-item";
-      btn.dataset.uuid = it.uuid;
-      const project = it.cwd.split("/").filter(Boolean).pop() ?? it.cwd;
-      const title = document.createElement("span");
-      title.className = "title";
-      title.textContent = it.title;
-      const meta = document.createElement("span");
-      meta.className = "meta";
-      meta.textContent = `${project} · ${it.uuid.slice(0, 8)}`;
-      btn.append(title, meta);
-      btn.onclick = () => selectSession(it.uuid);
-      list.append(btn);
-    }
-  } catch {
-    list.textContent = "no sessions";
-  }
-}
-
-// Startup: shell in the center (no tokens), the most recent session in the right pane,
-// the forest in the sidebar. Pick a session to resume it.
+// ── startup: a shell in the Furnace (no tokens), the Forest from disk ────────
+void es; // SSE follow is reserved for when the Manuscript goes live (see data.ts)
+theme = currentTheme();
 connectPty();
-loadSidebar();
-setupLeafInput();
-setupNewSession();
+void refreshForest();
 devLiveReload();
-fetch("/api/recent")
-  .then((r) => (r.ok ? r.text() : ""))
-  .then((u) => {
-    const uuid = u.trim();
-    if (uuid) followManuscript(uuid); // read-only preview until a session is selected
-  })
-  .catch(() => {});

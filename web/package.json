@@ -5,6 +5,7 @@
   "scripts": {
     "build": "esbuild src/main.ts --bundle --outdir=dist --format=esm --minify",
     "watch": "esbuild src/main.ts --bundle --outdir=dist --format=esm --watch",
+    "typecheck": "tsc --noEmit",
     "test": "node --test"
   },
   "dependencies": {
