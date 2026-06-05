@@ -228,18 +228,26 @@ function renderLive(): void {
   if (!inFlight) return;
   manuscript.setLive(termTail(), Math.floor((Date.now() - liveStart) / 1000));
 }
-function clearLive(): void {
-  inFlight = false;
+function stopLiveTimers(): void {
   window.clearInterval(liveTicker);
   window.clearTimeout(liveQuiet);
   window.clearTimeout(liveThrottle);
   liveThrottle = undefined;
+}
+function clearLive(): void {
+  // hard clear (session switch) — drop the region immediately
+  inFlight = false;
+  stopLiveTimers();
   manuscript.setLive(null);
 }
-function endLive(): void {
+async function endLive(): Promise<void> {
+  // seamless settle: render the clean landed turn FIRST, then remove the live region in
+  // the same continuation (one paint) so streaming and the new leaf swap without a flash.
   if (!inFlight) return;
-  clearLive();
-  if (activeSession) void renderManuscript(activeSession); // settle on the clean turn
+  inFlight = false;
+  stopLiveTimers();
+  if (activeSession) await renderManuscript(activeSession);
+  manuscript.setLive(null);
 }
 
 // The last meaningful lines of the live terminal. xterm has parsed the TUI for us, so we

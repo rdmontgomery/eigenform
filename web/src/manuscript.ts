@@ -25,21 +25,31 @@ export class Manuscript {
   private editingEl: HTMLElement | null = null;
   private lensOn = false;
   private exNodes = new Map<number, HTMLElement>();
-  private leaf: { node: HTMLElement; update(c: CacheReading): void };
+  private turns: HTMLElement; // the exchanges (rebuilt by setSession)
+  private leaf: { node: HTMLElement; update(c: CacheReading): void }; // persistent
 
+  // Column order is turns → [live region] → leaf, so the chat entry stays pinned below
+  // the streaming pty. The leaf is built once and kept (so a draft survives SSE re-renders
+  // and the live/clean swap), with only its turn-count label refreshed on setSession.
   constructor(session: Session, opts: ManuscriptOpts) {
     this.session = session;
     this.opts = opts;
-    this.col = el("div", { class: "ms-col" });
-    for (const e of session.exchanges) {
+    this.turns = el("div", { class: "ms-turns" });
+    this.leaf = this.buildLeaf();
+    this.col = el("div", { class: "ms-col" }, this.turns, this.leaf.node);
+    this.node = el("div", { class: "ms-scroll" }, this.col);
+    this.renderTurns();
+  }
+
+  private renderTurns(): void {
+    this.exNodes.clear();
+    this.turns.replaceChildren();
+    for (const e of this.session.exchanges) {
       if (e.leaf) continue;
       const node = this.buildExchange(e);
       this.exNodes.set(e.n, node);
-      this.col.appendChild(node);
+      this.turns.appendChild(node);
     }
-    this.leaf = this.buildLeaf();
-    this.col.appendChild(this.leaf.node);
-    this.node = el("div", { class: "ms-scroll" }, this.col);
   }
 
   setLens(on: boolean): void {
@@ -47,21 +57,16 @@ export class Manuscript {
     for (const e of this.session.exchanges) if (!e.leaf) this.rebuild(e.n);
   }
 
-  // Swap in a different session (e.g. one chosen from the Forest) and rebuild the column.
+  // Swap in a different session (e.g. one chosen from the Forest) and rebuild the turns —
+  // the persistent leaf (and any live region) stay put.
   setSession(session: Session): void {
     this.session = session;
     this.folded.clear();
     this.editingN = null;
-    this.exNodes.clear();
-    this.col.replaceChildren();
-    for (const e of session.exchanges) {
-      if (e.leaf) continue;
-      const node = this.buildExchange(e);
-      this.exNodes.set(e.n, node);
-      this.col.appendChild(node);
-    }
-    this.leaf = this.buildLeaf();
-    this.col.appendChild(this.leaf.node);
+    this.editingEl = null;
+    this.renderTurns();
+    const n = this.leaf.node.querySelector(".rule .n");
+    if (n) n.textContent = String(session.total);
   }
 
   get scroller(): HTMLElement {
@@ -69,8 +74,9 @@ export class Manuscript {
   }
 
   // The live "responding" region: a streaming tail of the Furnace's pty, shown while a
-  // turn is in flight (the JSONL only lands the assistant turn at completion). It lives
-  // OUTSIDE .ms-col so setSession's rebuild doesn't wipe it. text===null hides it.
+  // turn is in flight (the JSONL only lands the assistant turn at completion). It sits
+  // between the turns and the leaf — below the transcript, above the chat entry. Rebuilt
+  // turns don't touch it (separate node); text===null hides it.
   private liveNode: HTMLElement | null = null;
   setLive(text: string | null, seconds = 0): void {
     if (text === null) {
@@ -86,7 +92,7 @@ export class Manuscript {
           el("span", { class: "lsec" }),
           el("span", { class: "lfrom", text: "streaming from the furnace" })),
         el("pre", { class: "lbody" }));
-      this.node.appendChild(this.liveNode);
+      this.col.insertBefore(this.liveNode, this.leaf.node); // above the leaf
     }
     (this.liveNode.querySelector(".lbody") as HTMLElement).textContent = text;
     (this.liveNode.querySelector(".lsec") as HTMLElement).textContent = seconds ? `${seconds}s` : "";
