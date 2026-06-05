@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/main.ts --bundle --outdir=dist --format=esm --minify",
-    "watch": "esbuild src/main.ts --bundle --outdir=dist --format=esm --watch"
+    "watch": "esbuild src/main.ts --bundle --outdir=dist --format=esm --watch",
+    "test": "node --test"
   },
   "dependencies": {
     "@xterm/xterm": "^5.5.0",
