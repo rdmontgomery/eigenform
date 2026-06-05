@@ -10,7 +10,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { el } from "./dom.ts";
 import { applyTheme, currentTheme, PALETTES, type ThemeName } from "./theme.ts";
 import { cacheReading, forkReading, tempColor, type CacheReading, SEED_IDLE, TTL_DEFAULT, TTL_EXTENDED } from "./cooling.ts";
-import { loadSession, loadForest, fetchSession, type ForestEntry } from "./data.ts";
+import { loadSession, loadForest, fetchSession, forkSession, type ForestEntry, type Session } from "./data.ts";
 import { buildClock } from "./clock.ts";
 import { buildMind } from "./mind.ts";
 import { Manuscript } from "./manuscript.ts";
@@ -24,6 +24,7 @@ let theme: ThemeName = "furnace";
 let lensOn = false;
 let toastTimer: number | undefined;
 const session = loadSession();
+let current: Session = session; // the session the Manuscript is currently showing
 const cache = (): CacheReading => cacheReading(idle, ttl);
 
 applyTheme(theme);
@@ -46,7 +47,7 @@ const mind = buildMind(() => mind.setOpen(!mind.isOpen()));
 
 const manuscript = new Manuscript(session, {
   getCache: cache,
-  onCommit: (n) => commit(n),
+  onCommit: (n, text) => commit(n, text),
   onLeafSend: (text) => sendLeaf(text),
 });
 
@@ -98,17 +99,47 @@ function showToast(info: ToastInfo): void {
   toastTimer = window.setTimeout(() => t.remove(), 4200);
 }
 
-function commit(n: number): void {
+function commit(n: number, text: string): void {
   const c = cache();
-  const fork = forkReading(n, c);
+  const fork = forkReading(n, c, current.total);
+  const e = current.exchanges.find((x) => x.n === n);
+  const src = activeSession;
+  const turn = e?.uuid;
+  const live = Boolean(src && turn); // a real fork needs a live source + a turn uuid
   manuscript.closeEdit();
+
+  const proceed = (): void => {
+    if (live && src && turn) void doFork(src, turn, text, fork);
+    else {
+      // stub/preview (no live source): keep the visual feedback only
+      showToast({ kind: "fork", n, drops: fork.drops, prefix: fork.prefix, cold: c.cold });
+      relight();
+    }
+  };
+
   if (c.cold) {
-    const scrim = buildColdConfirm(fork, c, () => { scrim.remove(); showToast({ kind: "fork", n, drops: fork.drops, prefix: fork.prefix, cold: true }); relight(); }, () => scrim.remove(), session);
+    const scrim = buildColdConfirm(fork, c, () => { scrim.remove(); proceed(); }, () => scrim.remove(), current);
     center.appendChild(scrim);
-    return;
+  } else {
+    proceed();
   }
-  showToast({ kind: "fork", n, drops: fork.drops, prefix: fork.prefix, cold: false });
+}
+
+// Real edit-then-fork: write the branch, announce it, then ENTER it — resume it in the
+// Furnace and follow it in the Manuscript (selectSession), and it appears in the Forest.
+async function doFork(src: string, turn: string, text: string, fork: ReturnType<typeof forkReading>): Promise<void> {
+  const newUuid = await forkSession(src, turn, text);
+  if (!newUuid) { showError("fork failed — the source is untouched"); return; }
+  showToast({ kind: "fork", n: fork.n, drops: fork.drops, prefix: fork.prefix, cold: fork.cold });
   relight();
+  selectSession({ uuid: newUuid, id: newUuid.slice(0, 6), name: "fork", turns: 0, branches: 0, active: true, shape: [] });
+}
+
+function showError(msg: string): void {
+  const t = el("div", { class: "toast" }, el("span", { class: "msg", text: msg }));
+  center.appendChild(t);
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => t.remove(), 4200);
 }
 
 function sendLeaf(text: string): void {
@@ -215,6 +246,7 @@ async function renderManuscript(uuid: string): Promise<void> {
   const scroller = manuscript.scroller;
   const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
   const prev = scroller.scrollTop;
+  current = s;
   manuscript.setSession(s);
   masthead.setSession(s);
   scroller.scrollTop = nearBottom ? scroller.scrollHeight : prev;

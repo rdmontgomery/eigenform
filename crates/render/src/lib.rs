@@ -93,7 +93,7 @@ pub fn session_json(session: &Session) -> String {
     let mut exchanges: Vec<serde_json::Value> = Vec::new();
     for turn in &visible {
         match turn.role {
-            Role::User => exchanges.push(json!({ "user": content_raw(turn) })),
+            Role::User => exchanges.push(json!({ "user": content_raw(turn), "uuid": turn.uuid })),
             Role::Assistant => {
                 let text = content_raw(turn);
                 match exchanges.last_mut() {
@@ -562,6 +562,7 @@ mod session_json_tests {
         let ex = doc["exchanges"].as_array().unwrap();
         assert_eq!(ex.len(), 2);
         assert_eq!(ex[0]["n"], 1);
+        assert_eq!(ex[0]["uuid"], "u1"); // the user turn's uuid — the fork target
         assert_eq!(ex[0]["user"], "render the transcript");
         assert_eq!(ex[0]["assistant"], "on it");
         assert_eq!(ex[0]["system"], "4.2s");

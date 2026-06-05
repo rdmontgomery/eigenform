@@ -12,8 +12,8 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
-use axum::Router;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Deserialize;
@@ -41,6 +41,7 @@ pub fn app(config: Config) -> Router {
         .route("/session/:uuid", get(session_route))
         .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/session/:uuid/json", get(session_json_route))
+        .route("/api/session/:uuid/fork", post(fork_route))
         .route("/api/sessions", get(sessions_route))
         .route("/api/projects", get(projects_route))
         .route("/api/recent", get(recent_route))
@@ -111,6 +112,52 @@ async fn session_json_route(
 /// Resolve, read, parse, and render a session's transcript fragment.
 fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'static str)> {
     Ok(eigen_render::session_html(&load_session(cfg, uuid)?))
+}
+
+/// `POST /api/session/:uuid/fork` — edit-then-fork at a turn. Body `{turn, text}`:
+/// re-author the turn `turn` (a turn uuid) with `text`, drop everything after it, and
+/// write a NEW session beside the source (copy-on-fork — the source is never touched).
+/// Returns `{uuid}` of the new branch, which the client then resumes in the Furnace.
+async fn fork_route(
+    AxumPath(uuid): AxumPath<String>,
+    State(cfg): State<Arc<Config>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let Some(turn) = body.get("turn").and_then(|v| v.as_str()) else {
+        return (StatusCode::BAD_REQUEST, "missing `turn`").into_response();
+    };
+    let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    match fork_session(&cfg, &uuid, turn, text) {
+        Ok(new_uuid) => Json(serde_json::json!({ "uuid": new_uuid })).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Fork `src_uuid` at turn `turn`, re-authored to `text`. The new session is written into
+/// the SAME project directory as the source (so `claude --resume` and the Forest find it
+/// under the project's cwd), never the projects root. Returns the new session uuid.
+fn fork_session(
+    cfg: &Config,
+    src_uuid: &str,
+    turn: &str,
+    text: &str,
+) -> Result<String, (StatusCode, &'static str)> {
+    let dir = cfg
+        .projects_dir
+        .as_ref()
+        .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
+    let src_path =
+        eigen_forest::resolve(dir, src_uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
+    let contents = std::fs::read_to_string(&src_path)
+        .map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
+    let session = eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+    let forked = eigen_surgery::edit_then_fork(&session, turn, text)
+        .map_err(|_| (StatusCode::UNPROCESSABLE_ENTITY, "no such turn in session"))?;
+    let project_dir = src_path
+        .parent()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "session path has no parent"))?;
+    eigen_surgery::write(&forked, project_dir)
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not write fork"))
 }
 
 /// Resolve, read, and parse a session's JSONL into a [`Session`].
@@ -642,6 +689,44 @@ mod tests {
         assert!(fresh.args.is_empty());
         assert_eq!(fresh.cwd.as_deref(), Some(std::path::Path::new("/home/me/fresh")));
         assert_eq!(fresh.watch.as_ref().map(|(_, d)| d.as_str()), Some("-home-me-fresh"));
+    }
+
+    #[test]
+    fn fork_session_writes_a_branch_beside_the_source_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let pdir = dir.path().join("-home-me-proj");
+        std::fs::create_dir_all(&pdir).unwrap();
+        let uuid = "abcdef00-0000-4000-8000-000000000000";
+        let src = pdir.join(format!("{uuid}.jsonl"));
+        let jsonl = [
+            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{uuid}","message":{{"role":"user","content":"first prompt"}}}}"#),
+            format!(r#"{{"type":"assistant","uuid":"a1","sessionId":"{uuid}","message":{{"role":"assistant","content":[{{"type":"text","text":"reply one"}}]}}}}"#),
+            format!(r#"{{"type":"user","uuid":"u2","cwd":"/home/me/proj","sessionId":"{uuid}","message":{{"role":"user","content":"second prompt"}}}}"#),
+        ]
+        .join("\n") + "\n";
+        std::fs::write(&src, &jsonl).unwrap();
+
+        let cfg = Config {
+            program: "bash".into(),
+            args: vec![],
+            cwd: None,
+            web_dir: None,
+            projects_dir: Some(dir.path().to_path_buf()),
+            dev: false,
+        };
+
+        let new_uuid = fork_session(&cfg, "abcdef00", "u1", "edited first").expect("fork ok");
+        assert_ne!(new_uuid, uuid, "fork mints a fresh id");
+
+        // the branch lands in the SAME project dir (so resume/Forest find it under the cwd)
+        let forked = pdir.join(format!("{new_uuid}.jsonl"));
+        let body = std::fs::read_to_string(&forked).expect("fork file written beside source");
+        assert!(body.contains("edited first"), "the edited turn is re-authored");
+        assert!(!body.contains("second prompt"), "the downstream turn is dropped");
+        assert!(!body.contains("reply one"), "the downstream reply is dropped");
+
+        // copy-on-fork: the source is byte-for-byte untouched
+        assert_eq!(std::fs::read_to_string(&src).unwrap(), jsonl);
     }
 
     #[test]

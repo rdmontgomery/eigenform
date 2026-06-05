@@ -11,7 +11,7 @@ import { type CacheReading, dropsAt, prefixTokensTo, fmtK, fmtClock } from "./co
 
 export interface ManuscriptOpts {
   getCache: () => CacheReading;
-  onCommit: (n: number) => void; // main decides warm-fork vs cold-confirm
+  onCommit: (n: number, text: string) => void; // main decides warm-fork vs cold-confirm
   onLeafSend: (text: string) => void;
 }
 
@@ -22,6 +22,7 @@ export class Manuscript {
   private opts: ManuscriptOpts;
   private folded = new Set<number>();
   private editingN: number | null = null;
+  private editingEl: HTMLElement | null = null;
   private lensOn = false;
   private exNodes = new Map<number, HTMLElement>();
   private leaf: { node: HTMLElement; update(c: CacheReading): void };
@@ -70,7 +71,14 @@ export class Manuscript {
   closeEdit(): void {
     const n = this.editingN;
     this.editingN = null;
+    this.editingEl = null;
     if (n != null) this.rebuild(n);
+  }
+
+  // read the live contenteditable text and hand it up for the (real or stub) fork
+  private commitEdit(n: number): void {
+    const text = (this.editingEl?.textContent ?? "").trim();
+    this.opts.onCommit(n, text);
   }
 
   tick(cache: CacheReading): void {
@@ -134,9 +142,10 @@ export class Manuscript {
     if (editing) {
       userProse.contentEditable = "true";
       userProse.textContent = e.user;
+      this.editingEl = userProse;
       userProse.addEventListener("keydown", (ev) => {
         const k = ev as KeyboardEvent;
-        if (k.key === "Enter" && !k.shiftKey) { k.preventDefault(); this.opts.onCommit(e.n); }
+        if (k.key === "Enter" && !k.shiftKey) { k.preventDefault(); this.commitEdit(e.n); }
         if (k.key === "Escape") { k.preventDefault(); this.closeEdit(); }
       });
       queueMicrotask(() => {
@@ -218,7 +227,7 @@ export class Manuscript {
     return el("div", { class: "forkbanner" },
       el("div", { class: "lead" }, forkMarkInline(), lead),
       el("div", { class: "actions" },
-        el("button", { class: "btn-primary", onclick: () => this.opts.onCommit(n) }, "Revise & fork ↵"),
+        el("button", { class: "btn-primary", onclick: () => this.commitEdit(n) }, "Revise & fork ↵"),
         el("button", { class: "btn-secondary", onclick: () => this.closeEdit() }, "esc"),
         el("span", { class: "spacer" }),
         el("span", { class: "note", text: "you’re off the clock while you edit" })));

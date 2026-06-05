@@ -21,6 +21,7 @@ export interface Exchange {
   system?: string;
   tool?: Tool;
   leaf?: boolean;
+  uuid?: string; // the user turn's real JSONL uuid — the fork target (live sessions only)
 }
 export interface Session {
   id: string;
@@ -96,6 +97,24 @@ export async function fetchSession(uuid: string): Promise<Session | null> {
     const res = await fetch(`/api/session/${encodeURIComponent(uuid)}/json`);
     if (!res.ok) return null;
     return (await res.json()) as Session;
+  } catch {
+    return null;
+  }
+}
+
+// ── LIVE: edit-then-fork a session at a turn ───────────────────────────────
+// POST /api/session/:src/fork {turn, text} → the new branch's uuid (copy-on-fork;
+// the source is never mutated). Returns null on failure so the caller can stay put.
+export async function forkSession(srcUuid: string, turn: string, text: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/session/${encodeURIComponent(srcUuid)}/fork`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ turn, text }),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { uuid?: string };
+    return typeof j.uuid === "string" ? j.uuid : null;
   } catch {
     return null;
   }
