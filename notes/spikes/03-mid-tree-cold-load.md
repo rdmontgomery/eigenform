@@ -201,3 +201,13 @@ user leaf. The claude-native shape is *rewind to the completed-turn boundary bef
 prompt into the resumed session (woland already has the leaf→pty path). `fork_at` already
 extends the cut over trailing system rows so its leaf is a system row, but it too should
 emit the full trailing block. Fix is ours; the spike stands.
+
+### Fix landed 2026-06-05 (pending live confirmation)
+
+`surgery::fork_before` now rewinds to the last turn-closing system row before the edited
+turn (resume head = a `turn_duration` row) and `finish` re-emits the trailing
+`mode/permission-mode/ai-title` block. Curl-verified: a fork of a live session now has its
+`last-prompt.leafUuid` resolve to a `system/turn_duration` row and a real-session tail.
+woland resumes the branch and auto-sends the edited prompt once the pty idles. **Owed: a
+user-run `claude --resume <fresh-fork>` to confirm the shaped branch actually loads** (the
+structural defect is fixed; live load not yet re-observed on 2.1.165).
