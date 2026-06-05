@@ -201,14 +201,22 @@ function schedulePendingSend(): void {
 // so we read its buffer tail into a live "responding" region until the turn lands.
 let inFlight = false;
 let liveStart = 0;
+let liveBaseline = 0; // completed-turn count when the turn began; swap when it grows
 let liveTicker: number | undefined;
 let liveQuiet: number | undefined;
 let liveThrottle: number | undefined;
+
+// a turn is "complete" in the JSONL once its turn_duration system row lands — session_json
+// surfaces that as the exchange's `system` field. That, not pty-quiet, is the swap signal.
+function completedCount(s: Session): number {
+  return s.exchanges.filter((e) => !e.leaf && !!e.system).length;
+}
 
 function beginLive(): void {
   clearLive();
   inFlight = true;
   liveStart = Date.now();
+  liveBaseline = completedCount(current);
   renderLive();
   resetQuiet();
   liveTicker = window.setInterval(renderLive, 1000);
@@ -221,8 +229,10 @@ function onPtyOutput(): void {
   }
 }
 function resetQuiet(): void {
+  // backstop only — the real swap is gated on the JSONL (see renderManuscript). This just
+  // rescues a stuck live region if the watch/JSONL never reports the completed turn.
   window.clearTimeout(liveQuiet);
-  liveQuiet = window.setTimeout(endLive, 2500); // pty quiet for 2.5s ⇒ the turn finished
+  liveQuiet = window.setTimeout(endLive, 12000);
 }
 function renderLive(): void {
   if (!inFlight) return;
@@ -250,31 +260,51 @@ async function endLive(): Promise<void> {
   manuscript.setLive(null);
 }
 
-// The last meaningful lines of the live terminal. xterm has parsed the TUI for us, so we
-// read its buffer (newest-first, bounded) rather than the raw ANSI, and drop input-box /
-// hint chrome. Imperfect by nature — claude's TUI redraws — but it shows real motion.
-function termTail(maxLines = 16): string {
+// The live terminal's recent text, reconstructed into logical lines. xterm has parsed the
+// TUI for us; we rejoin soft-wrapped continuations (so paragraphs fill the Manuscript
+// width instead of wrapping at the narrow pty) and drop input-box / hint / spinner chrome.
+// Imperfect by nature — claude's TUI redraws — but it reads as motion, not a ragged column.
+function termTail(maxLines = 24): string {
   const buf = term.buffer.active;
-  const out: string[] = [];
-  for (let y = buf.length - 1; y >= 0 && out.length < maxLines; y--) {
+  const startY = Math.max(0, buf.length - 240); // bound the scan to the recent region
+  const logical: string[] = [];
+  let cur = "";
+  for (let y = startY; y < buf.length; y++) {
     const line = buf.getLine(y);
     if (!line) continue;
-    const s = line.translateToString(true);
-    if (!s.trim() || isChrome(s)) continue;
-    out.push(s);
+    const text = line.translateToString(true);
+    if (line.isWrapped) {
+      cur += text; // continuation of the same logical line (soft wrap)
+    } else {
+      logical.push(cur);
+      cur = text;
+    }
   }
-  return out.reverse().join("\n");
+  logical.push(cur);
+  return logical
+    .filter((s) => s.trim() && !isChrome(s))
+    .slice(-maxLines)
+    .join("\n");
 }
 function isChrome(s: string): boolean {
   const t = s.trim();
-  if (/^[╭╮╰╯│─└┘┌┐\s]*$/.test(t)) return true; // box-drawing only
-  if (t.startsWith("❯")) return true; // the input prompt line
-  if (/shortcuts|esc to interrupt|\? for|bypass permissions|⏵/i.test(t)) return true;
+  if (!t) return true;
+  if (/^[╭╮╰╯│─└┘┌┐┤├┬┴┼▏▕|]+$/.test(t)) return true; // box borders / rules
+  if (t.includes("❯")) return true; // the input prompt
+  if (/^[│|].*[│|]$/.test(t)) return true; // a bordered input-box row "│ … │"
+  if (/(\? for shortcuts|esc to interrupt|bypass permissions|⏵|tab to|for newline|ctrl\+[a-z])/i.test(t)) return true;
   return false;
 }
 
 function sendResize(): void {
-  try { fit.fit(); } catch { /* hidden */ }
+  // When the Furnace is open, fit to its pane (a faithful raw view). When it's collapsed
+  // (the default), claude still needs a sane width — give it a comfortable fixed one so the
+  // streamed text the Manuscript tails wraps wide, not at a cramped side-panel column.
+  if (furnaceIsOpen) {
+    try { fit.fit(); } catch { /* hidden */ }
+  } else if (term.cols !== 100) {
+    term.resize(100, Math.max(term.rows || 30, 30));
+  }
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
 }
 window.addEventListener("resize", sendResize);
@@ -314,7 +344,6 @@ function selectSession(entry: ForestEntry): void {
   if (!entry.uuid) return;
   activeSession = entry.uuid;
   connectPty(`?session=${encodeURIComponent(entry.uuid)}`);
-  furnace.setOpen(true);
   followManuscript(entry.uuid);
   void refreshForest(entry.uuid);
 }
@@ -344,6 +373,13 @@ async function renderManuscript(uuid: string): Promise<void> {
   currentUuid = uuid;
   manuscript.setSession(s);
   masthead.setSession(s);
+  // gated swap: if the completed turn just landed in the JSONL, drop the live region in
+  // this same task — the clean turn and the streaming region change in one paint.
+  if (inFlight && completedCount(s) > liveBaseline) {
+    inFlight = false;
+    stopLiveTimers();
+    manuscript.setLive(null);
+  }
   scroller.scrollTop = nearBottom ? scroller.scrollHeight : prev;
 }
 
