@@ -40,6 +40,7 @@ pub fn app(config: Config) -> Router {
         .route("/pty", get(pty_ws))
         .route("/session/:uuid", get(session_route))
         .route("/api/session/:uuid", get(session_fragment_route))
+        .route("/api/session/:uuid/json", get(session_json_route))
         .route("/api/sessions", get(sessions_route))
         .route("/api/projects", get(projects_route))
         .route("/api/recent", get(recent_route))
@@ -90,8 +91,30 @@ async fn session_fragment_route(
     }
 }
 
+/// `GET /api/session/:uuid/json` — the transcript as structured JSON for the Manuscript
+/// (exchanges + a trailing leaf), so woland can fold/annotate per turn rather than inject
+/// opaque HTML.
+async fn session_json_route(
+    AxumPath(uuid): AxumPath<String>,
+    State(cfg): State<Arc<Config>>,
+) -> Response {
+    match load_session(&cfg, &uuid) {
+        Ok(session) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            eigen_render::session_json(&session),
+        )
+            .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
 /// Resolve, read, parse, and render a session's transcript fragment.
 fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'static str)> {
+    Ok(eigen_render::session_html(&load_session(cfg, uuid)?))
+}
+
+/// Resolve, read, and parse a session's JSONL into a [`Session`].
+fn load_session(cfg: &Config, uuid: &str) -> Result<eigen_surgery::Session, (StatusCode, &'static str)> {
     let dir = cfg
         .projects_dir
         .as_ref()
@@ -100,8 +123,7 @@ fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'s
     let contents =
         std::fs::read_to_string(&path).map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
     // parse_str is currently infallible (ParseError is uninhabited).
-    let session = eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
-    Ok(eigen_render::session_html(&session))
+    Ok(eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {}))
 }
 
 /// `GET /api/sessions` — recent sessions across all projects, for the sidebar.

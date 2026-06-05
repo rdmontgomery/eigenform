@@ -10,7 +10,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { el } from "./dom.ts";
 import { applyTheme, currentTheme, PALETTES, type ThemeName } from "./theme.ts";
 import { cacheReading, forkReading, tempColor, type CacheReading, SEED_IDLE, TTL_DEFAULT, TTL_EXTENDED } from "./cooling.ts";
-import { loadSession, loadForest, type ForestEntry } from "./data.ts";
+import { loadSession, loadForest, fetchSession, type ForestEntry } from "./data.ts";
 import { buildClock } from "./clock.ts";
 import { buildMind } from "./mind.ts";
 import { Manuscript } from "./manuscript.ts";
@@ -187,12 +187,34 @@ function selectSession(entry: ForestEntry): void {
   activeSession = entry.uuid;
   connectPty(`?session=${encodeURIComponent(entry.uuid)}`);
   furnace.setOpen(true);
+  followManuscript(entry.uuid);
   void refreshForest(entry.uuid);
 }
 
 function onSessionBorn(uuid: string): void {
   activeSession = uuid;
+  followManuscript(uuid);
   void refreshForest(uuid);
+}
+
+// Render the chosen session into the Manuscript and follow it live: re-fetch the
+// structured transcript on each SSE 'change', pinned to the leaf if we were near it.
+function followManuscript(uuid: string): void {
+  void renderManuscript(uuid);
+  if (es) es.close();
+  es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
+  es.onmessage = () => void renderManuscript(uuid);
+}
+
+async function renderManuscript(uuid: string): Promise<void> {
+  const s = await fetchSession(uuid);
+  if (!s) return;
+  const scroller = manuscript.scroller;
+  const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+  const prev = scroller.scrollTop;
+  manuscript.setSession(s);
+  masthead.setSession(s);
+  scroller.scrollTop = nearBottom ? scroller.scrollHeight : prev;
 }
 
 async function refreshForest(activeUuid?: string): Promise<void> {
@@ -216,7 +238,6 @@ function devLiveReload(): void {
 }
 
 // ── startup: a shell in the Furnace (no tokens), the Forest from disk ────────
-void es; // SSE follow is reserved for when the Manuscript goes live (see data.ts)
 theme = currentTheme();
 connectPty();
 void refreshForest();

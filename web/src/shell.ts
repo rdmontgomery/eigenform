@@ -8,19 +8,24 @@ import { type ForestEntry, type Session } from "./data.ts";
 import { type CacheReading, type ForkReading, fmtK, fmtClock } from "./cooling.ts";
 import { type ThemeName } from "./theme.ts";
 
-export function buildMasthead(session: Session, theme: ThemeName, onTheme: () => void): { node: HTMLElement; setTheme(t: ThemeName): void } {
+export function buildMasthead(session: Session, theme: ThemeName, onTheme: () => void): { node: HTMLElement; setTheme(t: ThemeName): void; setSession(s: Session): void } {
   const swatch = el("span", { class: "swatch" });
   const label = el("span", { text: theme });
   const btn = el("button", { class: "ghost theme-toggle", title: "toggle paper / furnace", onclick: onTheme }, swatch, label);
+  const sess = el("div", { class: "sess" });
+  const setSession = (s: Session): void => {
+    sess.replaceChildren("session ", el("b", { text: s.id }), ` · ${s.total} turns · ${s.branches}⑂ · viewing ${s.windowStart}–${s.total}`);
+  };
+  setSession(session);
   const node = el("div", { class: "masthead" },
     el("div", { class: "brand" }, wolandMark(22), el("div", { style: "display:flex;align-items:baseline;gap:9px" },
       el("span", { class: "name", text: "woland" }), el("span", { class: "engine", text: "eigen engine" }))),
     el("div", { class: "vrule" }),
-    el("div", { class: "sess" }, "session ", el("b", { text: session.id }), ` · ${session.total} turns · ${session.branches}⑂ · viewing ${session.windowStart}–${session.total}`),
+    sess,
     el("div", { class: "spacer" }),
     el("div", { class: "live" }, el("span", { class: "dot" }), "LIVE"),
     btn);
-  return { node, setTheme: (t) => { label.textContent = t; } };
+  return { node, setTheme: (t) => { label.textContent = t; }, setSession };
 }
 
 export function buildForest(onSelect: (entry: ForestEntry) => void): { node: HTMLElement; fill(entries: ForestEntry[]): void } {

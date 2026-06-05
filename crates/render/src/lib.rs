@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use chrono::{DateTime, Utc};
 use eigen_forest::SessionRef;
 use eigen_surgery::{Role, Session, Turn};
+use serde_json::json;
 
 /// Render a recent-session list: one row per session, newest at the bottom.
 pub fn sessions_view(sessions: &[SessionRef], now: DateTime<Utc>, show_project: bool) -> View {
@@ -77,6 +78,70 @@ pub fn session_html(session: &Session) -> String {
     }
     out.push_str("</article>");
     out
+}
+
+/// The session transcript as structured JSON for woland's Manuscript: exchanges (a user
+/// turn grouped with its assistant + system replies), plus a trailing `leaf` the UI
+/// renders as the live input. This is ground-truth *content* only — per-turn token/cost
+/// fields are left to the client's (currently stubbed) cache model. The shape matches the
+/// frontend `Session` type so it can be consumed without mapping.
+pub fn session_json(session: &Session) -> String {
+    let visible = visible_turns(session);
+
+    // Group like session_html: a user turn opens an exchange; assistant/system attach to
+    // the open one (a stray reply before any user turn opens an empty-user exchange).
+    let mut exchanges: Vec<serde_json::Value> = Vec::new();
+    for turn in &visible {
+        match turn.role {
+            Role::User => exchanges.push(json!({ "user": content_raw(turn) })),
+            Role::Assistant => {
+                let text = content_raw(turn);
+                match exchanges.last_mut() {
+                    Some(cur) => append_text(cur, "assistant", &text),
+                    None => exchanges.push(json!({ "user": "", "assistant": text })),
+                }
+            }
+            Role::System => {
+                let dur = duration_label(turn);
+                match exchanges.last_mut() {
+                    Some(cur) => cur["system"] = json!(dur),
+                    None => exchanges.push(json!({ "user": "", "system": dur })),
+                }
+            }
+        }
+    }
+
+    let count = exchanges.len();
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(count + 1);
+    for (i, mut e) in exchanges.into_iter().enumerate() {
+        e["n"] = json!(i + 1);
+        e["tok"] = json!(0);
+        out.push(e);
+    }
+    // the leaf — the live end the UI turns into an input
+    let total = count + 1;
+    out.push(json!({ "n": total, "tok": 0, "user": "", "leaf": true }));
+
+    serde_json::to_string(&json!({
+        "id": short_id(&session.session_id),
+        "total": total,
+        "branches": 0,
+        "windowStart": 1,
+        "exchanges": out,
+    }))
+    .expect("session json serializes")
+}
+
+/// Set `obj[key]` to `text`, or append (blank-line joined) if it already holds text — so
+/// several assistant turns in one exchange read as one reply.
+fn append_text(obj: &mut serde_json::Value, key: &str, text: &str) {
+    match obj.get_mut(key) {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => {
+            s.push_str("\n\n");
+            s.push_str(text);
+        }
+        _ => obj[key] = json!(text),
+    }
 }
 
 fn turn_html(turn: &Turn, leaf: &Option<String>) -> String {
@@ -471,5 +536,44 @@ fn render_node(node: &Node, prefix: &str, is_last: bool, out: &mut String) {
     let child_prefix = format!("{prefix}{}", if is_last { "   " } else { "│  " });
     for (i, child) in node.children.iter().enumerate() {
         render_node(child, &child_prefix, i == node.children.len() - 1, out);
+    }
+}
+
+#[cfg(test)]
+mod session_json_tests {
+    use super::*;
+    use eigen_surgery::Session;
+
+    fn parse(lines: &[&str]) -> Session {
+        Session::parse_str(&(lines.join("\n") + "\n")).unwrap_or_else(|e| match e {})
+    }
+
+    #[test]
+    fn groups_exchanges_and_appends_a_leaf() {
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"render the transcript"}}"#,
+            r#"{"type":"assistant","uuid":"a1","sessionId":"abc12345-0000","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}"#,
+            r#"{"type":"system","uuid":"s1","sessionId":"abc12345-0000","durationMs":4200}"#,
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        assert_eq!(doc["id"], "abc12345");
+        assert_eq!(doc["total"], 2); // one real exchange + the leaf
+        let ex = doc["exchanges"].as_array().unwrap();
+        assert_eq!(ex.len(), 2);
+        assert_eq!(ex[0]["n"], 1);
+        assert_eq!(ex[0]["user"], "render the transcript");
+        assert_eq!(ex[0]["assistant"], "on it");
+        assert_eq!(ex[0]["system"], "4.2s");
+        assert_eq!(ex[1]["n"], 2);
+        assert_eq!(ex[1]["leaf"], true);
+    }
+
+    #[test]
+    fn empty_session_is_just_a_leaf() {
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&parse(&[]))).unwrap();
+        assert_eq!(doc["total"], 1);
+        assert_eq!(doc["exchanges"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["exchanges"][0]["leaf"], true);
     }
 }

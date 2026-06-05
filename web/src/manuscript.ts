@@ -46,6 +46,27 @@ export class Manuscript {
     for (const e of this.session.exchanges) if (!e.leaf) this.rebuild(e.n);
   }
 
+  // Swap in a different session (e.g. one chosen from the Forest) and rebuild the column.
+  setSession(session: Session): void {
+    this.session = session;
+    this.folded.clear();
+    this.editingN = null;
+    this.exNodes.clear();
+    this.col.replaceChildren();
+    for (const e of session.exchanges) {
+      if (e.leaf) continue;
+      const node = this.buildExchange(e);
+      this.exNodes.set(e.n, node);
+      this.col.appendChild(node);
+    }
+    this.leaf = this.buildLeaf();
+    this.col.appendChild(this.leaf.node);
+  }
+
+  get scroller(): HTMLElement {
+    return this.node;
+  }
+
   closeEdit(): void {
     const n = this.editingN;
     this.editingN = null;
@@ -104,7 +125,7 @@ export class Manuscript {
         el("div", { class: "margin" }));
     }
 
-    const drops = dropsAt(e.n);
+    const drops = dropsAt(e.n, this.session.total);
 
     // the user prose — clicking the ink edits
     const userProse = editing
@@ -151,8 +172,8 @@ export class Manuscript {
 
   private margin(e: Exchange): HTMLElement {
     if (this.lensOn) return mindMargin(e.n);
-    const drops = dropsAt(e.n);
-    const prefix = prefixTokensTo(e.n);
+    const drops = dropsAt(e.n, this.session.total);
+    const prefix = prefixTokensTo(e.n, this.session.total);
     return el("div", { class: "reading" },
       el("div", { class: "drops" }, "fork drops ", el("b", { text: String(drops) }), " turns", el("span", { class: "spent", text: " · already spent" })),
       el("div", { class: "temp" },
@@ -187,8 +208,8 @@ export class Manuscript {
 
   private buildForkBanner(n: number): HTMLElement {
     const cache = this.opts.getCache();
-    const drops = dropsAt(n);
-    const prefix = prefixTokensTo(n);
+    const drops = dropsAt(n, this.session.total);
+    const prefix = prefixTokensTo(n, this.session.total);
     const lead = el("p", {},
       "Committing ", el("i", { text: "forks a new path" }), " — drops the ",
       el("span", { class: "mono", text: String(drops) }), " turns below.",
