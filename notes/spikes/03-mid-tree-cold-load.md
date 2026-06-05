@@ -1,7 +1,7 @@
 # 03 — Mid-tree cold-load
 
 **Claim:** A hand-built JSONL — source prefix truncated at turn N, new uuid in the header, dropped into the cwd's projects dir — can be resumed by `claude --resume <new-uuid>`, AND the resumed model has no knowledge of turns dropped after N.
-**Status:** CONFIRMED
+**Status:** CONFIRMED @2.1.161 — ⚠ RE-VET PENDING @2.1.165 (see "Re-vet 2026-06-05" below)
 **claude version:** 2.1.161
 **Date:** 2026-06-03
 
@@ -152,3 +152,43 @@ CONFIRMED: mid-tree fork is `parse → truncate → rewrite header → write new
 REFUTED (model still knows dropped content): means either (a) `claude --resume` joins multiple JSONLs by sessionId, (b) the server-side cache is keyed by something we can't invalidate by renaming uuids, or (c) the JSONL we wrote isn't what got sent to the model. Each case has a different fix; record which.
 
 INCONCLUSIVE: design open. Consider running the spike with `--bare` to eliminate hooks/skills/CLAUDE.md noise, then re-evaluating.
+
+## Re-vet 2026-06-05 (claude 2.1.165) — engine step NOT yet re-run
+
+Triggered by version drift (2.1.161 → 2.1.165) AND a direct dependency: woland's
+`POST /api/session/:uuid/fork` shells `surgery::edit_then_fork` and resumes the result.
+
+**User-observed engine result (2.1.165):** a woland fork wrote
+`d5f0cded-f111-4c75-8cc6-77e65db0a7fb.jsonl` into the correct project dir, but
+`claude --resume d5f0cded…` returned **"No conversation found with session ID."**
+
+**Filesystem-only diagnosis (ran freely):**
+- `~/.claude/sessions/<pid>.json` is a *live-process* table (pid/sessionId/status),
+  NOT a resumable-session registry — ruled out as the discovery mechanism.
+- `~/.claude/history.jsonl` is prompt history (display/project/sessionId); spike forks
+  were never in it yet resumed @2.1.161, so it isn't the gate either.
+- Structural diff, spike's working fork `cbc165d9` (resumed @2.1.161) vs our surgery
+  fork `d5f0cded` (rejected @2.1.165):
+  - `cbc165d9`: final `last-prompt.leafUuid` → a **system** (`turn_duration`) row;
+    tail block `last-prompt, ai-title, mode, permission-mode`; 9 `ai-title` rows.
+  - `d5f0cded`: final `leafUuid` → a **user** row; tail is a **bare `last-prompt`**;
+    **zero** `ai-title` rows.
+
+So `edit_then_fork`/`finish` never reproduced the validated shape (this spike's own
+mechanism notes: "leafUuid = the trailing system row, not the assistant text row" and
+"append a fresh last-prompt + ai-title + mode + permission-mode block"). That alone could
+explain the rejection independent of any version change.
+
+**Decisive test still owed (engine, needs user auth):** resume a *previously-CONFIRMED*
+hand-built fork that still exists on disk —
+`claude --resume cbc165d9-8ca5-4942-9c30-826a47f82bfc`:
+- **loads** ⇒ claude unchanged; defect is ours — fix `surgery::finish` to emit the full
+  trailing `ai-title/mode/permission-mode` block and resolve the resume head per the
+  source convention. Re-confirm, bump stamp.
+- **"No conversation found"** ⇒ claude's resume/discovery changed at 2.1.16x; flip this
+  spike to REFUTED, reassess the write-a-JSONL approach (consider spike 02 `--fork-session`
+  as the resumable-fork primitive), and pause woland's fork-then-resume wiring.
+
+Until that run: treating as **CONFIRMED-but-suspect**. woland's fork endpoint writes a
+correct copy-on-fork file (source untouched, verified) but the resume handoff is not
+trustworthy on 2.1.165.
