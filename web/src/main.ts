@@ -301,8 +301,13 @@ function isChrome(s: string): boolean {
   if (t.includes("❯")) return true; // the input prompt
   if (/^[│|].*[│|]$/.test(t)) return true; // a bordered input-box row
   if (/\bctx:\s*\d|\bINSERT\b|auto mode|shift\+tab|\? for shortcuts|esc to interrupt|bypass permissions|⏵|for newline|to cycle/i.test(t)) return true;
-  if (/^[✻✢✳✶✷✺✸✹◐◓◑◒◴◷◵◶*∗]/.test(t)) return true; // spinner glyphs
-  if (/^[A-Za-z]+…\s*\d*$/.test(t)) return true; // a spinner verb like "Sketching… 2"
+  // the "cooking" footer: a verb + ellipsis + a parenthesised "(51s · 21k tokens · …)".
+  // Match its distinctive shape, not a bare mention of "tokens" (the user talks about
+  // tokens in prose), so real response lines survive.
+  if (/^[✻✢✳✶✷✺✸✹◐◓◑◒◴◷◵◶*∗·•]\s*\S/.test(t) && t.includes("…")) return true; // "✻ Verb…"
+  if (/\(\s*\d+(\.\d+)?\s*s\b[^)]*\btokens?\b/i.test(t)) return true; // "(51s · 21k tokens"
+  if (/…\s*\(\s*(esc|\d)/i.test(t)) return true; // "verb… (esc" / "verb… (51s"
+  if (/^[A-Za-z]+…\s*\d*$/.test(t)) return true; // "Sketching… 2"
   if (/\bfor \d+m?\s*\d*s\s*$/.test(t)) return true; // "Crunched for 1m 6s"
   return false;
 }

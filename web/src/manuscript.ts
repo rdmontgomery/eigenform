@@ -84,6 +84,10 @@ export class Manuscript {
       this.liveNode = null;
       return;
     }
+    // Only stick to the bottom if the reader is already there — never yank them back down
+    // while they've scrolled up to read during a turn.
+    const sc = this.node;
+    const stick = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 140;
     if (!this.liveNode) {
       this.liveNode = el("div", { class: "ms-live" },
         el("div", { class: "lhead" },
@@ -96,7 +100,7 @@ export class Manuscript {
     }
     (this.liveNode.querySelector(".lbody") as HTMLElement).textContent = text;
     (this.liveNode.querySelector(".lsec") as HTMLElement).textContent = seconds ? `${seconds}s` : "";
-    this.node.scrollTop = this.node.scrollHeight;
+    if (stick) sc.scrollTop = sc.scrollHeight;
   }
 
   closeEdit(): void {
