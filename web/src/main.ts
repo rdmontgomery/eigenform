@@ -225,7 +225,7 @@ function onPtyOutput(): void {
   if (!inFlight) return;
   resetQuiet();
   if (liveThrottle === undefined) {
-    liveThrottle = window.setTimeout(() => { liveThrottle = undefined; renderLive(); }, 100);
+    liveThrottle = window.setTimeout(() => { liveThrottle = undefined; renderLive(); }, 50);
   }
 }
 function resetQuiet(): void {
@@ -260,39 +260,50 @@ async function endLive(): Promise<void> {
   manuscript.setLive(null);
 }
 
-// The live terminal's recent text, reconstructed into logical lines. xterm has parsed the
-// TUI for us; we rejoin soft-wrapped continuations (so paragraphs fill the Manuscript
-// width instead of wrapping at the narrow pty) and drop input-box / hint / spinner chrome.
-// Imperfect by nature — claude's TUI redraws — but it reads as motion, not a ragged column.
-function termTail(maxLines = 24): string {
+// The live terminal's recent text, reconstructed into logical lines. claude's TUI (no
+// alt-screen) appends the response into scrollback while constantly redrawing a bottom
+// chrome block (spinner, ❯ input, rules, the host/mode status). We rejoin soft-wrapped
+// continuations, drop that chrome, and dedupe consecutive lines (a mid-redraw frame can
+// momentarily double a line). The result is the response growing, not a jumping window.
+function termTail(maxLines = 20): string {
   const buf = term.buffer.active;
-  const startY = Math.max(0, buf.length - 240); // bound the scan to the recent region
+  const startY = Math.max(0, buf.length - 400);
   const logical: string[] = [];
   let cur = "";
+  let started = false;
   for (let y = startY; y < buf.length; y++) {
     const line = buf.getLine(y);
     if (!line) continue;
     const text = line.translateToString(true);
-    if (line.isWrapped) {
-      cur += text; // continuation of the same logical line (soft wrap)
+    if (line.isWrapped && started) {
+      cur += text; // soft-wrap continuation of the same logical line
     } else {
-      logical.push(cur);
+      if (started) logical.push(cur);
       cur = text;
+      started = true;
     }
   }
-  logical.push(cur);
-  return logical
-    .filter((s) => s.trim() && !isChrome(s))
-    .slice(-maxLines)
-    .join("\n");
+  if (started) logical.push(cur);
+
+  const out: string[] = [];
+  for (const s of logical) {
+    if (!s.trim() || isChrome(s)) continue;
+    if (out.length && out[out.length - 1] === s) continue; // dedupe a doubled redraw frame
+    out.push(s);
+  }
+  return out.slice(-maxLines).join("\n");
 }
+// Lines that are TUI chrome, not response text — observed from the raw pty stream.
 function isChrome(s: string): boolean {
   const t = s.trim();
   if (!t) return true;
-  if (/^[╭╮╰╯│─└┘┌┐┤├┬┴┼▏▕|]+$/.test(t)) return true; // box borders / rules
+  if (/^[╭╮╰╯│┃─━└┘┌┐┤├┬┴┼▏▕|]+$/.test(t)) return true; // borders / rules
   if (t.includes("❯")) return true; // the input prompt
-  if (/^[│|].*[│|]$/.test(t)) return true; // a bordered input-box row "│ … │"
-  if (/(\? for shortcuts|esc to interrupt|bypass permissions|⏵|tab to|for newline|ctrl\+[a-z])/i.test(t)) return true;
+  if (/^[│|].*[│|]$/.test(t)) return true; // a bordered input-box row
+  if (/\bctx:\s*\d|\bINSERT\b|auto mode|shift\+tab|\? for shortcuts|esc to interrupt|bypass permissions|⏵|for newline|to cycle/i.test(t)) return true;
+  if (/^[✻✢✳✶✷✺✸✹◐◓◑◒◴◷◵◶*∗]/.test(t)) return true; // spinner glyphs
+  if (/^[A-Za-z]+…\s*\d*$/.test(t)) return true; // a spinner verb like "Sketching… 2"
+  if (/\bfor \d+m?\s*\d*s\s*$/.test(t)) return true; // "Crunched for 1m 6s"
   return false;
 }
 

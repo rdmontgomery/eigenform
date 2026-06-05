@@ -214,7 +214,7 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .ms-live .lfrom { margin-left: auto; color: var(--faint); font-style: normal; text-transform: none; letter-spacing: 0.02em;
   font-family: var(--serif); font-style: italic; font-size: 11.5px; }
 .ms-live .lbody { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--agent);
-  white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: hidden; }
+  white-space: pre-wrap; word-break: break-word; }
 
 /* leaf */
 .leaf { display: flex; gap: 22px; padding-top: 18px; margin-top: 6px; }
