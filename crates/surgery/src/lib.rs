@@ -19,6 +19,10 @@ pub enum SurgeryError {
     /// No modeled turn (user/assistant/system) carries the requested uuid.
     #[error("no turn with uuid `{0}` in session")]
     TurnNotFound(String),
+    /// There is no completed-turn boundary before the requested turn (e.g. it is the
+    /// first turn), so there is nothing to rewind to.
+    #[error("no completed-turn boundary before `{0}` to fork from")]
+    NoBoundaryBefore(String),
     #[error(transparent)]
     Rewrite(#[from] RewriteError),
 }
@@ -278,9 +282,35 @@ pub fn inject(src: &Session, after: &str, role: Role, text: &str) -> Result<Sess
     finish(&src.rows[..=cut], &[synthetic], new_uuid, &src.session_id)
 }
 
-/// Edit a turn's content and fork at it: keep the prefix *before* the turn, re-author
-/// the turn with `text` (keeping its uuid, parent, and role), drop the tail, and make
-/// the edited turn the new resume head.
+/// Fork to the completed-turn boundary *before* `turn`: keep the prefix through the last
+/// turn-closing `system` row preceding it, drop `turn` and everything after, and re-point
+/// the resume head at that system row. The replacement prompt is NOT written here — it is
+/// delivered live into the resumed branch (woland's leaf→pty path), so the new leaf is a
+/// completed turn, which is the only shape `claude --resume` accepts (spike 03: every
+/// resumable session's `last-prompt.leafUuid` resolves to a `turn_duration`/`away_summary`
+/// system row, never a bare user turn).
+pub fn fork_before(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
+    let idx = src
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Turn(t) if t.uuid == turn))
+        .ok_or_else(|| SurgeryError::TurnNotFound(turn.to_string()))?;
+    // the last turn-closing system row before the edited turn = the prior turn's tip
+    let cut = src.rows[..idx]
+        .iter()
+        .rposition(|r| matches!(r, Row::Turn(t) if t.role == Role::System))
+        .ok_or_else(|| SurgeryError::NoBoundaryBefore(turn.to_string()))?;
+    finish(&src.rows[..=cut], &[], turn_uuid(&src.rows[cut]), &src.session_id)
+}
+
+/// Edit a turn's content in place and fork at it: keep the prefix *before* the turn,
+/// re-author the turn with `text` (keeping its uuid, parent, and role), drop the tail.
+///
+/// ⚠ The resulting leaf is the edited turn itself. If that turn is a *user* turn, the
+/// fork ends on a pending user prompt — a shape `claude --resume` will NOT load on
+/// 2.1.165+ (spike 03 re-vet). Use [`fork_before`] for a resumable branch and deliver
+/// the edited prompt live. This remains for static inspection / the source→fork diff
+/// view, where the edited turn must be materialized to be shown.
 pub fn edit_then_fork(src: &Session, turn: &str, text: &str) -> Result<Session, SurgeryError> {
     let idx = src
         .rows
@@ -290,8 +320,6 @@ pub fn edit_then_fork(src: &Session, turn: &str, text: &str) -> Result<Session, 
     let Row::Turn(target) = &src.rows[idx] else {
         unreachable!("position matched a Turn");
     };
-    // Editing keeps the turn's existing role — we're rewriting what was said, not
-    // changing who said it.
     let edited = build_turn_line(
         target.role,
         &target.uuid,
@@ -328,9 +356,22 @@ fn turn_uuid(row: &Row) -> String {
     }
 }
 
-/// Assemble a sealed session: the kept `prefix` rows, then any `synthetic` rows, then a
-/// fresh `last-prompt` pointing at `tip`, with the session id rewritten old → new
-/// across the whole result.
+/// The raw line of the last prefix row whose JSON `type` equals `kind` (the latest
+/// `mode` / `permission-mode` / `ai-title` state row), if present.
+fn last_row_of_type<'a>(prefix: &'a [Row], kind: &str) -> Option<&'a str> {
+    prefix.iter().rev().map(Row::raw).find(|raw| {
+        serde_json::from_str::<Value>(raw)
+            .ok()
+            .and_then(|v| v.get("type").and_then(Value::as_str).map(|t| t == kind))
+            .unwrap_or(false)
+    })
+}
+
+/// Assemble a sealed session: the kept `prefix` rows, then any `synthetic` rows, then the
+/// resumable trailing block — a fresh `last-prompt` pointing at `tip`, followed by the
+/// session-state rows (`mode` / `permission-mode` / `ai-title`) carried over from the
+/// prefix. Real sessions end with that block; reproducing it keeps the fork resumable
+/// (spike 03). The session id is rewritten old → new across the whole result.
 fn finish(
     prefix: &[Row],
     synthetic: &[String],
@@ -338,7 +379,7 @@ fn finish(
     old: &str,
 ) -> Result<Session, SurgeryError> {
     let new = Uuid::new_v4().to_string();
-    let mut lines: Vec<String> = Vec::with_capacity(prefix.len() + synthetic.len() + 1);
+    let mut lines: Vec<String> = Vec::with_capacity(prefix.len() + synthetic.len() + 4);
     for row in prefix {
         lines.push(rewrite_session_id(row.raw(), old, &new)?);
     }
@@ -348,6 +389,13 @@ fn finish(
     lines.push(format!(
         r#"{{"type":"last-prompt","leafUuid":"{tip}","sessionId":"{new}"}}"#
     ));
+    // Carry over the session-state rows that real sessions close with, in source order,
+    // so the resumed branch has the same trailing shape. Absent in minimal fixtures → skipped.
+    for kind in ["mode", "permission-mode", "ai-title"] {
+        if let Some(raw) = last_row_of_type(prefix, kind) {
+            lines.push(rewrite_session_id(raw, old, &new)?);
+        }
+    }
 
     let text = lines.join("\n") + "\n";
     Ok(Session::parse_str(&text).expect("re-parse of sealed session"))

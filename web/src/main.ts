@@ -130,6 +130,9 @@ async function doFork(src: string, turn: string, text: string, fork: ReturnType<
   if (!newUuid) { showError("fork failed — the source is untouched"); return; }
   showToast({ kind: "fork", n: fork.n, drops: fork.drops, prefix: fork.prefix, cold: fork.cold });
   relight();
+  // the branch rewinds to before the edited turn; deliver the edited prompt live once the
+  // resumed session has painted and gone idle (auto-send).
+  pendingPrompt = text.trim() || null;
   selectSession({ uuid: newUuid, id: newUuid.slice(0, 6), name: "fork", turns: 0, branches: 0, active: true, shape: [] });
 }
 
@@ -178,6 +181,19 @@ let onData: { dispose(): void } | null = null;
 let es: EventSource | null = null;
 let activeSession: string | null = null;
 
+// After a fork resumes, the edited prompt is delivered live. We can't know exactly when
+// claude's TUI is ready, so we send once its output has been quiet for a beat (it has
+// finished painting the resumed transcript and is idling at the prompt).
+let pendingPrompt: string | null = null;
+let pendingTimer: number | undefined;
+function schedulePendingSend(): void {
+  if (!pendingPrompt) return;
+  window.clearTimeout(pendingTimer);
+  pendingTimer = window.setTimeout(() => {
+    if (pendingPrompt && sendPrompt(pendingPrompt)) pendingPrompt = null;
+  }, 1500);
+}
+
 function sendResize(): void {
   try { fit.fit(); } catch { /* hidden */ }
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
@@ -198,7 +214,7 @@ function connectPty(query = ""): void {
     term.focus();
   };
   sock.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) { term.write(new Uint8Array(ev.data)); return; }
+    if (ev.data instanceof ArrayBuffer) { term.write(new Uint8Array(ev.data)); schedulePendingSend(); return; }
     try { const msg = JSON.parse(ev.data as string); if (msg.type === "session" && typeof msg.uuid === "string") onSessionBorn(msg.uuid); } catch { /* non-JSON */ }
   };
   sock.onclose = () => term.write("\r\n\x1b[2m[woland: pty disconnected]\x1b[0m\r\n");

@@ -126,21 +126,21 @@ async fn fork_route(
     let Some(turn) = body.get("turn").and_then(|v| v.as_str()) else {
         return (StatusCode::BAD_REQUEST, "missing `turn`").into_response();
     };
-    let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
-    match fork_session(&cfg, &uuid, turn, text) {
+    // `text` (the edited prompt) is delivered live into the resumed branch by the client,
+    // not written into the file — the fork must end on a completed turn to be resumable.
+    match fork_session(&cfg, &uuid, turn) {
         Ok(new_uuid) => Json(serde_json::json!({ "uuid": new_uuid })).into_response(),
         Err(e) => e.into_response(),
     }
 }
 
-/// Fork `src_uuid` at turn `turn`, re-authored to `text`. The new session is written into
-/// the SAME project directory as the source (so `claude --resume` and the Forest find it
-/// under the project's cwd), never the projects root. Returns the new session uuid.
+/// Fork `src_uuid` to the completed-turn boundary before `turn`. The new session is written
+/// into the SAME project directory as the source (so `claude --resume` and the Forest find
+/// it under the project's cwd), never the projects root. Returns the new session uuid.
 fn fork_session(
     cfg: &Config,
     src_uuid: &str,
     turn: &str,
-    text: &str,
 ) -> Result<String, (StatusCode, &'static str)> {
     let dir = cfg
         .projects_dir
@@ -151,8 +151,8 @@ fn fork_session(
     let contents = std::fs::read_to_string(&src_path)
         .map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
     let session = eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
-    let forked = eigen_surgery::edit_then_fork(&session, turn, text)
-        .map_err(|_| (StatusCode::UNPROCESSABLE_ENTITY, "no such turn in session"))?;
+    let forked = eigen_surgery::fork_before(&session, turn)
+        .map_err(|_| (StatusCode::UNPROCESSABLE_ENTITY, "cannot fork before that turn"))?;
     let project_dir = src_path
         .parent()
         .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "session path has no parent"))?;
@@ -692,16 +692,20 @@ mod tests {
     }
 
     #[test]
-    fn fork_session_writes_a_branch_beside_the_source_untouched() {
+    fn fork_session_writes_a_resumable_branch_beside_the_source_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let pdir = dir.path().join("-home-me-proj");
         std::fs::create_dir_all(&pdir).unwrap();
         let uuid = "abcdef00-0000-4000-8000-000000000000";
         let src = pdir.join(format!("{uuid}.jsonl"));
+        // two complete exchanges: u1→a1→s1, u2→a2→s2
         let jsonl = [
             format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{uuid}","message":{{"role":"user","content":"first prompt"}}}}"#),
             format!(r#"{{"type":"assistant","uuid":"a1","sessionId":"{uuid}","message":{{"role":"assistant","content":[{{"type":"text","text":"reply one"}}]}}}}"#),
+            format!(r#"{{"type":"system","uuid":"s1","subtype":"turn_duration","sessionId":"{uuid}"}}"#),
             format!(r#"{{"type":"user","uuid":"u2","cwd":"/home/me/proj","sessionId":"{uuid}","message":{{"role":"user","content":"second prompt"}}}}"#),
+            format!(r#"{{"type":"assistant","uuid":"a2","sessionId":"{uuid}","message":{{"role":"assistant","content":[{{"type":"text","text":"reply two"}}]}}}}"#),
+            format!(r#"{{"type":"system","uuid":"s2","subtype":"turn_duration","sessionId":"{uuid}"}}"#),
         ]
         .join("\n") + "\n";
         std::fs::write(&src, &jsonl).unwrap();
@@ -715,15 +719,19 @@ mod tests {
             dev: false,
         };
 
-        let new_uuid = fork_session(&cfg, "abcdef00", "u1", "edited first").expect("fork ok");
+        // fork "before" u2 → rewind to the s1 boundary; u2 and its tail drop.
+        let new_uuid = fork_session(&cfg, "abcdef00", "u2").expect("fork ok");
         assert_ne!(new_uuid, uuid, "fork mints a fresh id");
 
         // the branch lands in the SAME project dir (so resume/Forest find it under the cwd)
         let forked = pdir.join(format!("{new_uuid}.jsonl"));
         let body = std::fs::read_to_string(&forked).expect("fork file written beside source");
-        assert!(body.contains("edited first"), "the edited turn is re-authored");
-        assert!(!body.contains("second prompt"), "the downstream turn is dropped");
-        assert!(!body.contains("reply one"), "the downstream reply is dropped");
+        assert!(body.contains("first prompt"), "the kept prefix survives");
+        assert!(!body.contains("second prompt"), "the edited turn is dropped (delivered live)");
+        assert!(!body.contains("reply two"), "the downstream reply is dropped");
+        // resumable: the new resume head is the completed-turn system row, not a user turn
+        let forked_session = eigen_surgery::Session::parse_str(&body).unwrap_or_else(|e| match e {});
+        assert_eq!(forked_session.resume_leaf().as_deref(), Some("s1"));
 
         // copy-on-fork: the source is byte-for-byte untouched
         assert_eq!(std::fs::read_to_string(&src).unwrap(), jsonl);

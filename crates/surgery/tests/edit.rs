@@ -1,6 +1,7 @@
 //! edit_then_fork: rewrite a turn's content, keep the prefix up to it, drop the tail,
 //! and fork. The edited turn keeps its identity (uuid + parent) and becomes the new
-//! resume head — so resuming replays history as if you'd said the edited thing.
+//! resume head. NB: this materializes the edited turn for static inspection / the diff
+//! view; for a *resumable* branch use fork_before (see fork_before.rs / spike 03).
 
 use eigen_surgery::{edit_then_fork, Session, SurgeryError};
 
