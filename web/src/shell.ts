@@ -51,11 +51,13 @@ export function buildFurnace(): { node: HTMLElement; termHost: HTMLElement; setO
   const termHost = el("div", { class: "term" });
   let toggleFn = (): void => {};
 
-  const collapsed = el("div", { class: "collapsed-view", style: "display:flex;flex-direction:column;align-items:center;justify-content:space-between;height:100%;width:100%" },
+  // The whole collapsed bar opens the Furnace (not just the chevron), so it's always
+  // reachable; the chevron is just an affordance (no own handler — it would double-toggle).
+  const collapsed = el("div", { class: "collapsed-view", title: "open the Furnace", style: "display:flex;flex-direction:column;align-items:center;justify-content:space-between;height:100%;width:100%;cursor:pointer", onclick: () => toggleFn() },
     el("div", { class: "eyebrow vlabel", text: "Furnace" }),
     el("div", { style: "display:flex;flex-direction:column;align-items:center;gap:14px" },
       norgie(true), el("div", { class: "heatbar" }), el("span", { class: "parity-v", text: "parity ✓" })),
-    el("button", { class: "collapse-btn", onclick: () => toggleFn(), text: "‹" }));
+    el("span", { class: "collapse-btn", text: "‹" }));
 
   const expanded = el("div", { class: "expanded-view", style: "display:none;flex-direction:column;height:100%;width:100%" },
     el("div", { class: "fhead" },

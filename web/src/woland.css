@@ -146,7 +146,7 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 
 .turn { display: flex; gap: 16px; margin-bottom: 12px; }
 .turn .rolecol { width: 14px; display: flex; justify-content: center; padding-top: 9px; flex: 0 0 14px; }
-.prose { margin: 0; flex: 1; font-family: var(--serif); font-size: 17.5px; line-height: 1.62; color: var(--ink); text-wrap: pretty; }
+.prose { margin: 0; flex: 1; font-family: var(--serif); font-size: 17.5px; line-height: 1.62; color: var(--ink); text-wrap: pretty; white-space: pre-wrap; word-break: break-word; }
 .prose.user { cursor: text; border-radius: 4px; padding: 6px 10px; margin: -6px -10px; background: transparent; transition: background .14s; }
 .prose.user:hover { background: var(--raise); }
 .prose.user.editing { outline: none; background: var(--raise); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--temp-color) 40%, transparent); }

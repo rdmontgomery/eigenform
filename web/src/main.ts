@@ -170,7 +170,9 @@ const realSetOpen = furnace.setOpen;
 furnace.setOpen = (open: boolean) => {
   furnaceIsOpen = open;
   realSetOpen(open);
-  if (open) queueMicrotask(() => { try { fit.fit(); sendResize(); term.focus(); } catch { /* not yet sized */ } });
+  // The term was opened while the pane was hidden; on first show, fit + refresh so the
+  // renderer paints the buffer it has been parsing all along.
+  if (open) queueMicrotask(() => { try { fit.fit(); sendResize(); term.refresh(0, term.rows - 1); term.focus(); } catch { /* not yet sized */ } });
 };
 
 function retheme(): void {
