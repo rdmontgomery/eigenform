@@ -144,9 +144,10 @@ function showError(msg: string): void {
 }
 
 function sendLeaf(text: string): void {
-  if (sendPrompt(text)) { /* piped to the live pty */ }
+  const sent = sendPrompt(text);
   relight();
   showToast({ kind: "send" });
+  if (sent) beginLive(); // stream the response into the Manuscript until it lands
 }
 
 // ── the live pty (the real Furnace stream) ──────────────────────────────────
@@ -190,8 +191,78 @@ function schedulePendingSend(): void {
   if (!pendingPrompt) return;
   window.clearTimeout(pendingTimer);
   pendingTimer = window.setTimeout(() => {
-    if (pendingPrompt && sendPrompt(pendingPrompt)) pendingPrompt = null;
+    if (pendingPrompt && sendPrompt(pendingPrompt)) { pendingPrompt = null; beginLive(); }
   }, 1500);
+}
+
+// ── live turn streaming ─────────────────────────────────────────────────────
+// The JSONL only persists the assistant turn at completion, so during generation the
+// Manuscript would sit dead. Instead we tap the pty: xterm has already parsed the TUI,
+// so we read its buffer tail into a live "responding" region until the turn lands.
+let inFlight = false;
+let liveStart = 0;
+let liveTicker: number | undefined;
+let liveQuiet: number | undefined;
+let liveThrottle: number | undefined;
+
+function beginLive(): void {
+  clearLive();
+  inFlight = true;
+  liveStart = Date.now();
+  renderLive();
+  resetQuiet();
+  liveTicker = window.setInterval(renderLive, 1000);
+}
+function onPtyOutput(): void {
+  if (!inFlight) return;
+  resetQuiet();
+  if (liveThrottle === undefined) {
+    liveThrottle = window.setTimeout(() => { liveThrottle = undefined; renderLive(); }, 100);
+  }
+}
+function resetQuiet(): void {
+  window.clearTimeout(liveQuiet);
+  liveQuiet = window.setTimeout(endLive, 2500); // pty quiet for 2.5s ⇒ the turn finished
+}
+function renderLive(): void {
+  if (!inFlight) return;
+  manuscript.setLive(termTail(), Math.floor((Date.now() - liveStart) / 1000));
+}
+function clearLive(): void {
+  inFlight = false;
+  window.clearInterval(liveTicker);
+  window.clearTimeout(liveQuiet);
+  window.clearTimeout(liveThrottle);
+  liveThrottle = undefined;
+  manuscript.setLive(null);
+}
+function endLive(): void {
+  if (!inFlight) return;
+  clearLive();
+  if (activeSession) void renderManuscript(activeSession); // settle on the clean turn
+}
+
+// The last meaningful lines of the live terminal. xterm has parsed the TUI for us, so we
+// read its buffer (newest-first, bounded) rather than the raw ANSI, and drop input-box /
+// hint chrome. Imperfect by nature — claude's TUI redraws — but it shows real motion.
+function termTail(maxLines = 16): string {
+  const buf = term.buffer.active;
+  const out: string[] = [];
+  for (let y = buf.length - 1; y >= 0 && out.length < maxLines; y--) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const s = line.translateToString(true);
+    if (!s.trim() || isChrome(s)) continue;
+    out.push(s);
+  }
+  return out.reverse().join("\n");
+}
+function isChrome(s: string): boolean {
+  const t = s.trim();
+  if (/^[╭╮╰╯│─└┘┌┐\s]*$/.test(t)) return true; // box-drawing only
+  if (t.startsWith("❯")) return true; // the input prompt line
+  if (/shortcuts|esc to interrupt|\? for|bypass permissions|⏵/i.test(t)) return true;
+  return false;
 }
 
 function sendResize(): void {
@@ -203,6 +274,7 @@ window.addEventListener("resize", sendResize);
 function connectPty(query = ""): void {
   if (ws) { ws.onclose = null; ws.close(); }
   if (onData) { onData.dispose(); onData = null; }
+  clearLive(); // a session switch ends any in-flight live region
   term.reset();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const sock = new WebSocket(`${proto}://${location.host}/pty${query}`);
@@ -214,7 +286,7 @@ function connectPty(query = ""): void {
     term.focus();
   };
   sock.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) { term.write(new Uint8Array(ev.data)); schedulePendingSend(); return; }
+    if (ev.data instanceof ArrayBuffer) { term.write(new Uint8Array(ev.data)); schedulePendingSend(); onPtyOutput(); return; }
     try { const msg = JSON.parse(ev.data as string); if (msg.type === "session" && typeof msg.uuid === "string") onSessionBorn(msg.uuid); } catch { /* non-JSON */ }
   };
   sock.onclose = () => term.write("\r\n\x1b[2m[woland: pty disconnected]\x1b[0m\r\n");

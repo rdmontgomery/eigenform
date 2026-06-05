@@ -68,6 +68,31 @@ export class Manuscript {
     return this.node;
   }
 
+  // The live "responding" region: a streaming tail of the Furnace's pty, shown while a
+  // turn is in flight (the JSONL only lands the assistant turn at completion). It lives
+  // OUTSIDE .ms-col so setSession's rebuild doesn't wipe it. text===null hides it.
+  private liveNode: HTMLElement | null = null;
+  setLive(text: string | null, seconds = 0): void {
+    if (text === null) {
+      this.liveNode?.remove();
+      this.liveNode = null;
+      return;
+    }
+    if (!this.liveNode) {
+      this.liveNode = el("div", { class: "ms-live" },
+        el("div", { class: "lhead" },
+          el("span", { class: "pulse" }),
+          el("span", { class: "llabel", text: "responding" }),
+          el("span", { class: "lsec" }),
+          el("span", { class: "lfrom", text: "streaming from the furnace" })),
+        el("pre", { class: "lbody" }));
+      this.node.appendChild(this.liveNode);
+    }
+    (this.liveNode.querySelector(".lbody") as HTMLElement).textContent = text;
+    (this.liveNode.querySelector(".lsec") as HTMLElement).textContent = seconds ? `${seconds}s` : "";
+    this.node.scrollTop = this.node.scrollHeight;
+  }
+
   closeEdit(): void {
     const n = this.editingN;
     this.editingN = null;
