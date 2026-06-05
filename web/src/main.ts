@@ -24,7 +24,8 @@ let theme: ThemeName = "furnace";
 let lensOn = false;
 let toastTimer: number | undefined;
 const session = loadSession();
-let current: Session = session; // the session the Manuscript is currently showing
+let current: Session = session; // the session data the Manuscript is currently showing
+let currentUuid: string | null = null; // its full uuid (the fork source), null for the stub
 const cache = (): CacheReading => cacheReading(idle, ttl);
 
 applyTheme(theme);
@@ -93,7 +94,7 @@ function relight(): void { idle = 0; applyCache(); }
 
 // ── fork / leaf moments ────────────────────────────────────────────────────
 function showToast(info: ToastInfo): void {
-  const t = buildForkToast(info, session);
+  const t = buildForkToast(info, current);
   center.appendChild(t);
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => t.remove(), 4200);
@@ -103,18 +104,15 @@ function commit(n: number, text: string): void {
   const c = cache();
   const fork = forkReading(n, c, current.total);
   const e = current.exchanges.find((x) => x.n === n);
-  const src = activeSession;
+  const src = currentUuid; // fork the session being VIEWED, resumed or not
   const turn = e?.uuid;
-  const live = Boolean(src && turn); // a real fork needs a live source + a turn uuid
+  const live = Boolean(src && turn); // a real fork needs a real source + a turn uuid
   manuscript.closeEdit();
 
   const proceed = (): void => {
     if (live && src && turn) void doFork(src, turn, text, fork);
-    else {
-      // stub/preview (no live source): keep the visual feedback only
-      showToast({ kind: "fork", n, drops: fork.drops, prefix: fork.prefix, cold: c.cold });
-      relight();
-    }
+    // no real source (the built-in sample): be honest rather than fake success
+    else showError("This is the sample — pick a session from the Forest to fork a real one.");
   };
 
   if (c.cold) {
@@ -247,6 +245,7 @@ async function renderManuscript(uuid: string): Promise<void> {
   const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
   const prev = scroller.scrollTop;
   current = s;
+  currentUuid = uuid;
   manuscript.setSession(s);
   masthead.setSession(s);
   scroller.scrollTop = nearBottom ? scroller.scrollHeight : prev;
@@ -272,8 +271,20 @@ function devLiveReload(): void {
   };
 }
 
-// ── startup: a shell in the Furnace (no tokens), the Forest from disk ────────
+// ── startup: a shell in the Furnace (no tokens), the Forest from disk, and a
+//    read-only preview of the most recent real session so the Manuscript shows
+//    (and can fork) real data by default — the built-in sample is only a fallback.
 theme = currentTheme();
 connectPty();
 void refreshForest();
 devLiveReload();
+void previewRecent();
+
+async function previewRecent(): Promise<void> {
+  try {
+    const uuid = (await (await fetch("/api/recent")).text()).trim();
+    if (uuid) followManuscript(uuid); // render + follow, but DON'T resume the pty (no tokens)
+  } catch {
+    /* no sessions — keep the sample */
+  }
+}
