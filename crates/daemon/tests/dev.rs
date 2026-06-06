@@ -9,6 +9,8 @@ fn cfg(web_dir: std::path::PathBuf, dev: bool) -> Config {
         cwd: None,
         web_dir: Some(web_dir),
         projects_dir: None,
+        sessions_dir: None,
+        state_dir: None,
         dev,
     }
 }

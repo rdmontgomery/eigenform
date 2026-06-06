@@ -221,6 +221,18 @@ fn projects_dir() -> Result<PathBuf> {
         .join(".claude/projects"))
 }
 
+fn sessions_dir() -> Result<PathBuf> {
+    Ok(home_dir()
+        .context("could not determine home directory")?
+        .join(".claude/sessions"))
+}
+
+fn state_dir() -> Result<PathBuf> {
+    Ok(home_dir()
+        .context("could not determine home directory")?
+        .join(".eigen/state"))
+}
+
 /// Resolve a `<uuid|prefix|path>` argument to a session file path. A literal existing
 /// file wins; otherwise resolve as a uuid/prefix machine-wide, printing candidates on
 /// ambiguity.
@@ -381,6 +393,8 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, dev: bool) -> Re
         cwd: Some(cwd),
         web_dir,
         projects_dir: Some(projects_dir()?),
+        sessions_dir: Some(sessions_dir()?),
+        state_dir: Some(state_dir()?),
         dev,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));

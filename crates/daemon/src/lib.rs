@@ -31,6 +31,11 @@ pub struct Config {
     pub web_dir: Option<PathBuf>,
     /// `~/.claude/projects` (or a test dir) for session resolution. None = no transcript.
     pub projects_dir: Option<PathBuf>,
+    /// `~/.claude/sessions` (or a test dir): `<pid>.json` files for liveness. None = no
+    /// live Forest.
+    pub sessions_dir: Option<PathBuf>,
+    /// `~/.eigen/state`: persisted per-session metrics (the activity spark). None = no spark.
+    pub state_dir: Option<PathBuf>,
     /// Dev mode: inject the live-reload hook and serve `/api/dev/reload`.
     pub dev: bool,
 }
@@ -45,6 +50,8 @@ pub fn app(config: Config) -> Router {
         .route("/api/session/:uuid/json", get(session_json_route))
         .route("/api/session/:uuid/fork", post(fork_route))
         .route("/api/sessions", get(sessions_route))
+        .route("/api/forest", get(forest_route))
+        .route("/api/watch/forest", get(forest_watch_route))
         .route("/api/projects", get(projects_route))
         .route("/api/recent", get(recent_route))
         .route("/api/watch/:uuid", get(watch_route));
@@ -262,6 +269,110 @@ async fn projects_route(State(cfg): State<Arc<Config>>) -> Response {
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
     }
+}
+
+/// `GET /api/forest` — the corroborated live-Forest snapshot (liveness × JSONL state ×
+/// activity spark). Mirrors what `eigen forest --live` prints.
+async fn forest_route(State(cfg): State<Arc<Config>>) -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        forest_json(&cfg),
+    )
+        .into_response()
+}
+
+/// `GET /api/watch/forest` — SSE that pushes the snapshot whenever it changes.
+async fn forest_watch_route(State(cfg): State<Arc<Config>>) -> Response {
+    forest_sse(cfg)
+}
+
+/// Compute the live-Forest snapshot as a JSON string. Empty array if the dirs aren't set.
+fn forest_json(cfg: &Config) -> String {
+    let (Some(projects), Some(sessions), Some(state)) =
+        (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir)
+    else {
+        return "[]".to_string();
+    };
+    let rows: Vec<serde_json::Value> =
+        eigen_forest::live_forest(projects, sessions, state, chrono::Utc::now())
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "uuid": s.uuid,
+                    "title": s.title,
+                    "cwd": s.cwd.display().to_string(),
+                    "recency": s.recency.to_rfc3339(),
+                    "live": s.live,
+                    "state": s.state.as_str(),
+                    "spark": s.spark,
+                })
+            })
+            .collect();
+    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn hash_str(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// SSE pushing the live-Forest snapshot on change. Triggers: filesystem events on the
+/// sessions + projects dirs (snappy: activity, new sessions) ∪ a coarse 3s tick (catches
+/// pid exits, which aren't filesystem events). Emits only when the snapshot's hash changes,
+/// so the tick is silent when nothing moved. The payload travels in the event (no refetch).
+fn forest_sse(cfg: Arc<Config>) -> Response {
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(8);
+    tokio::spawn(async move {
+        // A dedicated thread owns the notify watcher; it pings on any write under the
+        // watched dirs. Lives until the event channel closes (SSE gone).
+        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<()>(8);
+        let watch_dirs: Vec<PathBuf> = [cfg.sessions_dir.clone(), cfg.projects_dir.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
+        std::thread::spawn(move || {
+            let (raw_tx, raw_rx) = std::sync::mpsc::channel();
+            let Ok(mut watcher) = notify::recommended_watcher(move |res| {
+                let _ = raw_tx.send(res);
+            }) else {
+                return;
+            };
+            for d in &watch_dirs {
+                let _ = notify::Watcher::watch(&mut watcher, d, notify::RecursiveMode::Recursive);
+            }
+            for _event in raw_rx {
+                if evt_tx.blocking_send(()).is_err() {
+                    break; // SSE gone; drop the watcher
+                }
+            }
+        });
+
+        let mut last_hash: u64 = 0;
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
+        loop {
+            let cfg2 = Arc::clone(&cfg);
+            let json = tokio::task::spawn_blocking(move || forest_json(&cfg2))
+                .await
+                .unwrap_or_else(|_| "[]".to_string());
+            let h = hash_str(&json);
+            if h != last_hash {
+                last_hash = h;
+                if tx.send(json).await.is_err() {
+                    break; // client gone
+                }
+            }
+            tokio::select! {
+                _ = tick.tick() => {}
+                r = evt_rx.recv() => { if r.is_none() { break; } }
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|json| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(json)));
+    axum::response::sse::Sse::new(stream).into_response()
 }
 
 /// `GET /api/recent` — the most recent session uuid across all projects.
@@ -741,6 +852,8 @@ mod tests {
             cwd: None,
             web_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
+            sessions_dir: None,
+            state_dir: None,
             dev: false,
         };
 
@@ -792,6 +905,8 @@ mod tests {
             cwd: None,
             web_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
+            sessions_dir: None,
+            state_dir: None,
             dev: false,
         };
 
