@@ -8,6 +8,7 @@ import { roleMark, leafMark } from "./marks.ts";
 import { mindMargin } from "./mind.ts";
 import { type Session, type Exchange, type Tool, MIND, MIND_DELTAS } from "./data.ts";
 import { type CacheReading, dropsAt, prefixTokensTo, fmtK, fmtClock } from "./cooling.ts";
+import { renderMarkdown } from "./markdown.ts";
 
 export interface ManuscriptOpts {
   getCache: () => CacheReading;
@@ -197,7 +198,7 @@ export class Manuscript {
     const replies = el("div", { class: "replies" },
       el("div", { class: "rolecol" }, roleMark("assistant", "var(--agent)", 7)),
       el("div", { style: "flex:1;min-width:0" },
-        el("p", { class: "prose assistant", text: e.assistant ?? "" }),
+        el("div", { class: "prose assistant" }, ...renderMarkdown(e.assistant ?? "")),
         e.tool ? this.buildTool(e.tool) : null,
         e.system ? el("div", { class: "sysline" }, roleMark("system", "var(--faint)", 6), " " + e.system) : null));
 

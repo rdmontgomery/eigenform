@@ -9,6 +9,7 @@ import { FitAddon } from "@xterm/addon-fit";
 
 import { el } from "./dom.ts";
 import { applyTheme, currentTheme, PALETTES, type ThemeName } from "./theme.ts";
+import { loadDensity, saveDensity, type Density } from "./prefs.ts";
 import { cacheReading, forkReading, tempColor, type CacheReading, SEED_IDLE, TTL_DEFAULT, TTL_EXTENDED } from "./cooling.ts";
 import { loadSession, loadForest, fetchSession, forkSession, type ForestEntry, type Session } from "./data.ts";
 import { buildClock } from "./clock.ts";
@@ -21,6 +22,7 @@ import { mindGlyph } from "./marks.ts";
 let idle = SEED_IDLE;
 let ttl = TTL_DEFAULT;
 let theme: ThemeName = "furnace";
+let density: Density = loadDensity();
 let lensOn = false;
 let toastTimer: number | undefined;
 const session = loadSession();
@@ -29,14 +31,28 @@ let currentUuid: string | null = null; // its full uuid (the fork source), null 
 const cache = (): CacheReading => cacheReading(idle, ttl);
 
 applyTheme(theme);
+document.documentElement.dataset.density = density; // drives --scale + compact padding
 
 // ── components ───────────────────────────────────────────────────────────
-const masthead = buildMasthead(session, theme, () => {
+const masthead = buildMasthead(session, theme, density, () => {
   theme = theme === "furnace" ? "paper" : "furnace";
   applyTheme(theme);
   masthead.setTheme(theme);
   retheme();
+}, () => {
+  density = density === "normal" ? "compact" : "normal";
+  applyDensity(density);
+  saveDensity(density);
+  masthead.setDensity(density);
 });
+
+// data-density on the root drives the CSS (--scale + padding overrides); the xterm
+// font is JS-only, so we set it here and refit if the Furnace is open.
+function applyDensity(d: Density): void {
+  document.documentElement.dataset.density = d;
+  term.options.fontSize = d === "compact" ? 11 : 12;
+  if (furnaceIsOpen) { try { fit.fit(); sendResize(); } catch { /* hidden */ } }
+}
 
 const clock = buildClock({
   onMind: () => mind.setOpen(true),
@@ -52,7 +68,7 @@ const manuscript = new Manuscript(session, {
   onLeafSend: (text) => sendLeaf(text),
 });
 
-const forest = buildForest((entry) => selectSession(entry));
+const forest = buildForest((entry) => selectSession(entry), (cwd) => startNewSession(cwd));
 const furnace = buildFurnace();
 furnace.onToggle(() => { furnace.setOpen(!furnaceOpen()); });
 
@@ -156,7 +172,7 @@ function sendLeaf(text: string): void {
 const TERM_FG = PALETTES.furnace.ink;
 const term = new Terminal({
   fontFamily: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
-  fontSize: 12,
+  fontSize: density === "compact" ? 11 : 12,
   cursorBlink: true,
   theme: { background: PALETTES[theme].furnaceBg, foreground: TERM_FG },
 });
@@ -366,6 +382,17 @@ function selectSession(entry: ForestEntry): void {
   void refreshForest(entry.uuid);
 }
 
+// Launch a fresh `claude` in the chosen directory. The daemon spawns it (?new=<cwd>)
+// and watches the projects dir for the new session's JSONL; when it reports the uuid,
+// onSessionBorn takes over (follow + refresh). Until then, the Furnace shows it boot.
+function startNewSession(cwd: string): void {
+  activeSession = null;
+  currentUuid = null;
+  if (es) { es.close(); es = null; }
+  connectPty("?new=" + encodeURIComponent(cwd));
+  furnace.setOpen(true);
+}
+
 function onSessionBorn(uuid: string): void {
   activeSession = uuid;
   followManuscript(uuid);
@@ -427,8 +454,19 @@ function devLiveReload(): void {
 theme = currentTheme();
 connectPty();
 void refreshForest();
+void loadProjectDirs();
 devLiveReload();
 void previewRecent();
+
+// fill the new-session directory datalist from the daemon's recent project cwds
+async function loadProjectDirs(): Promise<void> {
+  try {
+    const dirs = (await (await fetch("/api/projects")).json()) as string[];
+    forest.setProjectDirs(dirs);
+  } catch {
+    /* no projects dir configured — the input still accepts a typed path */
+  }
+}
 
 async function previewRecent(): Promise<void> {
   try {

@@ -26,7 +26,22 @@
   /* live cache temperature — updated by the clock controller each tick */
   --temp: 1;
   --temp-color: var(--amber);
+  /* reading-surface type scale — one multiplier the compact toggle flips */
+  --scale: 1;
 }
+:root[data-density="compact"] { --scale: 0.9; }
+/* compact density — tighter gutters and vertical rhythm (type scales via --scale) */
+:root[data-density="compact"] .masthead { height: 46px; flex-basis: 46px; }
+:root[data-density="compact"] .clock { padding: 6px 26px; }
+:root[data-density="compact"] .ms-head { padding: 10px 26px 9px; }
+:root[data-density="compact"] .ms-scroll { padding: 16px 26px 32px; }
+:root[data-density="compact"] .mind .strip { padding: 6px 26px; }
+:root[data-density="compact"] .ledger { padding: 5px 26px 12px; }
+:root[data-density="compact"] .forest { padding: 14px 0; }
+:root[data-density="compact"] .forest .row { padding: 8px 20px; }
+:root[data-density="compact"] .leaf { padding-top: 12px; }
+:root[data-density="compact"] .turn { margin-bottom: 9px; }
+:root[data-density="compact"] .xchg .rule { margin-bottom: 10px; padding-top: 9px; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: var(--bg); }
@@ -76,6 +91,8 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
 .theme-toggle .swatch { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--faint); }
 [data-theme="paper"] .theme-toggle .swatch { background: var(--amber); border-color: var(--amber); }
+.density-toggle { font-family: var(--serif); font-size: 12px; letter-spacing: 0; padding: 4px 9px; }
+.density-toggle.on { color: var(--ink); border-color: var(--faint); background: var(--raise); }
 
 /* ── furnace cooling clock ─────────────────────────────────────────────── */
 .clock {
@@ -93,7 +110,7 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
   background: linear-gradient(to right, var(--cold), var(--temp-color)); transition: width .9s linear, background .9s; }
 .clock .bar-meta { display: flex; justify-content: space-between; margin-top: 5px; font-family: var(--mono); font-size: 9px; color: var(--faint); }
 .clock .readout { text-align: right; min-width: 200px; }
-.clock .readout .big { font-family: var(--serif); font-size: 14.5px; color: var(--ink); line-height: 1.25; }
+.clock .readout .big { font-family: var(--serif); font-size: calc(14.5px * var(--scale)); color: var(--ink); line-height: 1.25; }
 .clock .readout .big.cold { color: var(--temp-color); }
 .clock .readout .sub { font-family: var(--mono); font-size: 9.5px; color: var(--faint); margin-top: 3px; }
 .rewarm { font-family: var(--mono); font-size: 13px; cursor: pointer; border-bottom: 1px dotted var(--faint); }
@@ -113,10 +130,21 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 /* forest */
 .forest { width: 226px; flex: 0 0 226px; border-right: 1px solid var(--line); background: var(--panel); padding: 20px 0; overflow-y: auto; }
 .forest .eyebrow { padding: 0 20px; margin-bottom: 16px; }
+.forest-head { display: flex; align-items: center; padding-right: 14px; }
+.forest-head .eyebrow { flex: 1; margin-bottom: 16px; }
+.newsess-btn { background: transparent; border: none; cursor: pointer; color: var(--faint);
+  font-size: 15px; line-height: 1; padding: 0 4px; margin-bottom: 14px; transition: color .14s; }
+.newsess-btn:hover { color: var(--amber); }
+.newsess { padding: 0 16px 14px; }
+.newsess-input { width: 100%; background: var(--raise); border: 1px solid var(--line);
+  border-radius: 4px; padding: 7px 9px; color: var(--ink); font-family: var(--mono);
+  font-size: 10.5px; outline: none; }
+.newsess-input::placeholder { color: var(--faint); }
+.newsess-input:focus { border-color: var(--amber-dim); }
 .forest .row { padding: 11px 20px; border-left: 2px solid transparent; cursor: pointer; }
 .forest .row.active { border-left-color: var(--amber); background: color-mix(in oklab, var(--amber) 5%, transparent); }
 .forest .row:hover { background: var(--raise); }
-.forest .row .nm { font-family: var(--serif); font-size: 14px; font-style: italic; color: var(--agent); display: block; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.forest .row .nm { font-family: var(--serif); font-size: calc(14px * var(--scale)); font-style: italic; color: var(--agent); display: block; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .forest .row.active .nm { font-style: normal; color: var(--ink); }
 .forest .row .glyphline { display: flex; align-items: center; gap: 8px; }
 .forest .row .gmeta { font-family: var(--mono); font-size: 9px; color: var(--faint); }
@@ -146,14 +174,44 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 
 .turn { display: flex; gap: 16px; margin-bottom: 12px; }
 .turn .rolecol { width: 14px; display: flex; justify-content: center; padding-top: 9px; flex: 0 0 14px; }
-.prose { margin: 0; flex: 1; font-family: var(--serif); font-size: 17.5px; line-height: 1.62; color: var(--ink); text-wrap: pretty; white-space: pre-wrap; word-break: break-word; }
+.prose { margin: 0; flex: 1; font-family: var(--serif); font-size: calc(17.5px * var(--scale)); line-height: 1.62; color: var(--ink); text-wrap: pretty; white-space: pre-wrap; word-break: break-word; }
 .prose.user { cursor: text; border-radius: 4px; padding: 6px 10px; margin: -6px -10px; background: transparent; transition: background .14s; }
 .prose.user:hover { background: var(--raise); }
 .prose.user.editing { outline: none; background: var(--raise); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--temp-color) 40%, transparent); }
-.prose.assistant { font-size: 17px; color: var(--agent); font-weight: 300; }
+.prose.assistant { font-size: calc(17px * var(--scale)); color: var(--agent); font-weight: 300; }
 .replies { display: flex; gap: 16px; transition: opacity .2s; }
 .xchg.editing .replies { opacity: 0.32; }
 .sysline { margin-top: 9px; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+
+/* assistant markdown — renderMarkdown() emits real blocks, so the container lays
+   out normally; only paragraphs keep the prose pre-wrap (single newlines = soft
+   breaks). Bold literally brightens the ink (--agent body → --ink emphasis). */
+.prose.assistant { white-space: normal; }
+.prose.assistant > :first-child { margin-top: 0; }
+.prose.assistant > :last-child { margin-bottom: 0; }
+.prose.assistant p { margin: 0 0 0.7em; white-space: pre-wrap; }
+.prose.assistant h1, .prose.assistant h2, .prose.assistant h3 {
+  font-family: var(--serif); font-weight: 500; color: var(--ink);
+  line-height: 1.28; margin: 1.05em 0 0.45em; letter-spacing: 0.005em; }
+.prose.assistant h1 { font-size: 1.3em; }
+.prose.assistant h2 { font-size: 1.16em; }
+.prose.assistant h3 { font-size: 1.04em; }
+.prose.assistant ul, .prose.assistant ol { margin: 0.5em 0 0.7em; padding-left: 1.45em; }
+.prose.assistant li { margin: 0.22em 0; padding-left: 0.15em; }
+.prose.assistant li::marker { color: var(--faint); }
+.prose.assistant strong { color: var(--ink); font-weight: 500; }
+.prose.assistant em { font-style: italic; }
+.prose.assistant s { color: var(--faint); }
+.prose.assistant code {
+  font-family: var(--mono); font-size: 0.86em; color: var(--ink);
+  background: var(--raise); border: 1px solid var(--line-soft);
+  border-radius: 3px; padding: 0.05em 0.36em; }
+.prose.assistant pre.code {
+  margin: 0.7em 0; padding: 10px 13px; overflow-x: auto;
+  background: var(--furnace-bg); border: 1px solid var(--line); border-radius: 5px; }
+.prose.assistant pre.code code {
+  font-family: var(--mono); font-size: 0.82em; line-height: 1.6;
+  background: none; border: none; padding: 0; color: var(--agent); white-space: pre; }
 
 .foldline { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line-soft); }
 .foldline .ftitle { flex: 1; min-width: 0; font-family: var(--serif); font-size: 15px; color: var(--agent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
@@ -168,7 +226,7 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .tool .head .delta { color: var(--cool); }
 .tool .head .ctx { color: var(--faint); }
 .tool .body { border-top: 1px solid var(--line-soft); padding: 9px 12px; background: var(--furnace-bg); }
-.tool .body .ln { font-family: var(--mono); font-size: 11px; line-height: 1.7; white-space: pre; color: var(--dim); }
+.tool .body .ln { font-family: var(--mono); font-size: calc(11px * var(--scale)); line-height: 1.7; white-space: pre; color: var(--dim); }
 .tool .body .ln.add { color: var(--cool); }
 .tool .body .ln.rem { color: var(--cold); }
 .tool .body .ln.cool { color: var(--cool); }
@@ -226,7 +284,7 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .leaf .leafcol { width: 16px; display: flex; justify-content: center; padding-top: 3px; flex: 0 0 16px; }
 .leaf .field { flex: 1; display: flex; align-items: flex-start; gap: 10px; }
 .leaf .caret { width: 2px; height: 26px; background: var(--amber); margin-top: 1px; flex: 0 0 2px; }
-.leaf textarea { flex: 1; resize: none; background: transparent; border: none; outline: none; font-family: var(--serif); font-size: 17px; line-height: 1.5; color: var(--ink); min-height: 28px; font-style: italic; }
+.leaf textarea { flex: 1; resize: none; background: transparent; border: none; outline: none; font-family: var(--serif); font-size: calc(17px * var(--scale)); line-height: 1.5; color: var(--ink); min-height: 28px; font-style: italic; }
 .leaf textarea:not(:placeholder-shown) { font-style: normal; }
 .leaf .send { font-family: var(--mono); font-size: 11px; border-radius: 4px; padding: 6px 12px; white-space: nowrap; background: transparent; border: 1px solid var(--line); color: var(--faint); cursor: default; }
 .leaf .send.ready { color: var(--bg); background: var(--amber); border-color: var(--amber); cursor: pointer; }

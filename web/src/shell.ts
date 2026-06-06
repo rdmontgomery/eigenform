@@ -7,11 +7,19 @@ import { wolandMark, norgie, forestGlyph } from "./marks.ts";
 import { type ForestEntry, type Session } from "./data.ts";
 import { type CacheReading, type ForkReading, fmtK, fmtClock } from "./cooling.ts";
 import { type ThemeName } from "./theme.ts";
+import { type Density } from "./prefs.ts";
 
-export function buildMasthead(session: Session, theme: ThemeName, onTheme: () => void): { node: HTMLElement; setTheme(t: ThemeName): void; setSession(s: Session): void } {
+export function buildMasthead(
+  session: Session,
+  theme: ThemeName,
+  density: Density,
+  onTheme: () => void,
+  onDensity: () => void,
+): { node: HTMLElement; setTheme(t: ThemeName): void; setDensity(d: Density): void; setSession(s: Session): void } {
   const swatch = el("span", { class: "swatch" });
   const label = el("span", { text: theme });
   const btn = el("button", { class: "ghost theme-toggle", title: "toggle paper / furnace", onclick: onTheme }, swatch, label);
+  const densityBtn = el("button", { class: `ghost density-toggle${density === "compact" ? " on" : ""}`, title: "toggle compact density", onclick: onDensity }, "Aa");
   const sess = el("div", { class: "sess" });
   const setSession = (s: Session): void => {
     sess.replaceChildren("session ", el("b", { text: s.id }), ` · ${s.total} turns · ${s.branches}⑂ · viewing ${s.windowStart}–${s.total}`);
@@ -24,14 +32,46 @@ export function buildMasthead(session: Session, theme: ThemeName, onTheme: () =>
     sess,
     el("div", { class: "spacer" }),
     el("div", { class: "live" }, el("span", { class: "dot" }), "LIVE"),
+    densityBtn,
     btn);
-  return { node, setTheme: (t) => { label.textContent = t; }, setSession };
+  return {
+    node,
+    setTheme: (t) => { label.textContent = t; },
+    setDensity: (d) => densityBtn.classList.toggle("on", d === "compact"),
+    setSession,
+  };
 }
 
-export function buildForest(onSelect: (entry: ForestEntry) => void): { node: HTMLElement; fill(entries: ForestEntry[]): void } {
+export function buildForest(
+  onSelect: (entry: ForestEntry) => void,
+  onNew: (cwd: string) => void,
+): { node: HTMLElement; fill(entries: ForestEntry[]): void; setProjectDirs(dirs: string[]): void } {
   const list = el("div");
+
+  // new-session picker: a ⊕ in the header reveals an inline directory input backed
+  // by the /api/projects datalist; Enter launches `claude` there (?new=<cwd>).
+  const dirs = el("datalist", { id: "project-dirs" });
+  const input = el("input", { class: "newsess-input", list: "project-dirs", placeholder: "directory to launch from…" }) as HTMLInputElement;
+  input.setAttribute("autocomplete", "off");
+  const picker = el("div", { class: "newsess", style: "display:none" }, input, dirs);
+  const close = (): void => { picker.style.display = "none"; input.value = ""; };
+  const launch = (): void => { const cwd = input.value.trim(); if (cwd) { onNew(cwd); close(); } };
+  input.addEventListener("keydown", (ev) => {
+    const k = ev as KeyboardEvent;
+    if (k.key === "Enter") { k.preventDefault(); launch(); }
+    if (k.key === "Escape") { k.preventDefault(); close(); }
+  });
+  const plus = el("button", { class: "newsess-btn", title: "new session", onclick: () => {
+    const open = picker.style.display === "none";
+    picker.style.display = open ? "block" : "none";
+    if (open) input.focus(); else input.value = "";
+  } }, "⊕");
+
   const node = el("div", { class: "forest" },
-    el("div", { class: "eyebrow", text: "Forest · forking paths" }), list);
+    el("div", { class: "forest-head" },
+      el("div", { class: "eyebrow", text: "Forest · forking paths" }), plus),
+    picker, list);
+
   function fill(entries: ForestEntry[]): void {
     list.replaceChildren();
     if (!entries.length) { list.appendChild(el("div", { class: "eyebrow", style: "padding:0 20px", text: "no sessions" })); return; }
@@ -44,7 +84,10 @@ export function buildForest(onSelect: (entry: ForestEntry) => void): { node: HTM
       list.appendChild(row);
     }
   }
-  return { node, fill };
+  function setProjectDirs(ds: string[]): void {
+    dirs.replaceChildren(...ds.map((d) => el("option", { value: d })));
+  }
+  return { node, fill, setProjectDirs };
 }
 
 export function buildFurnace(): { node: HTMLElement; termHost: HTMLElement; setOpen(open: boolean): void; onToggle(fn: () => void): void } {

@@ -9,6 +9,8 @@ interface Attrs {
   html?: string;
   title?: string;
   type?: string;
+  id?: string;
+  list?: string;
   rows?: number;
   placeholder?: string;
   value?: string;
