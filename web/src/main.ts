@@ -401,14 +401,16 @@ function onSessionBorn(uuid: string): void {
 
 // Render the chosen session into the Manuscript and follow it live: re-fetch the
 // structured transcript on each SSE 'change', pinned to the leaf if we were near it.
+// Opening a manuscript lands at the bottom — the leaf, ready to send — while later
+// SSE re-renders keep the reader where they are (stick to bottom only if near it).
 function followManuscript(uuid: string): void {
-  void renderManuscript(uuid);
+  void renderManuscript(uuid, true);
   if (es) es.close();
   es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
   es.onmessage = () => void renderManuscript(uuid);
 }
 
-async function renderManuscript(uuid: string): Promise<void> {
+async function renderManuscript(uuid: string, landAtBottom = false): Promise<void> {
   const s = await fetchSession(uuid);
   if (!s) return;
   const scroller = manuscript.scroller;
@@ -425,7 +427,7 @@ async function renderManuscript(uuid: string): Promise<void> {
     stopLiveTimers();
     manuscript.setLive(null);
   }
-  scroller.scrollTop = nearBottom ? scroller.scrollHeight : prev;
+  scroller.scrollTop = (landAtBottom || nearBottom) ? scroller.scrollHeight : prev;
 }
 
 async function refreshForest(activeUuid?: string): Promise<void> {
