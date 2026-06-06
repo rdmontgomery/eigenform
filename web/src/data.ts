@@ -31,13 +31,16 @@ export interface Session {
   exchanges: Exchange[];
 }
 
+export type ForestState = "working" | "ready" | "recent";
 export interface ForestEntry {
   id: string;
   name: string;
-  turns: number;
-  branches: number;
-  active: boolean;
-  shape: number[];
+  state: ForestState;
+  live: boolean;
+  recency: string; // ISO timestamp, for the relative recency stamp
+  shape: number[]; // the activity spark: output tokens per completed turn
+  branches: number; // forks (0 until fork-lineage tracking exists)
+  active: boolean; // the session currently shown in the Manuscript
   uuid?: string; // present for live entries (used to resume the pty)
 }
 
@@ -164,39 +167,52 @@ export function mindGroupColor(i: number, n: number): string {
   return `color-mix(in oklab, var(--ink) ${pct}%, var(--panel))`;
 }
 
-interface SessionItem { uuid: string; title: string; cwd: string; recency: string; }
+// ── LIVE: the Forest from /api/forest (corroborated liveness × state × spark). ──
+interface ForestItem {
+  uuid: string;
+  title: string | null;
+  cwd: string;
+  recency: string;
+  live: boolean;
+  state: ForestState;
+  spark: number[];
+}
 
-// ── LIVE: the Forest from /api/sessions. Glyph shape/branches are stubbed
-//    (the backend doesn't yet expose a session's branch shape). ──────────────
+function mapForestItem(it: ForestItem): ForestEntry {
+  return {
+    id: it.uuid.slice(0, 6),
+    uuid: it.uuid,
+    name: it.title || it.cwd.split("/").filter(Boolean).pop() || it.uuid.slice(0, 8),
+    state: it.state,
+    live: it.live,
+    recency: it.recency,
+    shape: it.spark,
+    branches: 0,
+    active: false,
+  };
+}
+
 export async function loadForest(): Promise<ForestEntry[]> {
   try {
-    const items: SessionItem[] = await (await fetch("/api/sessions")).json();
-    return items.map((it, i) => ({
-      id: it.uuid.slice(0, 6),
-      uuid: it.uuid,
-      name: it.title || it.cwd.split("/").filter(Boolean).pop() || it.uuid.slice(0, 8),
-      turns: 0,
-      branches: 0,
-      active: i === 0,
-      shape: stubShape(it.uuid),
-    }));
+    const items: ForestItem[] = await (await fetch("/api/forest")).json();
+    return items.map(mapForestItem);
   } catch {
     return [];
   }
 }
 
-// a deterministic small-multiple silhouette seeded off the uuid, so each session
-// reads as a distinct shape until real branch data exists.
-function stubShape(seed: string): number[] {
-  let h = 0;
-  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  const n = 8 + (h % 5);
-  const out: number[] = [];
-  let v = 2;
-  for (let i = 0; i < n; i++) {
-    h = (h * 1103515245 + 12345) >>> 0;
-    v = Math.max(1, Math.min(7, v + ((h >> 8) % 3) - 1));
-    out.push(v);
-  }
-  return out;
+// Live Forest: the daemon pushes the corroborated snapshot whenever it changes
+// (process liveness, turn activity, new sessions). Returns the EventSource so the
+// caller can close it.
+export function watchForest(onEntries: (entries: ForestEntry[]) => void): EventSource {
+  const es = new EventSource("/api/watch/forest");
+  es.onmessage = (ev) => {
+    try {
+      const items = JSON.parse(ev.data as string) as ForestItem[];
+      onEntries(items.map(mapForestItem));
+    } catch {
+      /* malformed frame — ignore */
+    }
+  };
+  return es;
 }

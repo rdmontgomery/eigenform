@@ -149,6 +149,22 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .forest .row .glyphline { display: flex; align-items: center; gap: 8px; }
 .forest .row .gmeta { font-family: var(--mono); font-size: 9px; color: var(--faint); }
 
+/* live Forest: live sessions above a faint divider, recents below */
+.forest-div { padding: 0 20px; margin: 6px 0 12px; opacity: 0.7; }
+.forest-recent .row .nm { color: var(--dim); }
+.forest .row .rowmeta { display: flex; align-items: center; gap: 8px; }
+.forest .row .badge { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9px; letter-spacing: 0.04em; }
+.forest .row .sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.forest .row .blabel { color: var(--faint); }
+.forest .row .ago { font-family: var(--mono); font-size: 9px; color: var(--faint); }
+.forest .row .rowmeta .spacer { flex: 1; }
+/* working: pulsing cool dot; ready: steady amber + label that wants attention */
+.forest .row.state-working .sdot { background: var(--cool); animation: wbEmber 1.4s ease-in-out infinite; }
+.forest .row.state-working .blabel { color: var(--cool); }
+.forest .row.state-ready .sdot { background: var(--amber); }
+.forest .row.state-ready .blabel { color: var(--amber); }
+.forest .row.state-recent .sdot { background: transparent; border: 1px solid var(--faint); }
+
 /* center / manuscript */
 .center { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .ms-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 44px 12px; }

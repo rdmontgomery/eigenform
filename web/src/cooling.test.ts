@@ -13,8 +13,21 @@ import {
   forkReading,
   fmtClock,
   fmtK,
+  fmtAgo,
   tempColor,
 } from "./cooling.ts";
+
+test("fmtAgo renders coarse relative time for the Forest recency stamp", () => {
+  const now = new Date("2026-06-06T12:00:00Z");
+  const ago = (iso: string): string => fmtAgo(iso, now);
+  assert.equal(ago("2026-06-06T11:59:40Z"), "now"); // 20s
+  assert.equal(ago("2026-06-06T11:58:00Z"), "2m");
+  assert.equal(ago("2026-06-06T09:00:00Z"), "3h");
+  assert.equal(ago("2026-06-05T12:00:00Z"), "yesterday"); // 1d
+  assert.equal(ago("2026-06-03T12:00:00Z"), "3d");
+  assert.equal(ago("2026-05-23T12:00:00Z"), "2w");
+  assert.equal(ago("not-a-date"), "");
+});
 
 test("prefixTokensTo scales the full context by turn fraction", () => {
   assert.equal(prefixTokensTo(TOTAL_TURNS), CTX_FULL);

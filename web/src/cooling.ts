@@ -84,6 +84,25 @@ export function fmtK(tok: number): string {
   return `${tok}`;
 }
 
+// Coarse relative time for the Forest recency stamp ("now"/"2m"/"3h"/"yesterday"/"3d").
+// `now` is injected so it's pure and testable.
+export function fmtAgo(iso: string, now: Date): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const s = Math.max(0, Math.floor((now.getTime() - then) / 1000));
+  if (s < 45) return "now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d === 1) return "yesterday";
+  if (d < 7) return `${d}d`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w`;
+  return `${Math.floor(d / 30)}mo`;
+}
+
 // temperature → a CSS color-mix string referencing the theme's reserved poles, so it
 // adapts to the active theme. Hot = amber (furnace lit, cache warm, cheap); cold =
 // slate-blue (furnace out, re-warm at full price). Emitting concrete percentages (no

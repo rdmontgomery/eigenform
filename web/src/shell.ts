@@ -5,7 +5,7 @@
 import { el, svg } from "./dom.ts";
 import { wolandMark, norgie, forestGlyph } from "./marks.ts";
 import { type ForestEntry, type Session } from "./data.ts";
-import { type CacheReading, type ForkReading, fmtK, fmtClock } from "./cooling.ts";
+import { type CacheReading, type ForkReading, fmtK, fmtClock, fmtAgo } from "./cooling.ts";
 import { type ThemeName } from "./theme.ts";
 import { type Density } from "./prefs.ts";
 
@@ -46,8 +46,6 @@ export function buildForest(
   onSelect: (entry: ForestEntry) => void,
   onNew: (cwd: string) => void,
 ): { node: HTMLElement; fill(entries: ForestEntry[]): void; setProjectDirs(dirs: string[]): void } {
-  const list = el("div");
-
   // new-session picker: a ⊕ in the header reveals an inline directory input backed
   // by the /api/projects datalist; Enter launches `claude` there (?new=<cwd>).
   const dirs = el("datalist", { id: "project-dirs" });
@@ -67,22 +65,60 @@ export function buildForest(
     if (open) input.focus(); else input.value = "";
   } }, "⊕");
 
+  // Live sessions float above a faint divider; recents below. Two lists so the diff
+  // (keyed by uuid) is simple and a session sliding live↔recent just moves its node.
+  const liveList = el("div", { class: "forest-live" });
+  const recentList = el("div", { class: "forest-recent" });
+  const divider = el("div", { class: "eyebrow forest-div", text: "recent", style: "display:none" });
+  const empty = el("div", { class: "eyebrow", style: "padding:0 20px;display:none", text: "no sessions" });
+
   const node = el("div", { class: "forest" },
     el("div", { class: "forest-head" },
       el("div", { class: "eyebrow", text: "Forest · forking paths" }), plus),
-    picker, list);
+    picker, empty, liveList, divider, recentList);
+
+  function buildRow(s: ForestEntry): HTMLElement {
+    const ago = fmtAgo(s.recency, new Date());
+    const label = s.state === "working" ? "working" : s.state === "ready" ? "ready ↵" : ago;
+    return el("div", { class: `row state-${s.state}${s.active ? " active" : ""}`, dataset: { id: s.id }, onclick: () => onSelect(s) },
+      el("span", { class: "nm", text: s.name }),
+      el("div", { class: "rowmeta" },
+        el("span", { class: `badge bs-${s.state}` }, el("span", { class: "sdot" }), el("span", { class: "blabel", text: label })),
+        s.state === "recent" ? null : el("span", { class: "ago", text: ago }),
+        el("span", { class: "spacer" }),
+        forestGlyph(s.shape, s.branches, s.active, s.active ? "var(--agent)" : "var(--faint)", "var(--amber)", 96, 16)));
+  }
+
+  // uuid-keyed diff: reuse unchanged rows (move them with appendChild → :hover and node
+  // identity survive), rebuild only changed rows, drop dead ones.
+  const rows = new Map<string, { node: HTMLElement; sig: string }>();
+  function place(container: HTMLElement, list: ForestEntry[]): void {
+    for (const s of list) {
+      const sig = `${s.state}|${s.active}|${s.recency}|${s.name}|${s.shape.join(",")}`;
+      const rec = rows.get(s.uuid!);
+      if (!rec) {
+        rows.set(s.uuid!, { node: buildRow(s), sig });
+      } else if (rec.sig !== sig) {
+        const fresh = buildRow(s);
+        rec.node.replaceWith(fresh);
+        rec.node = fresh;
+        rec.sig = sig;
+      }
+      container.appendChild(rows.get(s.uuid!)!.node);
+    }
+  }
 
   function fill(entries: ForestEntry[]): void {
-    list.replaceChildren();
-    if (!entries.length) { list.appendChild(el("div", { class: "eyebrow", style: "padding:0 20px", text: "no sessions" })); return; }
-    for (const s of entries) {
-      const row = el("div", { class: `row${s.active ? " active" : ""}`, dataset: { id: s.id }, onclick: () => onSelect(s) },
-        el("span", { class: "nm", text: s.name }),
-        el("div", { class: "glyphline" },
-          forestGlyph(s.shape, s.branches, s.active, s.active ? "var(--agent)" : "var(--faint)", "var(--amber)", 150, 22),
-          el("span", { class: "gmeta", text: `${s.turns}·${s.branches}⑂` })));
-      list.appendChild(row);
+    empty.style.display = entries.length ? "none" : "block";
+    const live = entries.filter((e) => e.live);
+    const recent = entries.filter((e) => !e.live);
+    const wanted = new Set(entries.map((e) => e.uuid!));
+    for (const [uuid, rec] of [...rows]) {
+      if (!wanted.has(uuid)) { rec.node.remove(); rows.delete(uuid); }
     }
+    place(liveList, live);
+    place(recentList, recent);
+    divider.style.display = live.length && recent.length ? "block" : "none";
   }
   function setProjectDirs(ds: string[]): void {
     dirs.replaceChildren(...ds.map((d) => el("option", { value: d })));

@@ -11,7 +11,7 @@ import { el } from "./dom.ts";
 import { applyTheme, currentTheme, PALETTES, type ThemeName } from "./theme.ts";
 import { loadDensity, saveDensity, type Density } from "./prefs.ts";
 import { cacheReading, forkReading, tempColor, type CacheReading, SEED_IDLE, TTL_DEFAULT, TTL_EXTENDED } from "./cooling.ts";
-import { loadSession, loadForest, fetchSession, forkSession, type ForestEntry, type Session } from "./data.ts";
+import { loadSession, loadForest, watchForest, fetchSession, forkSession, type ForestEntry, type Session } from "./data.ts";
 import { buildClock } from "./clock.ts";
 import { buildMind } from "./mind.ts";
 import { Manuscript } from "./manuscript.ts";
@@ -149,7 +149,7 @@ async function doFork(src: string, turn: string, text: string, fork: ReturnType<
   // the branch rewinds to before the edited turn; deliver the edited prompt live once the
   // resumed session has painted and gone idle (auto-send).
   pendingPrompt = text.trim() || null;
-  selectSession({ uuid: newUuid, id: newUuid.slice(0, 6), name: "fork", turns: 0, branches: 0, active: true, shape: [] });
+  selectSession({ uuid: newUuid, id: newUuid.slice(0, 6), name: "fork", state: "working", live: true, recency: new Date().toISOString(), branches: 0, active: true, shape: [] });
 }
 
 function showError(msg: string): void {
@@ -379,7 +379,7 @@ function selectSession(entry: ForestEntry): void {
   activeSession = entry.uuid;
   connectPty(`?session=${encodeURIComponent(entry.uuid)}`);
   followManuscript(entry.uuid);
-  void refreshForest(entry.uuid);
+  renderForest();
 }
 
 // Launch a fresh `claude` in the chosen directory. The daemon spawns it (?new=<cwd>)
@@ -396,7 +396,7 @@ function startNewSession(cwd: string): void {
 function onSessionBorn(uuid: string): void {
   activeSession = uuid;
   followManuscript(uuid);
-  void refreshForest(uuid);
+  renderForest();
 }
 
 // Render the chosen session into the Manuscript and follow it live: re-fetch the
@@ -430,10 +430,18 @@ async function renderManuscript(uuid: string, landAtBottom = false): Promise<voi
   scroller.scrollTop = (landAtBottom || nearBottom) ? scroller.scrollHeight : prev;
 }
 
-async function refreshForest(activeUuid?: string): Promise<void> {
-  const entries = await loadForest();
-  if (activeUuid) for (const e of entries) e.active = e.uuid === activeUuid;
-  forest.fill(entries);
+// The live Forest: the daemon pushes the corroborated snapshot over SSE on change.
+// We keep the latest entries and re-mark which one is being viewed before rendering,
+// so selecting a session highlights immediately (before the next push).
+let forestEntries: ForestEntry[] = [];
+function renderForest(): void {
+  for (const e of forestEntries) e.active = e.uuid === activeSession;
+  forest.fill(forestEntries);
+}
+async function initForest(): Promise<void> {
+  forestEntries = await loadForest(); // paint once before the first SSE frame lands
+  renderForest();
+  watchForest((entries) => { forestEntries = entries; renderForest(); });
 }
 
 // ── dev live-reload — never drops a live session ────────────────────────────
@@ -455,7 +463,7 @@ function devLiveReload(): void {
 //    (and can fork) real data by default — the built-in sample is only a fallback.
 theme = currentTheme();
 connectPty();
-void refreshForest();
+void initForest();
 void loadProjectDirs();
 devLiveReload();
 void previewRecent();
