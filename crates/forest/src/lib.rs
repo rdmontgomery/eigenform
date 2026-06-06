@@ -190,16 +190,163 @@ pub fn session_ref(stub: &SessionStub) -> SessionRef {
     }
 }
 
+/// A session's process state, corroborated from disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionState {
+    /// Live process, a turn in flight (last prompt not yet closed).
+    Working,
+    /// Live process, last turn complete — awaiting your input.
+    Ready,
+    /// No live process; history.
+    Recent,
+}
+
+impl SessionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionState::Working => "working",
+            SessionState::Ready => "ready",
+            SessionState::Recent => "recent",
+        }
+    }
+    fn rank(self) -> u8 {
+        match self {
+            SessionState::Ready => 0,
+            SessionState::Working => 1,
+            SessionState::Recent => 2,
+        }
+    }
+}
+
+/// A Forest row: a session enriched with liveness, process state, and activity spark.
+#[derive(Debug, Clone)]
+pub struct LiveSession {
+    pub uuid: String,
+    pub title: Option<String>,
+    pub cwd: PathBuf,
+    pub recency: DateTime<Utc>,
+    pub live: bool,
+    pub state: SessionState,
+    /// Per-turn output-token counts (the activity sparkline). Empty until metrics exist.
+    pub spark: Vec<u32>,
+}
+
+/// Is a process alive? `/proc/<pid>` on Linux/WSL (this project's target).
+pub fn is_pid_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// Whether a session's last turn has closed (ready) vs is in flight (working), from a
+/// cheap tail-peek. Used to badge live sessions.
+pub fn session_complete(path: &Path) -> bool {
+    peek_tail(path).complete
+}
+
+/// The live Forest: corroborate `~/.claude/sessions/<pid>.json` (process liveness) with
+/// the project JSONLs (state, title, recency). The source of truth is the filesystem —
+/// reconstructed on demand — so it survives a daemon that wasn't running when sessions
+/// started, and a dead pid's stale session file is simply ignored (the pid check is the GC).
+pub fn live_forest(
+    projects_dir: &Path,
+    sessions_dir: &Path,
+    now: DateTime<Utc>,
+) -> Vec<LiveSession> {
+    live_forest_with(projects_dir, sessions_dir, now, is_pid_alive)
+}
+
+/// [`live_forest`] with an injected liveness predicate (for deterministic tests).
+pub fn live_forest_with(
+    projects_dir: &Path,
+    sessions_dir: &Path,
+    now: DateTime<Utc>,
+    alive: impl Fn(u32) -> bool,
+) -> Vec<LiveSession> {
+    // sessionId → cwd, for the processes that are actually alive.
+    let mut live: HashMap<String, PathBuf> = HashMap::new();
+    if let Ok(entries) = fs::read_dir(sessions_dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&p) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let pid = v.get("pid").and_then(|x| x.as_u64()).map(|x| x as u32);
+            let sid = v.get("sessionId").and_then(|x| x.as_str()).map(str::to_string);
+            let cwd = v.get("cwd").and_then(|x| x.as_str()).map(PathBuf::from);
+            if let (Some(pid), Some(sid)) = (pid, sid) {
+                if alive(pid) {
+                    live.insert(sid, cwd.unwrap_or_default());
+                }
+            }
+        }
+    }
+
+    let recents = list(projects_dir, Scope::AllProjects, None, now).unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<LiveSession> = Vec::new();
+    for r in &recents {
+        seen.insert(r.uuid.clone());
+        let is_live = live.contains_key(&r.uuid);
+        let state = if is_live {
+            if session_complete(&r.path) {
+                SessionState::Ready
+            } else {
+                SessionState::Working
+            }
+        } else {
+            SessionState::Recent
+        };
+        out.push(LiveSession {
+            uuid: r.uuid.clone(),
+            title: r.title.clone(),
+            cwd: r.cwd.clone(),
+            recency: r.recency,
+            live: is_live,
+            state,
+            spark: Vec::new(),
+        });
+    }
+    // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
+    for (sid, cwd) in &live {
+        if seen.contains(sid) {
+            continue;
+        }
+        out.push(LiveSession {
+            uuid: sid.clone(),
+            title: None,
+            cwd: cwd.clone(),
+            recency: now,
+            live: true,
+            state: SessionState::Working,
+            spark: Vec::new(),
+        });
+    }
+
+    out.sort_by(|a, b| {
+        a.state
+            .rank()
+            .cmp(&b.state.rank())
+            .then(b.recency.cmp(&a.recency))
+    });
+    out
+}
+
 struct Tail {
     last_timestamp: Option<String>,
     title: Option<String>,
+    /// Did the last turn close? Ready iff the last `turn_duration` row follows the last
+    /// `user` row (a turn completed after the latest prompt). A trailing user prompt with
+    /// no close means a turn is in flight (working). No user row in the window → assume
+    /// idle/ready. Trailing bridge/title/mode metadata rows are ignored.
+    complete: bool,
 }
 
 /// Read the tail of a session file (byte-stream, escalating) for the last timestamped
 /// row and a title. Returns empties if the file is unreadable.
 fn peek_tail(path: &Path) -> Tail {
     let Ok(mut file) = fs::File::open(path) else {
-        return Tail { last_timestamp: None, title: None };
+        return Tail { last_timestamp: None, title: None, complete: true };
     };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
 
@@ -208,7 +355,7 @@ fn peek_tail(path: &Path) -> Tail {
         let start = len.saturating_sub(window);
         let mut buf = Vec::new();
         if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut buf).is_err() {
-            return Tail { last_timestamp: None, title: None };
+            return Tail { last_timestamp: None, title: None, complete: true };
         }
         let text = String::from_utf8_lossy(&buf);
         let mut lines: Vec<&str> = text.split('\n').filter(|l| !l.is_empty()).collect();
@@ -232,7 +379,9 @@ fn scan_tail(lines: &[&str]) -> Tail {
     let mut last_timestamp = None;
     let mut ai_title = None;
     let mut last_prompt = None;
-    for line in lines {
+    let mut last_user = None;
+    let mut last_close = None;
+    for (i, line) in lines.iter().enumerate() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
@@ -250,12 +399,24 @@ fn scan_tail(lines: &[&str]) -> Tail {
                     last_prompt = Some(snippet(p));
                 }
             }
+            Some("user") => last_user = Some(i),
+            Some("system") => {
+                if value.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") {
+                    last_close = Some(i);
+                }
+            }
             _ => {}
         }
     }
+    let complete = match (last_user, last_close) {
+        (Some(u), Some(c)) => c >= u,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
     Tail {
         last_timestamp,
         title: ai_title.or(last_prompt),
+        complete,
     }
 }
 
