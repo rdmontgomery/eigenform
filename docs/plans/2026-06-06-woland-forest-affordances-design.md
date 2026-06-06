@@ -80,6 +80,19 @@ deliberate.)
 code) plus inline emphasis — applied **only** to `.prose.assistant`. User prose
 stays raw editable text; the live pty tail stays mono.
 
+**Engine decision (the seam).** Considered three tiers: hand-rolled (zero deps),
+a string lib + DOMPurify (innerHTML, no doors), and an AST pipeline
+(remark → hast → DOM via `hast-util-to-dom`, no innerHTML, opens custom-renderer
+doors: KaTeX math, Shiki-highlighted code as Furnace panels, `[[wikilinks]]` →
+Forest nav, directives → Tufte marginalia). Chose **hand-rolled v1** for now —
+but the decision that matters is the **seam**: everything lives behind one
+`renderMarkdown(text) → Node[]`. We can swap in the remark pipeline later (the
+day we want math/highlighting) without `manuscript.ts` changing. KaTeX math is
+the most likely first door given the domain (stat-mech/RG). Canvas/SVG (satori,
+foreignObject) is explicitly NOT for the Manuscript — it would kill text
+selection and the `contentEditable` edit-as-fork core; it's a separate future
+"export a manuscript page" idea, not this feature.
+
 **Renderer (`markdown.ts`, new — pure, TDD'd with `node --test`).** No library,
 no `innerHTML` (no XSS surface), built with the codebase `el()` style.
 - `inline(text) → (Node | string)[]`: `**bold**`, `*italic*`/`_italic_`,
