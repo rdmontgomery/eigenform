@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use thiserror::Error;
@@ -242,6 +243,91 @@ pub fn session_complete(path: &Path) -> bool {
     peek_tail(path).complete
 }
 
+/// The activity sparkline: `output_tokens` summed per completed turn (assistant messages
+/// accumulate; a `turn_duration` system row closes a turn and pushes its total). Requires
+/// a full read — use [`cached_spark`] for the persisted, parse-on-change form.
+pub fn session_spark(jsonl_path: &Path) -> Vec<u32> {
+    let Ok(text) = fs::read_to_string(jsonl_path) else {
+        return Vec::new();
+    };
+    let mut spark = Vec::new();
+    let mut acc: u32 = 0;
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("assistant") => {
+                let usage = v
+                    .get("message")
+                    .and_then(|m| m.get("usage"))
+                    .or_else(|| v.get("usage"));
+                if let Some(out) = usage
+                    .and_then(|u| u.get("output_tokens"))
+                    .and_then(|x| x.as_u64())
+                {
+                    acc = acc.saturating_add(out as u32);
+                }
+            }
+            Some("system") => {
+                if v.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") {
+                    spark.push(acc);
+                    acc = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+    spark
+}
+
+fn mtime_millis(path: &Path) -> Option<(i64, u64)> {
+    let m = fs::metadata(path).ok()?;
+    let millis = m
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Some((millis, m.len()))
+}
+
+/// [`session_spark`] cached to `state_dir/<session_id>.json`, keyed by the JSONL's
+/// (mtime, len). A static transcript is parsed once; the cache (eigen's `~/.eigen/state`)
+/// survives restarts and is shared with the CLI.
+pub fn cached_spark(state_dir: &Path, session_id: &str, jsonl_path: &Path) -> Vec<u32> {
+    let stamp = mtime_millis(jsonl_path);
+    let state_path = state_dir.join(format!("{session_id}.json"));
+
+    if let Some((mtime, len)) = stamp {
+        if let Ok(text) = fs::read_to_string(&state_path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let same = v.get("source_mtime").and_then(|x| x.as_i64()) == Some(mtime)
+                    && v.get("source_len").and_then(|x| x.as_u64()) == Some(len);
+                if same {
+                    if let Some(arr) = v.get("spark").and_then(|x| x.as_array()) {
+                        return arr.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect();
+                    }
+                }
+            }
+        }
+    }
+
+    let spark = session_spark(jsonl_path);
+    if let Some((mtime, len)) = stamp {
+        let _ = fs::create_dir_all(state_dir);
+        let total: u64 = spark.iter().map(|&x| x as u64).sum();
+        let doc = serde_json::json!({
+            "source_mtime": mtime,
+            "source_len": len,
+            "spark": spark,
+            "total": total,
+        });
+        let _ = fs::write(&state_path, doc.to_string());
+    }
+    spark
+}
+
 /// The live Forest: corroborate `~/.claude/sessions/<pid>.json` (process liveness) with
 /// the project JSONLs (state, title, recency). The source of truth is the filesystem —
 /// reconstructed on demand — so it survives a daemon that wasn't running when sessions
@@ -249,15 +335,17 @@ pub fn session_complete(path: &Path) -> bool {
 pub fn live_forest(
     projects_dir: &Path,
     sessions_dir: &Path,
+    state_dir: &Path,
     now: DateTime<Utc>,
 ) -> Vec<LiveSession> {
-    live_forest_with(projects_dir, sessions_dir, now, is_pid_alive)
+    live_forest_with(projects_dir, sessions_dir, state_dir, now, is_pid_alive)
 }
 
 /// [`live_forest`] with an injected liveness predicate (for deterministic tests).
 pub fn live_forest_with(
     projects_dir: &Path,
     sessions_dir: &Path,
+    state_dir: &Path,
     now: DateTime<Utc>,
     alive: impl Fn(u32) -> bool,
 ) -> Vec<LiveSession> {
@@ -304,7 +392,7 @@ pub fn live_forest_with(
             recency: r.recency,
             live: is_live,
             state,
-            spark: Vec::new(),
+            spark: cached_spark(state_dir, &r.uuid, &r.path),
         });
     }
     // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
