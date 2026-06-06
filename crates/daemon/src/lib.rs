@@ -4,9 +4,11 @@
 //! The bridge drives ANY command; real `claude --resume` is launched only by the user,
 //! never by tests or the agent. See `docs/plans/2026-06-03-woland-design.md`.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::SystemTime;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
@@ -99,13 +101,25 @@ async fn session_json_route(
     AxumPath(uuid): AxumPath<String>,
     State(cfg): State<Arc<Config>>,
 ) -> Response {
-    match load_session(&cfg, &uuid) {
-        Ok(session) => (
+    let Some(dir) = &cfg.projects_dir else {
+        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
+    };
+    let Ok(path) = eigen_forest::resolve(dir, &uuid) else {
+        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    };
+    // Render once per (file, mtime, len); repeat views and forest-browsing skip the
+    // multi-MB read+parse+serialize that dominates the manuscript load latency.
+    match SESSION_CACHE.get_or_render(&path, || {
+        let contents = std::fs::read_to_string(&path).unwrap_or_default();
+        let session = eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+        eigen_render::session_json(&session)
+    }) {
+        Ok(json) => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
-            eigen_render::session_json(&session),
+            json.to_string(),
         )
             .into_response(),
-        Err(e) => e.into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "could not read session").into_response(),
     }
 }
 
@@ -172,6 +186,39 @@ fn load_session(cfg: &Config, uuid: &str) -> Result<eigen_surgery::Session, (Sta
     // parse_str is currently infallible (ParseError is uninhabited).
     Ok(eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {}))
 }
+
+/// Cache of rendered session JSON, keyed by file path and invalidated by the file's
+/// (modified-time, length) stamp. A static transcript is parsed once; the live session
+/// (whose file grows each turn) re-renders only when it actually changes.
+#[derive(Default)]
+struct SessionJsonCache {
+    map: Mutex<HashMap<PathBuf, (SystemTime, u64, Arc<str>)>>,
+}
+
+impl SessionJsonCache {
+    fn get_or_render(
+        &self,
+        path: &Path,
+        render: impl FnOnce() -> String,
+    ) -> std::io::Result<Arc<str>> {
+        let meta = std::fs::metadata(path)?;
+        let stamp = (meta.modified()?, meta.len());
+        if let Some((mtime, len, json)) = self.map.lock().unwrap().get(path) {
+            if (*mtime, *len) == stamp {
+                return Ok(Arc::clone(json));
+            }
+        }
+        let json: Arc<str> = Arc::from(render());
+        self.map
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), (stamp.0, stamp.1, Arc::clone(&json)));
+        Ok(json)
+    }
+}
+
+/// Process-wide session-JSON cache (one daemon serves one user; keying by path is fine).
+static SESSION_CACHE: LazyLock<SessionJsonCache> = LazyLock::new(SessionJsonCache::default);
 
 /// `GET /api/sessions` — recent sessions across all projects, for the sidebar.
 async fn sessions_route(State(cfg): State<Arc<Config>>) -> Response {
@@ -644,6 +691,35 @@ impl Pty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_json_cache_renders_once_until_the_file_changes() {
+        // The Manuscript re-fetches a session's JSON on every Forest click and SSE tick;
+        // re-parsing a multi-MB transcript each time is the load latency. The cache renders
+        // once and serves the stored JSON until the file's (mtime, len) stamp changes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, "one").unwrap();
+
+        let cache = SessionJsonCache::default();
+        let calls = std::cell::Cell::new(0);
+        let render = |tag: &str| {
+            calls.set(calls.get() + 1);
+            tag.to_string()
+        };
+
+        let r1 = cache.get_or_render(&path, || render("JSON-A")).unwrap();
+        let r2 = cache.get_or_render(&path, || render("JSON-B")).unwrap();
+        assert_eq!(&*r1, "JSON-A");
+        assert_eq!(&*r2, "JSON-A", "second view must be served from cache, not re-rendered");
+        assert_eq!(calls.get(), 1, "render must run only once for an unchanged file");
+
+        // Mutating the file changes its (mtime, len) stamp → the cache re-renders.
+        std::fs::write(&path, "three!").unwrap();
+        let r3 = cache.get_or_render(&path, || render("JSON-C")).unwrap();
+        assert_eq!(&*r3, "JSON-C");
+        assert_eq!(calls.get(), 2, "a changed file must invalidate the cache");
+    }
 
     #[test]
     fn session_query_resolves_to_claude_resume_without_spawning() {
