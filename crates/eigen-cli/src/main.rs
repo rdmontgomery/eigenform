@@ -33,6 +33,13 @@ enum Cmd {
         #[command(subcommand)]
         action: SessionsAction,
     },
+    /// the live Forest: sessions corroborated from disk (liveness × state × activity),
+    /// the same snapshot woland's Forest shows
+    Forest {
+        /// only the live sessions (drop the recents)
+        #[arg(long)]
+        live: bool,
+    },
     /// run woland: the browser workbench (serves a pty terminal at localhost)
     Daemon {
         /// port to bind on localhost
@@ -201,6 +208,46 @@ fn main() -> Result<()> {
                 render,
             } => sessions_list(since, all_projects, cwd, render),
         },
+        Cmd::Forest { live } => forest_list(live),
+    }
+}
+
+/// Print the corroborated live Forest — the CLI mirror of woland's Forest surface.
+fn forest_list(live_only: bool) -> Result<()> {
+    let now = chrono::Utc::now();
+    let rows = eigen_forest::live_forest(&projects_dir()?, &sessions_dir()?, &state_dir()?, now);
+    for r in rows {
+        if live_only && !r.live {
+            continue;
+        }
+        let badge = match r.state {
+            eigen_forest::SessionState::Ready => "● ready  ",
+            eigen_forest::SessionState::Working => "◐ working",
+            eigen_forest::SessionState::Recent => "  recent ",
+        };
+        let ago = ago(r.recency, now);
+        let total: u32 = r.spark.iter().sum();
+        let title = r.title.unwrap_or_else(|| "(untitled)".to_string());
+        let title: String = title.chars().take(50).collect();
+        println!(
+            "{badge}  {ago:>4}  {title:<50}  {}  ~{total}tok",
+            r.cwd.display()
+        );
+    }
+    Ok(())
+}
+
+/// Coarse relative time for the CLI Forest (mirrors the browser's fmtAgo).
+fn ago(then: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> String {
+    let s = (now - then).num_seconds().max(0);
+    if s < 45 {
+        "now".to_string()
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else if s < 86_400 {
+        format!("{}h", s / 3600)
+    } else {
+        format!("{}d", s / 86_400)
     }
 }
 
