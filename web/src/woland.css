@@ -128,7 +128,9 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .body { flex: 1; display: flex; min-height: 0; }
 
 /* forest */
-.forest { width: 226px; flex: 0 0 226px; border-right: 1px solid var(--line); background: var(--panel); padding: 20px 0; overflow-y: auto; }
+.forest { width: var(--forest-w, 300px); flex: 0 0 var(--forest-w, 300px); border-right: 1px solid var(--line); background: var(--panel); padding: 20px 0; overflow-y: auto; }
+.forest-resizer { flex: 0 0 5px; margin-left: -3px; z-index: 5; cursor: col-resize; background: transparent; transition: background .14s; }
+.forest-resizer:hover { background: color-mix(in oklab, var(--amber) 30%, transparent); }
 .forest .eyebrow { padding: 0 20px; margin-bottom: 16px; }
 .forest-head { display: flex; align-items: center; padding-right: 14px; }
 .forest-head .eyebrow { flex: 1; margin-bottom: 16px; }

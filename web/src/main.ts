@@ -9,7 +9,7 @@ import { FitAddon } from "@xterm/addon-fit";
 
 import { el } from "./dom.ts";
 import { applyTheme, currentTheme, PALETTES, type ThemeName } from "./theme.ts";
-import { loadDensity, saveDensity, type Density } from "./prefs.ts";
+import { loadDensity, saveDensity, loadForestWidth, saveForestWidth, clampForestWidth, type Density } from "./prefs.ts";
 import { cacheReading, forkReading, tempColor, type CacheReading, SEED_IDLE, TTL_DEFAULT, TTL_EXTENDED } from "./cooling.ts";
 import { loadSession, loadForest, watchForest, fetchSession, forkSession, type ForestEntry, type Session } from "./data.ts";
 import { buildClock } from "./clock.ts";
@@ -87,9 +87,32 @@ const center = el("div", { class: "center" },
   mind.node,
   manuscript.node);
 
+// Draggable splitter on the Forest's right edge — sets --forest-w live, persisted.
+document.documentElement.style.setProperty("--forest-w", `${loadForestWidth()}px`);
+const resizer = el("div", { class: "forest-resizer", title: "drag to resize the Forest" });
+let dragging = false;
+resizer.addEventListener("mousedown", (e) => {
+  dragging = true;
+  (e as MouseEvent).preventDefault();
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+});
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  const w = clampForestWidth((e as MouseEvent).clientX - forest.node.getBoundingClientRect().left);
+  document.documentElement.style.setProperty("--forest-w", `${w}px`);
+});
+window.addEventListener("mouseup", () => {
+  if (!dragging) return;
+  dragging = false;
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  saveForestWidth(parseInt(document.documentElement.style.getPropertyValue("--forest-w"), 10));
+});
+
 const root = el("div", { class: "wb" },
   masthead.node, clock.node,
-  el("div", { class: "body" }, forest.node, center, furnace.node));
+  el("div", { class: "body" }, forest.node, resizer, center, furnace.node));
 
 document.getElementById("root")!.replaceChildren(root);
 
