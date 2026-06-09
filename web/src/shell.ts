@@ -22,6 +22,7 @@ export function buildMasthead(
   const densityBtn = el("button", { class: `ghost density-toggle${density === "compact" ? " on" : ""}`, title: "toggle compact density", onclick: onDensity }, "Aa");
   const sess = el("div", { class: "sess" });
   const setSession = (s: Session): void => {
+    if (!s.id) { sess.replaceChildren("new session · ", el("b", { text: "unwritten" })); return; }
     sess.replaceChildren("session ", el("b", { text: s.id }), ` · ${s.total} turns · ${s.branches}⑂ · viewing ${s.windowStart}–${s.total}`);
   };
   setSession(session);

@@ -44,6 +44,12 @@ export interface ForestEntry {
   uuid?: string; // present for live entries (used to resume the pty)
 }
 
+// A session with no transcript yet — a fresh `claude` whose JSONL is not yet born.
+// The empty `id` is the signal for "unwritten" (Manuscript epigraph, masthead, live baseline).
+export function emptySession(): Session {
+  return { id: "", total: 0, branches: 0, windowStart: 0, exchanges: [] };
+}
+
 // ── STUB: the sample session at 100s-scale ────────────────────────────────
 export function loadSession(): Session {
   // TODO(live): fetch a structured JSON transcript (e.g. GET /api/session/:uuid.json)

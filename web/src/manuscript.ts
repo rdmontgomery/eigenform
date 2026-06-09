@@ -6,9 +6,10 @@
 import { el, svg } from "./dom.ts";
 import { roleMark, leafMark } from "./marks.ts";
 import { mindMargin } from "./mind.ts";
-import { type Session, type Exchange, type Tool, MIND, MIND_DELTAS } from "./data.ts";
+import { type Session, type Exchange, type Tool, emptySession, MIND, MIND_DELTAS } from "./data.ts";
 import { type CacheReading, dropsAt, prefixTokensTo, fmtK, fmtClock } from "./cooling.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { pickEpigraph } from "./epigraphs.ts";
 
 export interface ManuscriptOpts {
   getCache: () => CacheReading;
@@ -28,6 +29,9 @@ export class Manuscript {
   private exNodes = new Map<number, HTMLElement>();
   private turns: HTMLElement; // the exchanges (rebuilt by setSession)
   private leaf: { node: HTMLElement; update(c: CacheReading): void }; // persistent
+  private leafField!: HTMLTextAreaElement; // set in buildLeaf; placeholder swaps for new sessions
+  private epigraphNode: HTMLElement | null = null; // the empty-session invitation
+  private pendingNode: HTMLElement | null = null; // the author's just-sent prompt, echoed before the JSONL round-trips
 
   // Column order is turns → [live region] → leaf, so the chat entry stays pinned below
   // the streaming pty. The leaf is built once and kept (so a draft survives SSE re-renders
@@ -59,15 +63,66 @@ export class Manuscript {
   }
 
   // Swap in a different session (e.g. one chosen from the Forest) and rebuild the turns —
-  // the persistent leaf (and any live region) stay put.
+  // the persistent leaf (and any live region) stay put. A real session also dismisses the
+  // empty-session epigraph and restores the leaf's "continue" voice.
   setSession(session: Session): void {
     this.session = session;
     this.folded.clear();
     this.editingN = null;
     this.editingEl = null;
+    this.clearEpigraph();
+    this.clearPending(); // the real transcript now carries this turn — drop the optimistic echo
     this.renderTurns();
     const n = this.leaf.node.querySelector(".rule .n");
     if (n) n.textContent = String(session.total);
+  }
+
+  // A fresh session with no JSONL yet: clear the transcript, show one epigraph chosen at
+  // random for this open, and turn the leaf into an invitation to begin. The epigraph holds
+  // until a real session is born (setSession) — it is not re-rolled on cooling ticks.
+  setEmpty(): void {
+    this.session = emptySession();
+    this.folded.clear();
+    this.editingN = null;
+    this.editingEl = null;
+    this.clearPending();
+    this.renderTurns();
+    const ep = pickEpigraph();
+    this.clearEpigraph();
+    this.epigraphNode = el("div", { class: "ms-epigraph" },
+      el("p", { class: "epi-line", text: ep.text }),
+      el("p", { class: "epi-attr", text: `— ${ep.attribution}` }));
+    this.col.insertBefore(this.epigraphNode, this.turns);
+    this.leafField.placeholder = "begin the session…";
+    const n = this.leaf.node.querySelector(".rule .n");
+    if (n) n.textContent = "0";
+  }
+
+  private clearEpigraph(): void {
+    this.epigraphNode?.remove();
+    this.epigraphNode = null;
+    this.leafField.placeholder = "continue the session… (typing feeds the furnace)";
+  }
+
+  // Echo the author's just-sent prompt as a provisional user turn so they can see what they
+  // asked while the turn streams — the JSONL only lands (and renders) the real turn later.
+  // It sits above the live region; the next setSession (real transcript) replaces it.
+  showPending(text: string): void {
+    this.clearEpigraph(); // a new session's invitation is over the moment the author commits
+    this.clearPending();
+    this.pendingNode = el("div", { class: "xchg pending" },
+      el("div", { class: "main" },
+        el("div", { style: "position:relative;padding:2px 14px;margin:0 -14px" },
+          el("div", { class: "turn" },
+            el("div", { class: "rolecol" }, roleMark("user", "var(--ink)", 7)),
+            el("p", { class: "prose user", text })))),
+      el("div", { class: "margin" }));
+    this.col.insertBefore(this.pendingNode, this.liveNode ?? this.leaf.node);
+  }
+
+  private clearPending(): void {
+    this.pendingNode?.remove();
+    this.pendingNode = null;
   }
 
   get scroller(): HTMLElement {
@@ -270,7 +325,15 @@ export class Manuscript {
   }
 
   private buildLeaf(): { node: HTMLElement; update(c: CacheReading): void } {
-    const ta = el("textarea", { rows: 1, placeholder: "continue the session… (typing feeds the furnace)" }) as HTMLTextAreaElement;
+    const ta = el("textarea", { rows: 3, placeholder: "continue the session… (typing feeds the furnace)" }) as HTMLTextAreaElement;
+    this.leafField = ta;
+
+    // Grow the field with the prose: reset to the CSS min-height, then expand to fit the
+    // content (capped by max-height in CSS, which lets it scroll once it gets very tall).
+    const autosize = (): void => {
+      ta.style.height = "auto";
+      ta.style.height = `${ta.scrollHeight}px`;
+    };
     const send = el("button", { class: "send", onclick: () => fire() }, "send ↵");
     const foot = el("div", { class: "foot" });
     const caret = el("span", { class: "caret wb-caret" });
@@ -280,9 +343,13 @@ export class Manuscript {
       if (!v) return;
       this.opts.onLeafSend(v);
       ta.value = "";
+      autosize();
       send.classList.remove("ready");
     };
-    ta.addEventListener("input", () => send.classList.toggle("ready", ta.value.trim().length > 0));
+    ta.addEventListener("input", () => {
+      send.classList.toggle("ready", ta.value.trim().length > 0);
+      autosize();
+    });
     ta.addEventListener("keydown", (ev) => {
       const k = ev as KeyboardEvent;
       if (k.key === "Enter" && !k.shiftKey) { k.preventDefault(); fire(); }

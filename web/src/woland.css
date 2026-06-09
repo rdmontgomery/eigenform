@@ -281,6 +281,9 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .margin .mdiff .none { font-family: var(--mono); font-size: 10px; color: var(--faint); font-style: italic; }
 
 /* live "responding" region — the pty tail surfacing in the Manuscript mid-turn */
+/* the author's just-sent prompt, echoed until the real turn lands — provisional, so it sits
+   a touch lighter than a committed turn but reads as the same user voice. */
+.xchg.pending { opacity: 0.78; }
 .ms-live { margin: 18px 0 8px; padding: 12px 16px; border-left: 2px solid var(--amber);
   background: color-mix(in oklab, var(--amber) 5%, transparent); border-radius: 0 6px 6px 0; }
 .ms-live .lhead { display: flex; align-items: center; gap: 9px; margin-bottom: 8px;
@@ -302,12 +305,22 @@ button.ghost:hover { border-color: var(--faint); color: var(--ink); }
 .leaf .leafcol { width: 16px; display: flex; justify-content: center; padding-top: 3px; flex: 0 0 16px; }
 .leaf .field { flex: 1; display: flex; align-items: flex-start; gap: 10px; }
 .leaf .caret { width: 2px; height: 26px; background: var(--amber); margin-top: 1px; flex: 0 0 2px; }
-.leaf textarea { flex: 1; resize: none; background: transparent; border: none; outline: none; font-family: var(--serif); font-size: calc(17px * var(--scale)); line-height: 1.5; color: var(--ink); min-height: 28px; font-style: italic; }
+.leaf textarea { flex: 1; resize: none; background: transparent; border: none; outline: none; font-family: var(--serif); font-size: calc(17px * var(--scale)); line-height: 1.5; color: var(--ink); min-height: 76px; max-height: 40vh; overflow-y: auto; font-style: italic; }
 .leaf textarea:not(:placeholder-shown) { font-style: normal; }
 .leaf .send { font-family: var(--mono); font-size: 11px; border-radius: 4px; padding: 6px 12px; white-space: nowrap; background: transparent; border: 1px solid var(--line); color: var(--faint); cursor: default; }
 .leaf .send.ready { color: var(--bg); background: var(--amber); border-color: var(--amber); cursor: pointer; }
 .leaf .foot { margin-left: 32px; margin-top: 8px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
 .leaf .foot.cold { color: var(--temp-color); }
+
+/* ── the empty Manuscript: an epigraph as invitation ─────────────────────── */
+.ms-epigraph { display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 14px; padding: 13vh 12% 9vh; }
+.ms-epigraph .epi-line { margin: 0; font-family: var(--serif); font-style: italic;
+  font-size: calc(25px * var(--scale)); line-height: 1.4; color: var(--ink);
+  text-wrap: balance; max-width: 24em; }
+.ms-epigraph .epi-attr { margin: 0; font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.04em; color: var(--faint); }
+:root[data-density="compact"] .ms-epigraph { padding: 10vh 12% 7vh; }
 
 /* ── the Mind ──────────────────────────────────────────────────────────── */
 .mind { position: relative; z-index: 25; flex: 0 0 auto; }

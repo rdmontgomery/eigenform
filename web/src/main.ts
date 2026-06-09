@@ -11,7 +11,7 @@ import { el } from "./dom.ts";
 import { applyTheme, currentTheme, PALETTES, type ThemeName } from "./theme.ts";
 import { loadDensity, saveDensity, loadForestWidth, saveForestWidth, clampForestWidth, type Density } from "./prefs.ts";
 import { cacheReading, forkReading, tempColor, type CacheReading, SEED_IDLE, TTL_DEFAULT, TTL_EXTENDED } from "./cooling.ts";
-import { loadSession, loadForest, watchForest, fetchSession, forkSession, type ForestEntry, type Session } from "./data.ts";
+import { loadSession, emptySession, loadForest, watchForest, fetchSession, forkSession, type ForestEntry, type Session } from "./data.ts";
 import { buildClock } from "./clock.ts";
 import { buildMind } from "./mind.ts";
 import { Manuscript } from "./manuscript.ts";
@@ -170,9 +170,10 @@ async function doFork(src: string, turn: string, text: string, fork: ReturnType<
   showToast({ kind: "fork", n: fork.n, drops: fork.drops, prefix: fork.prefix, cold: fork.cold });
   relight();
   // the branch rewinds to before the edited turn; deliver the edited prompt live once the
-  // resumed session has painted and gone idle (auto-send).
-  pendingPrompt = text.trim() || null;
+  // resumed session has painted and gone idle (auto-send). Arm pendingPrompt *after*
+  // selectSession, which clears it — the resumed pty's paint then triggers the quiet send.
   selectSession({ uuid: newUuid, id: newUuid.slice(0, 6), name: "fork", state: "working", live: true, recency: new Date().toISOString(), branches: 0, active: true, shape: [] });
+  pendingPrompt = text.trim() || null;
 }
 
 function showError(msg: string): void {
@@ -183,10 +184,17 @@ function showError(msg: string): void {
 }
 
 function sendLeaf(text: string): void {
-  const sent = sendPrompt(text);
   relight();
   showToast({ kind: "send" });
-  if (sent) beginLive(); // stream the response into the Manuscript until it lands
+  // Echo the prompt into the Manuscript immediately — the author should see what they asked
+  // while the turn streams, not a blank page (a new session has no prior turns) until the JSONL
+  // round-trips. The real transcript replaces this echo on the next render.
+  manuscript.showPending(text);
+  // A new session's pty may still be booting claude's TUI (no JSONL/uuid yet). Hand the first
+  // prompt to the quiet-send path: it delivers once the pty idles, then beginLive. The direct
+  // send (below) is for an established session whose TUI is already at the prompt.
+  if (awaitingBirth) { pendingPrompt = text; schedulePendingSend(); return; }
+  if (sendPrompt(text)) beginLive(); // stream the response into the Manuscript until it lands
 }
 
 // ── the live pty (the real Furnace stream) ──────────────────────────────────
@@ -225,9 +233,15 @@ let activeSession: string | null = null;
 
 // After a fork resumes, the edited prompt is delivered live. We can't know exactly when
 // claude's TUI is ready, so we send once its output has been quiet for a beat (it has
-// finished painting the resumed transcript and is idling at the prompt).
+// finished painting the resumed transcript and is idling at the prompt). A brand-new
+// session's first prompt rides the same quiet-send path while its TUI boots — see sendLeaf.
 let pendingPrompt: string | null = null;
 let pendingTimer: number | undefined;
+
+// True between "new session opened" and "its JSONL is born". While set, a leaf send is the
+// session's FIRST prompt and must wait for the booting pty to idle, not fire immediately —
+// distinct from currentUuid===null, which is also true for the startup sample (no pty).
+let awaitingBirth = false;
 function schedulePendingSend(): void {
   if (!pendingPrompt) return;
   window.clearTimeout(pendingTimer);
@@ -399,6 +413,11 @@ function sendPrompt(text: string): boolean {
 
 function selectSession(entry: ForestEntry): void {
   if (!entry.uuid) return;
+  // Viewing a real, already-born session: drop any new-session pending state so a stale first
+  // prompt can't be delivered into this pty. (doFork re-arms pendingPrompt *after* this call.)
+  awaitingBirth = false;
+  pendingPrompt = null;
+  bornBaseline = null;
   activeSession = entry.uuid;
   connectPty(`?session=${encodeURIComponent(entry.uuid)}`);
   followManuscript(entry.uuid);
@@ -412,14 +431,36 @@ function startNewSession(cwd: string): void {
   activeSession = null;
   currentUuid = null;
   if (es) { es.close(); es = null; }
+  // Reset to an unwritten session: clean page + epigraph, zero live-baseline, no stale prompt.
+  awaitingBirth = true;
+  pendingPrompt = null;
+  // Snapshot the sessions we already know, so the first uuid the Forest adds is *this* newborn.
+  bornBaseline = new Set(forestEntries.map((e) => e.uuid).filter((u): u is string => !!u));
+  window.clearTimeout(pendingTimer);
+  current = emptySession();
+  masthead.setSession(current);
+  manuscript.setEmpty(); // clean page + a random epigraph until the first prompt births the JSONL
   connectPty("?new=" + encodeURIComponent(cwd));
-  furnace.setOpen(true);
 }
 
 function onSessionBorn(uuid: string): void {
+  if (activeSession === uuid) return; // already adopted (pty message + Forest can both report it)
+  awaitingBirth = false; // the JSONL exists now; subsequent leaf sends go direct
+  bornBaseline = null; // stop watching the Forest for a newborn — we have it
   activeSession = uuid;
   followManuscript(uuid);
   renderForest();
+}
+
+// Forest-fallback birth: the pty `session` message is a single best-effort packet; if it's
+// missed the Manuscript would hang on the epigraph forever. The live Forest snapshot is an
+// independent, reliable signal — while awaiting a new session, adopt the first uuid that
+// appears in the Forest but wasn't known when the session opened.
+let bornBaseline: Set<string> | null = null;
+function maybeAdoptNewborn(): void {
+  if (!awaitingBirth || !bornBaseline) return;
+  const fresh = forestEntries.find((e) => e.uuid && !bornBaseline!.has(e.uuid));
+  if (fresh?.uuid) onSessionBorn(fresh.uuid);
 }
 
 // Render the chosen session into the Manuscript and follow it live: re-fetch the
@@ -464,7 +505,7 @@ function renderForest(): void {
 async function initForest(): Promise<void> {
   forestEntries = await loadForest(); // paint once before the first SSE frame lands
   renderForest();
-  watchForest((entries) => { forestEntries = entries; renderForest(); });
+  watchForest((entries) => { forestEntries = entries; renderForest(); maybeAdoptNewborn(); });
 }
 
 // ── dev live-reload — never drops a live session ────────────────────────────
