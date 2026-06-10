@@ -8,6 +8,15 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+/// A new-session directory candidate: a path the author might start `claude` in,
+/// tagged by whether it's a recent session cwd (`recent: true`) or merely an
+/// unvisited immediate subdirectory of the configured code root (`recent: false`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    pub path: PathBuf,
+    pub recent: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     /// The on-disk name of the project subdirectory, e.g.
@@ -64,6 +73,52 @@ pub fn enumerate_projects(projects_dir: &Path) -> Result<Vec<Project>> {
 pub fn project_for_cwd(projects_dir: &Path, cwd: &Path) -> Result<Option<Project>> {
     let projects = enumerate_projects(projects_dir)?;
     Ok(projects.into_iter().find(|p| p.cwd == cwd))
+}
+
+/// Return the immediate subdirectories of `root`, sorted by path. Only
+/// directories are returned; loose files are ignored. Errors if `root`
+/// cannot be read (e.g. it does not exist).
+pub fn immediate_subdirs(root: &Path) -> Result<Vec<PathBuf>> {
+    let entries = fs::read_dir(root).map_err(|e| Error::Io {
+        path: root.to_path_buf(),
+        source: e,
+    })?;
+
+    let mut out: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Merge recent session cwds with the immediate subdirs of the code root into
+/// one candidate list: recents first (in order, de-duplicated), then any
+/// subdir not already present as a recent, each tagged `recent: false`.
+pub fn merge_candidates(recents: &[PathBuf], subdirs: &[PathBuf]) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = Vec::new();
+    let mut seen: std::collections::HashSet<&PathBuf> = std::collections::HashSet::new();
+
+    for path in recents {
+        if seen.insert(path) {
+            out.push(Candidate {
+                path: path.clone(),
+                recent: true,
+            });
+        }
+    }
+    for path in subdirs {
+        if seen.insert(path) {
+            out.push(Candidate {
+                path: path.clone(),
+                recent: false,
+            });
+        }
+    }
+    out
 }
 
 fn first_cwd_in_dir(dir: &Path) -> Result<Option<PathBuf>> {

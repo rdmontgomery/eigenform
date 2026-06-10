@@ -73,7 +73,9 @@ fn show_resolves_a_session_by_uuid_prefix() {
 #[test]
 fn list_shows_recent_sessions_with_titles() {
     let (home, _uuid) = temp_home_with_session();
-    let out = run_home(home.path(), &["sessions", "list", "--all-projects"]);
+    // `--since all` disables the time window; the fixture's fixed timestamp
+    // would otherwise fall out of the default 7-day window as the clock advances.
+    let out = run_home(home.path(), &["sessions", "list", "--all-projects", "--since", "all"]);
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("aaaa1111"), "got:\n{stdout}");
