@@ -1179,6 +1179,33 @@ mod tests {
     }
 
     #[test]
+    fn classify_at_exactly_threshold_is_not_working() {
+        // The working gate is `since_activity < WORKING_THRESHOLD` (strict `<`).
+        // At exactly 2s the gate does NOT fire; the grid is checked instead.
+        // An empty grid → Idle (not Working).
+        assert_eq!(
+            classify(&[], WORKING_THRESHOLD, false),
+            PtyState::Idle,
+            "at exactly the 2s boundary the working gate must NOT apply"
+        );
+    }
+
+    #[test]
+    fn exited_wins_over_selector_grid() {
+        // exited=true must trump the grid check: even a valid selector grid with
+        // recent silence should report Exited, not Waiting.
+        let selector_rows = vec![
+            " ❯ 1. Yes, I trust this folder".into(),
+            "   2. No, exit".into(),
+        ];
+        assert_eq!(
+            classify(&selector_rows, WORKING_THRESHOLD, true),
+            PtyState::Exited,
+            "exited must win over a selector grid"
+        );
+    }
+
+    #[test]
     fn rows_text_exposes_the_grid_for_the_state_detector() {
         let mut m = TermModel::new(24, 80);
         m.feed(b"\x1b[?1049h\x1b[2J\x1b[H  \xe2\x9d\xaf 1. Yes\r\n    2. No");
