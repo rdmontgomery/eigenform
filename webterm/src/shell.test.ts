@@ -57,6 +57,12 @@ test("relativeRecency: days ago for >= 24h", () => {
   assert.equal(relativeRecency(iso3d, now), "3d ago");
 });
 
+test("relativeRecency: returns empty string for unparseable ISO (NaN guard)", () => {
+  const now = 1_000_000_000_000;
+  assert.equal(relativeRecency("not-a-date", now), "");
+  assert.equal(relativeRecency("", now), "");
+});
+
 test("relativeRecency: handles +00:00 offset strings from backend", () => {
   // Backend emits +00:00, not Z; both must parse correctly.
   const now = 1_000_000_000_000;

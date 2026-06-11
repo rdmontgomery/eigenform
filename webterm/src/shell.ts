@@ -299,6 +299,12 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   function renderSidebar(rows: RosterRow[], now: number) {
+    // Guard: don't clobber an active inline-rename input.
+    if (sidebar.contains(document.activeElement) &&
+        document.activeElement instanceof HTMLInputElement &&
+        document.activeElement.classList.contains("roster-rename-input")) {
+      return;
+    }
     sidebar.innerHTML = "";
     const header = el("div", "sidebar-header");
     header.textContent = "sessions";
@@ -438,10 +444,16 @@ export function mountShell(appEl: HTMLElement): void {
 
   void boot();
 
-  // 3-second roster poll; cancel on hide to avoid background fan-out.
-  const pollInterval = setInterval(() => void refreshRoster(), 3000);
+  // 3-second roster poll; cancel on hide, restart on show to avoid background fan-out.
+  let pollInterval = setInterval(() => void refreshRoster(), 3000);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") clearInterval(pollInterval);
+    if (document.visibilityState === "hidden") {
+      clearInterval(pollInterval);
+    } else {
+      // Page became visible again — refresh immediately then resume polling.
+      void refreshRoster();
+      pollInterval = setInterval(() => void refreshRoster(), 3000);
+    }
   });
 }
 

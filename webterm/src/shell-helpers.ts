@@ -24,6 +24,7 @@ import type { PtyInfo } from "./types.ts";
  */
 export function relativeRecency(iso: string, now: number): string {
   const ts = new Date(iso).getTime();
+  if (isNaN(ts)) return "";
   const diff = Math.max(0, now - ts);
   const s = Math.floor(diff / 1000);
   if (s < 60) return "just now";
