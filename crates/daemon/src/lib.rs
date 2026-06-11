@@ -612,8 +612,8 @@ async fn close_with_reason(socket: WebSocket, reason: &'static str) -> Result<()
 
 /// `GET /api/pty` — the live-pty roster. Sweeps (via `host.list()`) then serializes one
 /// row per registered pty. `id` is a string (JS Number can't hold a u64 exactly);
-/// timestamps are ISO-8601 (matching `/api/forest`'s recency). `state` is `"unknown"`
-/// until Task 1.9 lands the classifier.
+/// timestamps are ISO-8601 (matching `/api/forest`'s recency). `state` is the
+/// classifier's `"working" | "waiting" | "idle" | "exited"` (Task 1.9).
 async fn pty_list_route(State(state): State<AppState>) -> Response {
     use chrono::{DateTime, Utc};
     // Backfill uuids from claude's pid authority (`sessions/<pid>.json`) before listing,
@@ -627,16 +627,19 @@ async fn pty_list_route(State(state): State<AppState>) -> Response {
         .list()
         .iter()
         .map(|live| {
-            let (uuid, last_activity, exited) = {
+            let (uuid, last_activity) = {
                 let meta = live.meta_snapshot();
-                (meta.uuid, meta.last_activity, meta.exited_at)
+                (meta.uuid, meta.last_activity)
             };
+            // The classifier owns the exited short-circuit now (precedence: exited →
+            // working → waiting → idle); `state()` takes shared then meta sequentially.
+            let state = live.state().as_str();
             let to_iso = |t: SystemTime| DateTime::<Utc>::from(t).to_rfc3339();
             serde_json::json!({
                 "id": live.id.to_string(),
                 "cwd": live.cwd.as_ref().map(|c| c.display().to_string()),
                 "uuid": uuid,
-                "state": if exited.is_some() { "exited" } else { "unknown" },
+                "state": state,
                 "spawnedAt": to_iso(live.spawned_at),
                 "lastActivity": to_iso(last_activity),
             })

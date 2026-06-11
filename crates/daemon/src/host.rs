@@ -482,6 +482,130 @@ struct PidFile {
 /// reaps it. The design doc's "keep briefly for a final view" — ten minutes.
 pub const SWEEP_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
+/// Below this since-last-output age, a pty counts as actively *working* — claude
+/// is streaming. Above it, the grid decides (waiting selector, else idle). Design
+/// doc §5 state taxonomy.
+pub const WORKING_THRESHOLD: Duration = Duration::from_secs(2);
+
+/// The state taxonomy reported per pty on `GET /api/pty` (design doc §5). Serializes
+/// to lowercase strings: `"working" | "waiting" | "idle" | "exited"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtyState {
+    /// The child has exited; this wins over everything.
+    Exited,
+    /// Output within the last [`WORKING_THRESHOLD`] — claude is streaming.
+    Working,
+    /// Blocked on a selector widget (trust/permission/AskUserQuestion/plan): a grid
+    /// of ≥2 consecutive numbered rows with exactly one `❯` (spike 08), and quiet.
+    Waiting,
+    /// Quiet and not blocked on a selector — idle at a prompt.
+    Idle,
+}
+
+impl PtyState {
+    /// The wire string for `/api/pty` — matches the route's `json!` row builder.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PtyState::Exited => "exited",
+            PtyState::Working => "working",
+            PtyState::Waiting => "waiting",
+            PtyState::Idle => "idle",
+        }
+    }
+}
+
+/// Classify a pty's state from its visible grid, time since last output, and exit flag.
+///
+/// Precedence: **exited → working (activity < [`WORKING_THRESHOLD`]) → waiting → idle**.
+/// Working outranks waiting deliberately: the selector rows persist in the grid while
+/// claude streams text above them, so a *streaming* selector reads as working; a
+/// *blocked* selector emits no output, so the activity gate falls through to the grid
+/// check naturally.
+///
+/// `rows` tolerates short/empty vecs: [`TermModel::rows_text`] elides trailing blank
+/// rows (`contents().lines()`), so `rows.len()` is not the viewport height.
+pub fn classify(rows: &[String], since_activity: Duration, exited: bool) -> PtyState {
+    if exited {
+        return PtyState::Exited;
+    }
+    if since_activity < WORKING_THRESHOLD {
+        return PtyState::Working;
+    }
+    if is_selector_grid(rows) {
+        return PtyState::Waiting;
+    }
+    PtyState::Idle
+}
+
+/// Does the grid tail hold a blocked-choice selector (spike 08)? True iff there is a
+/// run of ≥2 *consecutive* rows each matching the numbered-option signature, with
+/// *exactly one* `❯` among the rows of that run (the selection marker; its presence in
+/// exactly one row is the strong corroborator).
+fn is_selector_grid(rows: &[String]) -> bool {
+    let mut run_start = 0usize;
+    let mut i = 0usize;
+    while i <= rows.len() {
+        let in_run = i < rows.len() && is_option_row(&rows[i]);
+        if !in_run {
+            // A blank/non-option row breaks the run (rows must be consecutive). Check
+            // the run that just ended [run_start, i).
+            if i - run_start >= 2 {
+                let carets: usize = rows[run_start..i]
+                    .iter()
+                    .filter(|r| r.chars().any(|c| c == '❯'))
+                    .count();
+                if carets == 1 {
+                    return true;
+                }
+            }
+            run_start = i + 1;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Match one numbered-option row: optional leading whitespace, optional `❯` (+ws),
+/// one-or-more digits, `.`, whitespace, then at least one non-whitespace char. Spike
+/// 08's `^\s*(❯\s*)?\d+\.\s+\S`. Hand-rolled over `chars()` (not bytes) so the
+/// multibyte `❯` (U+276F) is handled correctly; no `regex` dep for one matcher.
+fn is_option_row(row: &str) -> bool {
+    let mut chars = row.chars().peekable();
+    // optional leading whitespace
+    while chars.peek().is_some_and(|c| c.is_whitespace()) {
+        chars.next();
+    }
+    // optional `❯` then optional whitespace
+    if chars.peek() == Some(&'❯') {
+        chars.next();
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+    }
+    // one-or-more ASCII digits
+    let mut saw_digit = false;
+    while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+        chars.next();
+        saw_digit = true;
+    }
+    if !saw_digit {
+        return false;
+    }
+    // literal `.`
+    if chars.next() != Some('.') {
+        return false;
+    }
+    // one-or-more whitespace
+    if !chars.peek().is_some_and(|c| c.is_whitespace()) {
+        return false;
+    }
+    while chars.peek().is_some_and(|c| c.is_whitespace()) {
+        chars.next();
+    }
+    // at least one non-whitespace label char
+    chars.peek().is_some_and(|c| !c.is_whitespace())
+}
+
 /// Why a [`SessionHost::kill`] could not act. The HTTP layer (Task 1.7) maps this to
 /// a status code: `NotFound` → 404, `Ok` → 204.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -654,6 +778,33 @@ impl LivePty {
             last_activity: meta.last_activity,
             exited_at: meta.exited_at,
         }
+    }
+
+    /// Classify this pty's [`PtyState`] (working/waiting/idle/exited) from its grid,
+    /// time since last output, and exit flag (design doc §5; the classifier is the pure
+    /// [`classify`]).
+    ///
+    /// # Lock discipline
+    /// Takes the two locks *sequentially*, never together: `shared` for the grid rows,
+    /// released, then `meta` for activity/exit. Both use poison-recovery. The brief gap
+    /// between the takes can't misclassify meaningfully — the only race is the pump
+    /// feeding a chunk and stamping activity between them, which at worst reads a
+    /// just-pre-output grid against just-post-output activity, i.e. resolves to working
+    /// either way.
+    pub fn state(&self) -> PtyState {
+        let rows = {
+            let shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+            shared.model.rows_text()
+        }; // shared released before taking meta — never hold both.
+        let (since_activity, exited) = {
+            let meta = self.meta.lock().unwrap_or_else(PoisonError::into_inner);
+            let since = meta
+                .last_activity
+                .elapsed()
+                .unwrap_or(Duration::ZERO); // clock skew (activity "in the future") → treat as just-now.
+            (since, meta.exited_at.is_some())
+        };
+        classify(&rows, since_activity, exited)
     }
 
     /// When the child exited, or `None` while it is still running.
@@ -960,6 +1111,71 @@ mod tests {
         host.reconcile(dir.path());
         assert_eq!(pty.uuid(), None);
         host.kill(pty.id).ok();
+    }
+
+    /// A tiny `Duration` for the activity-age axis of `classify`.
+    fn age_secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    #[test]
+    fn selector_grid_means_waiting() {
+        let rows = vec![
+            "Do you trust this folder?".into(),
+            " ❯ 1. Yes, I trust this folder".into(),
+            "   2. No, exit".into(),
+        ];
+        assert_eq!(classify(&rows, age_secs(10), false), PtyState::Waiting);
+    }
+
+    #[test]
+    fn recent_output_means_working() {
+        assert_eq!(classify(&[], age_secs(1), false), PtyState::Working);
+    }
+
+    #[test]
+    fn quiet_prompt_means_idle() {
+        assert_eq!(classify(&["> ".into()], age_secs(60), false), PtyState::Idle);
+    }
+
+    #[test]
+    fn exited_wins() {
+        assert_eq!(classify(&[], age_secs(1), true), PtyState::Exited);
+    }
+
+    #[test]
+    fn numbered_list_without_caret_is_not_waiting() {
+        let rows = vec!["1. apples".into(), "2. oranges".into()];
+        assert_ne!(classify(&rows, age_secs(10), false), PtyState::Waiting);
+    }
+
+    #[test]
+    fn two_carets_is_not_waiting() {
+        // Exactly one ❯ is the corroborator (spike 08): two selected rows is not
+        // a coherent selector, so it falls through to idle, not waiting.
+        let rows = vec!["❯ 1. one".into(), "❯ 2. two".into()];
+        assert_ne!(classify(&rows, age_secs(10), false), PtyState::Waiting);
+    }
+
+    #[test]
+    fn selector_rows_split_by_blank_row_are_not_consecutive() {
+        // Spike 08 says ≥2 *consecutive* numbered rows. A blank row between them
+        // breaks the run, so this is not a waiting selector.
+        let rows = vec![
+            " ❯ 1. Yes".into(),
+            "".into(),
+            "   2. No".into(),
+        ];
+        assert_ne!(classify(&rows, age_secs(10), false), PtyState::Waiting);
+    }
+
+    #[test]
+    fn working_outranks_waiting_while_streaming() {
+        // The selector grid persists while claude streams above it; recent output
+        // (activity < 2s) means working even if the grid is present. A *blocked*
+        // selector produces no output, so the activity gate falls through to waiting.
+        let rows = vec![" ❯ 1. Yes".into(), "   2. No".into()];
+        assert_eq!(classify(&rows, age_secs(1), false), PtyState::Working);
     }
 
     #[test]

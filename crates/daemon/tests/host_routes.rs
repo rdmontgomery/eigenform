@@ -185,6 +185,14 @@ async fn closing_the_socket_leaves_the_pty_listed() {
         row.get("state").is_some(),
         "row must carry `state`: {row}"
     );
+    // The classifier replaced the "unknown" placeholder (Task 1.9). A freshly-spawned
+    // sh pty is either still streaming its prompt (working) or quiet (idle) — never
+    // "unknown", and never "waiting" (that's claude-specific; spike-08 grid is unit-tested).
+    let st = row["state"].as_str().unwrap();
+    assert!(
+        st == "working" || st == "idle",
+        "fresh sh pty state must be working or idle, got {st:?}"
+    );
 }
 
 #[tokio::test]
