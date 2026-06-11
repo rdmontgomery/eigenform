@@ -13,7 +13,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -302,7 +302,15 @@ impl SessionHost {
                     live.meta.lock().unwrap_or_else(PoisonError::into_inner).last_activity =
                         SystemTime::now();
                 }
-                // Task 1.5: mark_exited — reader EOF means the child closed the master.
+                // Task 1.5: reader EOF means the child closed the master — reap and
+                // mark exited. The pump holds only a `Weak`; if the entry was killed or
+                // removed mid-read, `upgrade()` fails and there is nothing to mark
+                // (kill() already reaped). This exit point holds NO locks, so
+                // mark_exited (which takes pty → meta, then broadcasts under shared) is
+                // free to acquire them in canonical order.
+                if let Some(live) = weak.upgrade() {
+                    live.mark_exited();
+                }
             })
             .expect("spawn pty-pump thread");
 
@@ -314,9 +322,68 @@ impl SessionHost {
         self.inner.lock().unwrap().get(&id).cloned()
     }
 
-    /// All currently-registered live ptys (order unspecified).
+    /// All currently-registered live ptys (order unspecified), after a GC sweep.
+    ///
+    /// `list` is the canonical read path (the roster, the CLI mirror, 1.7's index),
+    /// so it sweeps first with the default [`SWEEP_MAX_AGE`]: a caller never sees an
+    /// entry whose final view has long expired. Use [`SessionHost::list_unswept`] if
+    /// you need the raw registry without triggering a sweep.
     pub fn list(&self) -> Vec<Arc<LivePty>> {
+        self.sweep(SWEEP_MAX_AGE);
+        self.list_unswept()
+    }
+
+    /// All currently-registered live ptys without sweeping. Tests and lifecycle code
+    /// that want to observe the registry exactly as it stands use this.
+    pub fn list_unswept(&self) -> Vec<Arc<LivePty>> {
         self.inner.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Reap entries that exited more than `max_age` ago. Live entries (never exited)
+    /// and recently-exited ones (still within their "final view" window) are retained;
+    /// everything older is dropped from the registry.
+    ///
+    /// Dropping the registry's `Arc` does not necessarily kill the pty instantly — an
+    /// attached client holding its own clone keeps the `LivePty` alive until it
+    /// detaches (see the `spawn` doc). For a long-dead entry that is acceptable: the
+    /// child is already reaped, and the clone is a harmless husk that frees on detach.
+    pub fn sweep(&self, max_age: Duration) {
+        let now = SystemTime::now();
+        self.inner.lock().unwrap().retain(|_, live| {
+            match live.exited_at() {
+                None => true, // live: never reap.
+                Some(exited) => {
+                    // Keep while the entry exited recently (within max_age). `elapsed`
+                    // errors only on clock skew (exited in the "future"); treat that as
+                    // recent (keep) rather than reaping something that just died.
+                    now.duration_since(exited)
+                        .map(|age| age <= max_age)
+                        .unwrap_or(true)
+                }
+            }
+        });
+    }
+
+    /// Terminate the child for `id` and remove its entry, returning `Ok(())` on a hit.
+    ///
+    /// Semantics for the HTTP layer (Task 1.7): an unknown id is [`KillError::NotFound`]
+    /// (→ 404); a successful kill is `Ok` (→ 204). We `remove` first (taking the
+    /// registry's `Arc`), then kill the child through the pty lock. Removal is what makes
+    /// this idempotent against the pump's EOF path: if the child was already dying, the
+    /// pump's `mark_exited` finds the entry gone via its `Weak` and does nothing.
+    ///
+    /// We do not `wait_child` here: `kill` (SIGKILL) closes the master, the pump's reader
+    /// EOFs, and that path could reap — but the pump holds only a `Weak` to a now-removed
+    /// entry, so it exits without reaping. To avoid leaving a zombie, kill then reap
+    /// synchronously under the same pty lock.
+    pub fn kill(&self, id: PtyId) -> Result<(), KillError> {
+        let live = self.remove(id).ok_or(KillError::NotFound)?;
+        let mut pty = live.pty.lock().unwrap_or_else(PoisonError::into_inner);
+        // Best-effort: if the child already exited (lost the race to the EOF path), the
+        // kill/wait may error harmlessly. We still reap to avoid a lingering zombie.
+        let _ = pty.kill_child();
+        let _ = pty.wait_child();
+        Ok(())
     }
 
     /// Drop `id` from the registry, returning the removed entry (if any). The `Arc`
@@ -329,6 +396,28 @@ impl SessionHost {
         self.inner.lock().unwrap().remove(&id)
     }
 }
+
+/// How long an exited pty is kept for a final view before [`SessionHost::sweep`]
+/// reaps it. The design doc's "keep briefly for a final view" — ten minutes.
+pub const SWEEP_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+
+/// Why a [`SessionHost::kill`] could not act. The HTTP layer (Task 1.7) maps this to
+/// a status code: `NotFound` → 404, `Ok` → 204.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KillError {
+    /// No registered pty has this id (already reaped, never existed, or killed twice).
+    NotFound,
+}
+
+impl std::fmt::Display for KillError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KillError::NotFound => write!(f, "no live pty with that id"),
+        }
+    }
+}
+
+impl std::error::Error for KillError {}
 
 /// Mutable, frequently-updated facts about a live pty, guarded separately from the
 /// terminal model and the pty handle so a reader updating activity never blocks an
@@ -445,6 +534,43 @@ impl LivePty {
         shared
             .subscribers
             .retain(|tx| tx.send(Outbound::Text(msg.clone())).is_ok());
+    }
+
+    /// When the child exited, or `None` while it is still running.
+    pub fn exited_at(&self) -> Option<SystemTime> {
+        self.meta
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .exited_at
+    }
+
+    /// Reap the child and record its exit. Called by the pump at reader EOF (the
+    /// master closed because the child died). Idempotent on the timestamp: if already
+    /// marked, we leave the first exit time and skip re-broadcasting.
+    ///
+    /// # Lock discipline
+    /// `broadcast_text` takes `shared`, so it must NOT run while we hold `shared` or
+    /// `meta`. We therefore: (1) reap + stamp under `pty` then `meta` (canonical
+    /// order, both released), then (2) broadcast the exit notice with no lock held.
+    pub fn mark_exited(&self) {
+        // (1) Reap the zombie under the pty lock, then stamp meta. Neither lock is held
+        // across the broadcast below.
+        self.pty
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .wait_child()
+            .ok(); // already-reaped (e.g. kill won the race) is fine.
+
+        {
+            let mut meta = self.meta.lock().unwrap_or_else(PoisonError::into_inner);
+            if meta.exited_at.is_some() {
+                return; // already marked: don't re-stamp or re-broadcast.
+            }
+            meta.exited_at = Some(SystemTime::now());
+        } // meta released here.
+
+        // (2) No lock held: safe to take `shared` inside broadcast_text.
+        self.broadcast_text(r#"{"type":"exit"}"#.to_string());
     }
 
     /// Send input bytes to the child's stdin (keystrokes from an attached client).

@@ -796,6 +796,20 @@ impl Pty {
         self.child.process_id()
     }
 
+    /// Block until the child exits, reaping the zombie. Called by the session host's
+    /// pump at EOF (the reader saw the master close), so the child is already dying or
+    /// dead and this returns promptly. Errors propagate from the underlying wait.
+    pub fn wait_child(&mut self) -> std::io::Result<()> {
+        self.child.wait().map(|_status| ())
+    }
+
+    /// Signal the child to terminate (SIGKILL via portable-pty's `kill`). The pump's
+    /// EOF path then reaps it; an explicit `wait_child` here would block, so callers
+    /// that want a synchronous reap call `wait_child` after.
+    pub fn kill_child(&mut self) -> std::io::Result<()> {
+        self.child.kill()
+    }
+
     /// Send bytes to the child's stdin.
     pub fn write_input(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.writer.write_all(bytes)?;
