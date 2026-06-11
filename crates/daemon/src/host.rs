@@ -231,17 +231,19 @@ pub struct SessionHost {
 }
 
 impl SessionHost {
-    /// Allocate a fresh id, build the `LivePty` around it, store and return the id.
+    /// Allocate a fresh id, build the `LivePty` around it, store it, and return the
+    /// stored `Arc` so the caller (Task 1.4's `spawn`) can downgrade to a `Weak` for
+    /// the pump without a redundant `get(id).unwrap()`.
     ///
     /// The id is allocated *first* and handed to `build` so the `LivePty` can carry
     /// its own id (needed by 1.4's pump, which tags fan-out and self-removal by id).
     /// Taking a builder closure — rather than the plan's `insert(LivePty::new(..))`
     /// sketch — is what lets the entry know the id the registry chose for it.
-    pub fn insert(&self, build: impl FnOnce(PtyId) -> LivePty) -> PtyId {
+    pub fn insert(&self, build: impl FnOnce(PtyId) -> LivePty) -> Arc<LivePty> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let live = Arc::new(build(id));
-        self.inner.lock().unwrap().insert(id, live);
-        id
+        self.inner.lock().unwrap().insert(id, Arc::clone(&live));
+        live
     }
 
     /// The live pty for `id`, if still registered.
@@ -254,10 +256,14 @@ impl SessionHost {
         self.inner.lock().unwrap().values().cloned().collect()
     }
 
-    /// Drop `id` from the registry. The `Arc` (and its pty) lives until the last
-    /// attached client also drops its clone.
-    pub fn remove(&self, id: PtyId) {
-        self.inner.lock().unwrap().remove(&id);
+    /// Drop `id` from the registry, returning the removed entry (if any). The `Arc`
+    /// (and its pty) lives until the last attached client also drops its clone.
+    ///
+    /// The `Option` carries the 404/204 distinction Task 1.7 needs and lets 1.5
+    /// avoid double-reaping: `Some` means this call did the removal, `None` that the
+    /// id was already gone.
+    pub fn remove(&self, id: PtyId) -> Option<Arc<LivePty>> {
+        self.inner.lock().unwrap().remove(&id)
     }
 }
 
@@ -308,11 +314,13 @@ pub struct LivePty {
 
 impl LivePty {
     /// Build a live pty around an already-spawned [`crate::Pty`]. The id comes from
-    /// the registry (see [`SessionHost::insert`]). A fresh 80x24 [`TermModel`] is
-    /// created here; Task 1.4's first resize/feed will bring it to the real size.
-    pub fn new(id: PtyId, pty: crate::Pty, cwd: Option<PathBuf>) -> Self {
+    /// the registry (see [`SessionHost::insert`]). The [`TermModel`] starts at the
+    /// pty's real `size` (`(cols, rows)`, matching [`crate::Pty::spawn`]) so the
+    /// model and pty dimensions agree from byte zero — no first-feed-at-wrong-size.
+    pub fn new(id: PtyId, pty: crate::Pty, cwd: Option<PathBuf>, size: (u16, u16)) -> Self {
         let now = SystemTime::now();
         let child_pid = pty.child_pid().unwrap_or(0);
+        let (cols, rows) = size;
         Self {
             id,
             cwd,
@@ -324,7 +332,7 @@ impl LivePty {
                 child_pid,
             }),
             shared: Mutex::new(PtyShared {
-                model: TermModel::new(24, 80),
+                model: TermModel::new(rows, cols),
                 subscribers: Vec::new(),
             }),
             pty: Mutex::new(pty),
@@ -347,7 +355,7 @@ mod tests {
     /// the process; these tests exercise only insert/get/list/remove/id allocation.
     fn live_pty(host: &SessionHost, cwd: Option<PathBuf>) -> PtyId {
         let pty = crate::Pty::spawn("cat", &[], cwd.as_deref(), (80, 24)).expect("spawn cat");
-        host.insert(|id| LivePty::new(id, pty, cwd))
+        host.insert(|id| LivePty::new(id, pty, cwd, (80, 24))).id
     }
 
     #[test]
