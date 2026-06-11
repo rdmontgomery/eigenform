@@ -9,12 +9,13 @@
 //! viewport grid (no scrollback ring) is sufficient — `Parser::new(rows, cols, 0)`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 /// Tracks the terminal modes vt100 does NOT model, so a re-attached xterm gets
 /// the right screen buffer and input behaviour. Covers, all observed in claude's
@@ -246,6 +247,58 @@ impl SessionHost {
         live
     }
 
+    /// Spawn `program` in a pty, register it, and start the reader-thread pump that
+    /// feeds every byte into the model and fans it out to attached subscribers.
+    ///
+    /// `size` is `(cols, rows)` (matching [`crate::Pty::spawn`]); the model is built
+    /// at that size so it agrees with the pty from byte zero.
+    ///
+    /// The pump holds a `Weak<LivePty>`, not a strong `Arc`: once the registry drops
+    /// the entry and every attached receiver is gone, the `LivePty` (and its pty)
+    /// drops, the next `upgrade()` returns `None`, and the pump exits. Attached
+    /// receivers do NOT keep the `LivePty` alive (they hold only the channel), so a
+    /// detached, removed pty really does die.
+    pub fn spawn(
+        &self,
+        program: &str,
+        args: &[&str],
+        cwd: Option<&Path>,
+        size: (u16, u16),
+    ) -> anyhow::Result<Arc<LivePty>> {
+        let pty = crate::Pty::spawn(program, args, cwd, size)?;
+        let mut reader = pty.reader()?;
+        let cwd_buf = cwd.map(Path::to_path_buf);
+        let live = self.insert(|id| LivePty::new(id, pty, cwd_buf, size));
+        let weak = Arc::downgrade(&live);
+
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break, // EOF or read error: stop pumping.
+                    Ok(n) => n,
+                };
+                // Upgrade per-chunk: if the LivePty is gone there's no one to feed.
+                let Some(live) = weak.upgrade() else { break };
+
+                // One critical section: feed the model AND fan out, so an attach that
+                // snapshots between these two steps cannot miss (or double) this chunk.
+                let mut shared = live.shared.lock().unwrap();
+                shared.model.feed(&buf[..n]);
+                let chunk = &buf[..n];
+                shared
+                    .subscribers
+                    .retain(|tx| tx.send(Outbound::Binary(chunk.to_vec())).is_ok());
+                drop(shared); // release before taking meta — never hold two locks here.
+
+                live.meta.lock().unwrap().last_activity = SystemTime::now();
+            }
+            // Task 1.5: mark_exited — reader EOF means the child closed the master.
+        });
+
+        Ok(live)
+    }
+
     /// The live pty for `id`, if still registered.
     pub fn get(&self, id: PtyId) -> Option<Arc<LivePty>> {
         self.inner.lock().unwrap().get(&id).cloned()
@@ -286,11 +339,9 @@ pub struct PtyMeta {
 /// to subscribers (an attach that joins between those two steps would miss the chunk
 /// the snapshot didn't yet include).
 struct PtyShared {
-    // Task 1.4: the pump feeds chunks into the model; attach reads its snapshot.
-    #[allow(dead_code)]
+    /// The pump feeds chunks into the model; attach reads its snapshot.
     model: TermModel,
-    // Task 1.4: the pump pushes every chunk to these; attach/detach add/remove senders.
-    #[allow(dead_code)]
+    /// The pump pushes every chunk to these; attach/detach add/remove senders.
     subscribers: Vec<UnboundedSender<Outbound>>,
 }
 
@@ -306,9 +357,9 @@ pub struct LivePty {
     pub cwd: Option<PathBuf>,
     pub spawned_at: SystemTime,
     pub meta: Mutex<PtyMeta>,
-    #[allow(dead_code)] // Task 1.4: the pump feeds the model and fans out to subscribers.
+    /// The pump feeds the model and fans out to subscribers; attach snapshots+subscribes.
     shared: Mutex<PtyShared>,
-    #[allow(dead_code)] // Task 1.4+: write_input / resize / child reaping.
+    /// write_input / resize go through here; Task 1.5 adds child reaping.
     pty: Mutex<crate::Pty>,
 }
 
@@ -337,6 +388,53 @@ impl LivePty {
             }),
             pty: Mutex::new(pty),
         }
+    }
+
+    /// Attach a viewer: take a repaint `snapshot` of the current screen AND register
+    /// a subscriber for the live stream, atomically under one `shared` lock.
+    ///
+    /// Atomicity is the whole point: holding `shared` across both the snapshot and the
+    /// `subscribers.push` means the pump (which also needs `shared` to feed+fanout)
+    /// cannot slip a chunk between them. A byte either makes it into the snapshot, or
+    /// is fanned out to this new subscriber — never lost, never both.
+    ///
+    /// Detach is implicit: drop the returned receiver and the pump's next `send` to it
+    /// fails, so `retain` removes the dead sender.
+    pub fn attach(&self) -> (Vec<u8>, UnboundedReceiver<Outbound>) {
+        let mut shared = self.shared.lock().unwrap();
+        let snapshot = shared.model.snapshot();
+        let (tx, rx) = mpsc::unbounded_channel();
+        shared.subscribers.push(tx);
+        (snapshot, rx)
+    }
+
+    /// Fan a `Text` control frame out to every attached subscriber (e.g. the session
+    /// uuid once detected, or an exit notice). Same retain-on-send-ok discipline as
+    /// the pump's binary fan-out; used by Tasks 1.5/1.7.
+    pub fn broadcast_text(&self, msg: String) {
+        let mut shared = self.shared.lock().unwrap();
+        shared
+            .subscribers
+            .retain(|tx| tx.send(Outbound::Text(msg.clone())).is_ok());
+    }
+
+    /// Send input bytes to the child's stdin (keystrokes from an attached client).
+    pub fn write_input(&self, bytes: &[u8]) -> anyhow::Result<()> {
+        self.pty.lock().unwrap().write_input(bytes)?;
+        Ok(())
+    }
+
+    /// Resize the pty AND the model in lockstep, so the next attach's snapshot
+    /// repaints at the new geometry. `size` is `(cols, rows)`.
+    ///
+    /// Lock order: this is the one method that needs two locks (`shared` for the
+    /// model, `pty` for the master). The canonical order is `shared` → `meta` → `pty`,
+    /// so we take `shared` first and hold it across the pty resize.
+    pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
+        let mut shared = self.shared.lock().unwrap();
+        self.pty.lock().unwrap().resize(cols, rows)?;
+        shared.model.resize(rows, cols);
+        Ok(())
     }
 }
 
