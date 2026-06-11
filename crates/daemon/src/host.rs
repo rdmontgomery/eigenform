@@ -1188,6 +1188,11 @@ mod tests {
             PtyState::Idle,
             "at exactly the 2s boundary the working gate must NOT apply"
         );
+        // At exactly the boundary with a selector grid the working gate also does
+        // NOT fire, so the grid check runs and yields Waiting (not Working).
+        let selector_rows = vec![" ❯ 1. Yes".to_string(), "   2. No".to_string()];
+        assert_eq!(classify(&selector_rows, WORKING_THRESHOLD, false), PtyState::Waiting,
+            "at exactly the boundary with a selector grid: Waiting, not Working");
     }
 
     #[test]
