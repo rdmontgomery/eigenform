@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -269,32 +269,42 @@ impl SessionHost {
         let mut reader = pty.reader()?;
         let cwd_buf = cwd.map(Path::to_path_buf);
         let live = self.insert(|id| LivePty::new(id, pty, cwd_buf, size));
+        let id = live.id;
         let weak = Arc::downgrade(&live);
 
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                let n = match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break, // EOF or read error: stop pumping.
-                    Ok(n) => n,
-                };
-                // Upgrade per-chunk: if the LivePty is gone there's no one to feed.
-                let Some(live) = weak.upgrade() else { break };
+        // Named so a pump panic is attributable in logs. If `model.feed()` (the
+        // third-party vt100 parser) panics, this thread dies — visibly, by name —
+        // rather than being silently caught per-chunk; see the poison-recovery note
+        // on `PtyShared` for why a dead pump still leaves the session attachable.
+        std::thread::Builder::new()
+            .name(format!("pty-pump-{id}"))
+            .spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = match reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break, // EOF or read error: stop pumping.
+                        Ok(n) => n,
+                    };
+                    // Upgrade per-chunk: if the LivePty is gone there's no one to feed.
+                    let Some(live) = weak.upgrade() else { break };
+                    let chunk = &buf[..n];
 
-                // One critical section: feed the model AND fan out, so an attach that
-                // snapshots between these two steps cannot miss (or double) this chunk.
-                let mut shared = live.shared.lock().unwrap();
-                shared.model.feed(&buf[..n]);
-                let chunk = &buf[..n];
-                shared
-                    .subscribers
-                    .retain(|tx| tx.send(Outbound::Binary(chunk.to_vec())).is_ok());
-                drop(shared); // release before taking meta — never hold two locks here.
+                    // One critical section: feed the model AND fan out, so an attach that
+                    // snapshots between these two steps cannot miss (or double) this chunk.
+                    // The same `chunk` is fed and fanned out, so the two are visibly equal.
+                    let mut shared = live.shared.lock().unwrap_or_else(PoisonError::into_inner);
+                    shared.model.feed(chunk);
+                    shared
+                        .subscribers
+                        .retain(|tx| tx.send(Outbound::Binary(chunk.to_vec())).is_ok());
+                    drop(shared); // release before taking meta — never hold two locks here.
 
-                live.meta.lock().unwrap().last_activity = SystemTime::now();
-            }
-            // Task 1.5: mark_exited — reader EOF means the child closed the master.
-        });
+                    live.meta.lock().unwrap_or_else(PoisonError::into_inner).last_activity =
+                        SystemTime::now();
+                }
+                // Task 1.5: mark_exited — reader EOF means the child closed the master.
+            })
+            .expect("spawn pty-pump thread");
 
         Ok(live)
     }
@@ -338,10 +348,26 @@ pub struct PtyMeta {
 /// the pump must, in one critical section, feed a chunk into the model AND fan it out
 /// to subscribers (an attach that joins between those two steps would miss the chunk
 /// the snapshot didn't yet include).
+///
+/// # Poison recovery (deliberate)
+/// Every lock on `shared` (and `meta`) in this module uses
+/// `.lock().unwrap_or_else(PoisonError::into_inner)` rather than `.unwrap()`. The
+/// protected state is a terminal grid plus a subscriber list. If `model.feed()` (the
+/// third-party vt100 parser) panics it poisons this mutex; with `.unwrap()` every later
+/// `attach`/`broadcast_text`/`resize` would cascade-panic, taking down every future
+/// operation on the session. Recovering the inner value instead means the worst case is
+/// a stale or imperfect snapshot — strictly better than a poisoned-mutex landmine. The
+/// pump thread itself still dies on a feed panic (it is named `pty-pump-{id}`, so the
+/// panic is visible in logs); recovery only guarantees the session stays attachable and
+/// killable rather than panicking everyone else.
 struct PtyShared {
     /// The pump feeds chunks into the model; attach reads its snapshot.
     model: TermModel,
     /// The pump pushes every chunk to these; attach/detach add/remove senders.
+    ///
+    /// Intentionally unbounded for v1: the std pump thread does a synchronous `send`,
+    /// so there is no async point to apply backpressure. Slow-consumer eviction is
+    /// deferred — a wedged consumer's queue can grow unboundedly until it disconnects.
     subscribers: Vec<UnboundedSender<Outbound>>,
 }
 
@@ -401,7 +427,7 @@ impl LivePty {
     /// Detach is implicit: drop the returned receiver and the pump's next `send` to it
     /// fails, so `retain` removes the dead sender.
     pub fn attach(&self) -> (Vec<u8>, UnboundedReceiver<Outbound>) {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
         let snapshot = shared.model.snapshot();
         let (tx, rx) = mpsc::unbounded_channel();
         shared.subscribers.push(tx);
@@ -411,8 +437,11 @@ impl LivePty {
     /// Fan a `Text` control frame out to every attached subscriber (e.g. the session
     /// uuid once detected, or an exit notice). Same retain-on-send-ok discipline as
     /// the pump's binary fan-out; used by Tasks 1.5/1.7.
+    ///
+    /// Takes `shared`: do NOT call while already holding `shared` or `meta` (the 1.5
+    /// EOF path must broadcast its exit notice from outside any such critical section).
     pub fn broadcast_text(&self, msg: String) {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
         shared
             .subscribers
             .retain(|tx| tx.send(Outbound::Text(msg.clone())).is_ok());
@@ -420,7 +449,10 @@ impl LivePty {
 
     /// Send input bytes to the child's stdin (keystrokes from an attached client).
     pub fn write_input(&self, bytes: &[u8]) -> anyhow::Result<()> {
-        self.pty.lock().unwrap().write_input(bytes)?;
+        self.pty
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .write_input(bytes)?;
         Ok(())
     }
 
@@ -431,8 +463,11 @@ impl LivePty {
     /// model, `pty` for the master). The canonical order is `shared` → `meta` → `pty`,
     /// so we take `shared` first and hold it across the pty resize.
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        let mut shared = self.shared.lock().unwrap();
-        self.pty.lock().unwrap().resize(cols, rows)?;
+        let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        self.pty
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .resize(cols, rows)?;
         shared.model.resize(rows, cols);
         Ok(())
     }

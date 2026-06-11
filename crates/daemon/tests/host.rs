@@ -34,7 +34,7 @@ async fn drain_until(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outbound>, ne
 async fn attach_after_output_repaints_then_streams() {
     let host = SessionHost::default();
     let pty = host
-        .spawn("sh", &["-c", "printf 'EARLY\\n'; sleep 30"], None, (24, 80))
+        .spawn("sh", &["-c", "printf 'EARLY\\n'; sleep 30"], None, (80, 24))
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await; // let EARLY land in the model
 
@@ -54,7 +54,7 @@ async fn attach_after_output_repaints_then_streams() {
 #[tokio::test]
 async fn two_viewers_both_receive_output() {
     let host = SessionHost::default();
-    let pty = host.spawn("sh", &[], None, (24, 80)).unwrap();
+    let pty = host.spawn("sh", &[], None, (80, 24)).unwrap();
     let (_, mut rx1) = pty.attach();
     let (_, mut rx2) = pty.attach();
     pty.write_input(b"printf BOTHSEE\n").unwrap();
@@ -66,7 +66,7 @@ async fn two_viewers_both_receive_output() {
 #[tokio::test]
 async fn output_while_detached_lands_in_the_next_snapshot() {
     let host = SessionHost::default();
-    let pty = host.spawn("sh", &[], None, (24, 80)).unwrap();
+    let pty = host.spawn("sh", &[], None, (80, 24)).unwrap();
     pty.write_input(b"printf WHILE_AWAY\n").unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     let (snapshot, _rx) = pty.attach(); // first-ever attach: must still contain it
