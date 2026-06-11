@@ -32,6 +32,28 @@ async fn start() -> String {
     format!("http://{addr}")
 }
 
+/// Like [`start`], but with a `sessions_dir` configured so `GET /api/pty` reconciles
+/// against `sessions/<pid>.json`. Returns the `http://addr` base.
+async fn start_with_sessions(sessions_dir: std::path::PathBuf) -> String {
+    let cfg = Config {
+        program: "sh".to_string(),
+        args: vec![],
+        cwd: None,
+        web_dir: None,
+        term_dir: None,
+        projects_dir: None,
+        sessions_dir: Some(sessions_dir),
+        state_dir: None,
+        dev: false,
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app(cfg)).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
 fn ws_url(base: &str, query: &str) -> String {
     let host = base.strip_prefix("http://").unwrap();
     if query.is_empty() {
@@ -163,6 +185,48 @@ async fn closing_the_socket_leaves_the_pty_listed() {
         row.get("state").is_some(),
         "row must carry `state`: {row}"
     );
+}
+
+#[tokio::test]
+async fn get_api_pty_reconciles_uuid_from_pid_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = start_with_sessions(dir.path().to_path_buf()).await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(&base, ""))
+        .await
+        .expect("connect bare");
+    let hello = first_text_frame(&mut ws).await;
+    let id = hello["id"].as_str().unwrap().to_string();
+
+    // The pty's child is this `sh`, so `$$` is the pid claude's authority file would key
+    // on. Have the shell write its own `sessions/<pid>.json` with a known sessionId.
+    let sessions = dir.path().display().to_string();
+    ws.send(Message::Text(format!(
+        r#"{{"type":"stdin","data":"printf '{{\"pid\":%d,\"sessionId\":\"sess-xyz\",\"cwd\":\"/tmp\"}}' $$ > {sessions}/$$.json\n"}}"#,
+    )))
+    .await
+    .unwrap();
+
+    // Poll GET /api/pty until reconcile (run inline by the handler) adopts the uuid.
+    let mut uuid: Option<serde_json::Value> = None;
+    for _ in 0..40 {
+        let body = helpers::http_get(&base, "/api/pty").await;
+        let arr: serde_json::Value = serde_json::from_str(&body).expect("json array");
+        if let Some(r) = arr.as_array().unwrap().iter().find(|p| p["id"] == id) {
+            if r["uuid"] == serde_json::json!("sess-xyz") {
+                uuid = Some(r["uuid"].clone());
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        uuid,
+        Some(serde_json::json!("sess-xyz")),
+        "GET /api/pty must reconcile the uuid from sessions/<pid>.json"
+    );
+
+    // Hygiene: kill the shell so no stray process lingers.
+    helpers::http_delete(&base, &format!("/api/pty/{id}")).await;
 }
 
 #[tokio::test]

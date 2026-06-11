@@ -396,6 +396,70 @@ impl SessionHost {
     pub fn remove(&self, id: PtyId) -> Option<Arc<LivePty>> {
         self.inner.lock().unwrap().remove(&id)
     }
+
+    /// Reconcile the registry against claude's pid authority, `sessions/<pid>.json`
+    /// (`{"pid", "sessionId", "cwd"}` — the design doc §3 names this file claude's own
+    /// recognition of its process ids). For each `<pid>.json` whose `pid` matches a
+    /// registered pty's direct child pid, adopt its `sessionId` as the pty's uuid — but
+    /// only if the uuid is not already set ("first writer wins"; the JSONL watcher (1.7)
+    /// and this source agree in practice). This covers two cases the watcher misses or
+    /// is slow on: a fresh session born before the watcher fires, and a `--resume` pty
+    /// whose uuid changes from the resumed one.
+    ///
+    /// We spawn claude directly (no shell wrapper), so the pty child pid IS claude's pid
+    /// — a direct pid equality is correct, no process-tree walk needed.
+    ///
+    /// Cost is a dozen small file reads; the `/api/pty` handler calls it inline. Malformed
+    /// or unreadable files (and non-`.json` entries) are skipped without panicking.
+    ///
+    /// ## v1 stance on pid reuse
+    /// We do NOT guard against a recycled OS pid: if a stale `sessions/<pid>.json` survives
+    /// and the kernel later hands that same pid to one of our ptys, we would adopt the dead
+    /// session's uuid. In practice the window is tiny and the JSONL watcher (which keys on
+    /// the live transcript, not the pid) is the primary uuid source — reconcile is a backfill.
+    /// A future guard could re-check `cwd` agreement or that the file's mtime postdates the
+    /// pty's spawn; deferred until it bites.
+    pub fn reconcile(&self, sessions_dir: &Path) {
+        let entries = match std::fs::read_dir(sessions_dir) {
+            Ok(e) => e,
+            Err(_) => return, // dir missing/unreadable: nothing to reconcile.
+        };
+
+        // pid → sessionId for every well-formed `<pid>.json` in the dir.
+        let mut by_pid: HashMap<u32, String> = HashMap::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            // Local struct (forest inlines its own parse; nothing to reuse). Unknown
+            // fields are ignored by serde, so extra keys never break us.
+            let Ok(rec) = serde_json::from_str::<PidFile>(&text) else { continue };
+            by_pid.insert(rec.pid, rec.session_id);
+        }
+        if by_pid.is_empty() {
+            return;
+        }
+
+        for live in self.list_unswept() {
+            if live.uuid().is_some() {
+                continue; // already set: first writer wins, don't overwrite.
+            }
+            if let Some(sid) = by_pid.get(&live.child_pid()) {
+                live.set_uuid(sid.clone());
+            }
+        }
+    }
+}
+
+/// The three fields of `sessions/<pid>.json` (claude's pid authority). Unknown keys are
+/// ignored; `cwd` is present in the file but unused here (the registry already knows it).
+#[derive(serde::Deserialize)]
+struct PidFile {
+    pid: u32,
+    #[serde(rename = "sessionId")]
+    session_id: String,
 }
 
 /// How long an exited pty is kept for a final view before [`SessionHost::sweep`]
@@ -544,6 +608,25 @@ impl LivePty {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .uuid = Some(uuid);
+    }
+
+    /// The claude session uuid, if detected yet. A cheap single-field read for
+    /// reconciliation's "don't overwrite a set uuid" check.
+    pub fn uuid(&self) -> Option<String> {
+        self.meta
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .uuid
+            .clone()
+    }
+
+    /// OS pid of the pty's direct child. We spawn claude with no shell wrapper, so the
+    /// pty child pid IS claude's pid — it matches `sessions/<pid>.json` directly.
+    pub fn child_pid(&self) -> u32 {
+        self.meta
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .child_pid
     }
 
     /// A consistent copy of the mutable meta fields the `/api/pty` roster reports,
@@ -795,6 +878,72 @@ mod tests {
         let mut t = ModeTracker::default();
         t.scan(b"\x1b[<u stuff \x1b[>1u");
         assert!(String::from_utf8_lossy(&t.replay()).contains("\x1b[>1u"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_adopts_uuid_from_matching_pid_file() {
+        let host = SessionHost::default();
+        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let pid = pty.child_pid();
+        std::fs::write(
+            dir.path().join(format!("{pid}.json")),
+            format!(r#"{{"pid":{pid},"sessionId":"abc-123","cwd":"/tmp"}}"#),
+        )
+        .unwrap();
+        host.reconcile(dir.path());
+        assert_eq!(pty.uuid(), Some("abc-123".into()));
+        host.kill(pty.id).ok(); // hygiene: no stray sleep 30.
+    }
+
+    #[tokio::test]
+    async fn reconcile_does_not_overwrite_a_set_uuid() {
+        let host = SessionHost::default();
+        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let pid = pty.child_pid();
+        pty.set_uuid("already-set".into()); // e.g. the JSONL watcher won the race.
+        std::fs::write(
+            dir.path().join(format!("{pid}.json")),
+            format!(r#"{{"pid":{pid},"sessionId":"abc-123","cwd":"/tmp"}}"#),
+        )
+        .unwrap();
+        host.reconcile(dir.path());
+        assert_eq!(pty.uuid(), Some("already-set".into()), "first writer wins");
+        host.kill(pty.id).ok();
+    }
+
+    #[tokio::test]
+    async fn reconcile_ignores_pid_file_with_no_matching_entry() {
+        let host = SessionHost::default();
+        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // A pid that does not match the pty's child (off-by-one is enough).
+        let other = pty.child_pid().wrapping_add(1);
+        std::fs::write(
+            dir.path().join(format!("{other}.json")),
+            format!(r#"{{"pid":{other},"sessionId":"abc-123","cwd":"/tmp"}}"#),
+        )
+        .unwrap();
+        host.reconcile(dir.path());
+        assert_eq!(pty.uuid(), None, "no matching entry: nothing adopted");
+        host.kill(pty.id).ok();
+    }
+
+    #[tokio::test]
+    async fn reconcile_skips_malformed_json_without_panicking() {
+        let host = SessionHost::default();
+        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let pid = pty.child_pid();
+        // Right filename, garbage contents — must be skipped, not panic.
+        std::fs::write(dir.path().join(format!("{pid}.json")), b"not json {").unwrap();
+        // A non-`.json` file and a stray directory should also be tolerated.
+        std::fs::write(dir.path().join("README.txt"), b"hello").unwrap();
+        std::fs::create_dir(dir.path().join("subdir.json")).unwrap();
+        host.reconcile(dir.path());
+        assert_eq!(pty.uuid(), None);
+        host.kill(pty.id).ok();
     }
 
     #[test]

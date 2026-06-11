@@ -616,6 +616,12 @@ async fn close_with_reason(socket: WebSocket, reason: &'static str) -> Result<()
 /// until Task 1.9 lands the classifier.
 async fn pty_list_route(State(state): State<AppState>) -> Response {
     use chrono::{DateTime, Utc};
+    // Backfill uuids from claude's pid authority (`sessions/<pid>.json`) before listing,
+    // so the roster reflects sessions whose JSONL watcher hasn't fired yet. Cheap (a
+    // dozen small files); only when a sessions_dir is configured.
+    if let Some(sessions_dir) = &state.config.sessions_dir {
+        state.host.reconcile(sessions_dir);
+    }
     let rows: Vec<serde_json::Value> = state
         .host
         .list()
