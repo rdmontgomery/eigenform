@@ -210,7 +210,7 @@ impl TermModel {
 
 ### Task 1.2: `ModeTracker` — the modes vt100 doesn't carry
 
-vt100's `state_formatted()` covers mouse/paste/keypad. It does **not** track: focus reporting (`?1004`), synchronized output (`?2026`, `?2031`), or the Kitty keyboard push (`\e[>1u` / pop `\e[<u`) — all observed in spike 09. Without replaying these, a re-attached xterm has wrong input behavior.
+vt100's `state_formatted()` covers mouse/paste/keypad. It does **not** track: the alternate screen (`?1049`), focus reporting (`?1004`), synchronized output (`?2026`, `?2031`), or the Kitty keyboard push (`\e[>1u` / pop `\e[<u`) — all observed in spike 09. Without replaying these, a re-attached xterm has wrong input behavior (and, for `?1049`, paints into the wrong screen buffer).
 
 **Step 1: Failing tests** (same inline module):
 

@@ -285,6 +285,18 @@ mod tests {
     }
 
     #[test]
+    fn sequence_split_three_ways_byte_at_a_time_is_still_seen() {
+        // The 2-way split test proves the carry survives one boundary; this proves
+        // it survives several. Feed `\x1b[?1004h` one byte per scan() call (8 scans,
+        // 7 boundaries) — the carry must accumulate the whole sequence.
+        let mut t = ModeTracker::default();
+        for b in b"\x1b[?1004h" {
+            t.scan(&[*b]);
+        }
+        assert!(String::from_utf8_lossy(&t.replay()).contains("\x1b[?1004h"));
+    }
+
+    #[test]
     fn tracks_alt_screen_and_sync_modes() {
         let mut t = ModeTracker::default();
         t.scan(b"\x1b[?1049h\x1b[?2026h\x1b[?2031h");
