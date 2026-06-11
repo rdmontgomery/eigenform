@@ -49,6 +49,13 @@ enum Cmd {
         #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
     },
+    /// list new-session directory candidates: recent cwds + workspace subdirs
+    /// (CLI mirror of GET /api/candidates — computed locally, no daemon needed)
+    Candidates {
+        /// code root for the new-session launcher (default: ~/projects if it exists)
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+    },
     /// run woland: the browser workbench (serves a pty terminal at localhost)
     Daemon {
         /// port to bind on localhost
@@ -213,6 +220,7 @@ fn main() -> Result<()> {
         },
         Cmd::Surgery { action } => surgery(action),
         Cmd::Ptys { port } => ptys_list(port),
+        Cmd::Candidates { workspace } => candidates_list(workspace),
         Cmd::Daemon { port, cmd, web, term, workspace, dev } => daemon(port, cmd, web, term, workspace, dev),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
@@ -277,6 +285,54 @@ fn ptys_list(port: u16) -> Result<()> {
             }
         };
         println!("{id:<4}  {state:<8}  {uuid:<36}  {cwd}  {age}");
+    }
+    Ok(())
+}
+
+/// Print the launcher candidate list — the CLI mirror of GET /api/candidates.
+///
+/// One row per candidate: `<path>  [recent]` (the `[recent]` tag only on recent rows).
+/// Ordering is identical to the daemon route: recents (de-duplicated, recency order)
+/// first, then any workspace subdir not already in the recent set.
+///
+/// Computed entirely from disk — no daemon required.
+fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
+    // Recents: de-duplicated cwds from recent sessions, in recency order.
+    // Mirrors the daemon's candidates_route logic in crates/daemon/src/lib.rs.
+    let recents: Vec<PathBuf> = {
+        let dir = projects_dir()?;
+        match eigen_forest::list(&dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+            Ok(sessions) => {
+                let mut seen = std::collections::HashSet::new();
+                sessions
+                    .into_iter()
+                    .map(|s| s.cwd)
+                    .filter(|c| seen.insert(c.clone()))
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    };
+
+    // Subdirs: immediate children of the workspace root.
+    // Workspace resolution: explicit --workspace, else ~/projects if it exists, else None.
+    let workspace_root = workspace.or_else(|| {
+        home_dir()
+            .map(|h| h.join("projects"))
+            .filter(|p| p.is_dir())
+    });
+    let subdirs: Vec<PathBuf> = match &workspace_root {
+        Some(root) => eigen_projects::immediate_subdirs(root).unwrap_or_default(),
+        None => vec![],
+    };
+
+    let candidates = eigen_projects::merge_candidates(&recents, &subdirs);
+    for c in &candidates {
+        if c.recent {
+            println!("{}  [recent]", c.path.display());
+        } else {
+            println!("{}", c.path.display());
+        }
     }
     Ok(())
 }
