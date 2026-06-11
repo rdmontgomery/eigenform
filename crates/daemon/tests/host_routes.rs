@@ -139,17 +139,30 @@ async fn closing_the_socket_leaves_the_pty_listed() {
 
     // The pty outlives the socket: GET /api/pty still lists it.
     // Poll briefly so the detach has settled.
-    let mut listed = false;
+    let mut row: Option<serde_json::Value> = None;
     for _ in 0..20 {
         let body = helpers::http_get(&base, "/api/pty").await;
         let arr: serde_json::Value = serde_json::from_str(&body).expect("json array");
-        if arr.as_array().unwrap().iter().any(|p| p["id"] == id) {
-            listed = true;
+        if let Some(r) = arr.as_array().unwrap().iter().find(|p| p["id"] == id) {
+            row = Some(r.clone());
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(listed, "the pty must remain listed after the socket closes");
+    let row = row.expect("the pty must remain listed after the socket closes");
+    // Pin the camelCase contract: every row must carry these keys.
+    assert!(
+        row.get("spawnedAt").is_some(),
+        "row must carry `spawnedAt`: {row}"
+    );
+    assert!(
+        row.get("lastActivity").is_some(),
+        "row must carry `lastActivity`: {row}"
+    );
+    assert!(
+        row.get("state").is_some(),
+        "row must carry `state`: {row}"
+    );
 }
 
 #[tokio::test]

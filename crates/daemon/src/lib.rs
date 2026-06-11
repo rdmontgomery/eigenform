@@ -582,10 +582,12 @@ async fn pty_ws(
         if let Some((projects, dir_name)) = command.watch.clone() {
             let weak = Arc::downgrade(&live);
             std::thread::spawn(move || {
-                if let Some(uuid) = watch_new_session(projects, dir_name) {
+                if let Some(uuid) = watch_new_session(projects, dir_name, weak.clone()) {
                     if let Some(live) = weak.upgrade() {
                         live.set_uuid(uuid.clone());
-                        live.broadcast_text(format!(r#"{{"type":"session","uuid":"{uuid}"}}"#));
+                        live.broadcast_text(
+                            serde_json::json!({"type": "session", "uuid": uuid}).to_string(),
+                        );
                     }
                 }
             });
@@ -709,7 +711,15 @@ fn new_session_uuid(
 
 /// Block until a new `<uuid>.jsonl` appears under `<projects>/<dir_name>/` that wasn't
 /// there at the start, returning its uuid. Runs on a dedicated thread.
-fn watch_new_session(projects: PathBuf, dir_name: String) -> Option<String> {
+///
+/// `weak` is a downgraded reference to the owning [`host::LivePty`]; when it can no
+/// longer be upgraded (pty killed/GC'd) the watch exits within one tick (~1 s) instead
+/// of holding the thread for the full 60 s deadline.
+fn watch_new_session(
+    projects: PathBuf,
+    dir_name: String,
+    weak: std::sync::Weak<host::LivePty>,
+) -> Option<String> {
     let project_dir = projects.join(&dir_name);
     let baseline: std::collections::HashSet<String> = std::fs::read_dir(&project_dir)
         .into_iter()
@@ -732,10 +742,15 @@ fn watch_new_session(projects: PathBuf, dir_name: String) -> Option<String> {
     notify::Watcher::watch(&mut watcher, &projects, notify::RecursiveMode::Recursive).ok()?;
 
     // Bound the wait so an abandoned "new session" connection can't leak this thread.
+    // Tick every ~1 s so a dead/killed pty (detected via the Weak) ends the watch
+    // promptly rather than holding the thread for the full 60 s budget.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let tick = std::time::Duration::from_secs(1);
     loop {
         let remaining = deadline.checked_duration_since(std::time::Instant::now())?;
-        match raw_rx.recv_timeout(remaining) {
+        // Drop early if the LivePty has already been released (pty killed/GC'd).
+        weak.upgrade()?;
+        match raw_rx.recv_timeout(remaining.min(tick)) {
             Ok(Ok(event)) => {
                 for path in &event.paths {
                     if let Some(uuid) = new_session_uuid(path, &projects, &dir_name, &baseline) {
@@ -744,7 +759,8 @@ fn watch_new_session(projects: PathBuf, dir_name: String) -> Option<String> {
                 }
             }
             Ok(Err(_)) => continue,
-            Err(_) => return None, // timeout or watcher gone
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue, // tick: re-check weak
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None, // watcher gone
         }
     }
 }
@@ -812,7 +828,9 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
 
     // 1. Announce the id.
     if sink
-        .send(Message::Text(format!(r#"{{"type":"pty","id":"{}"}}"#, live.id)))
+        .send(Message::Text(
+            serde_json::json!({"type": "pty", "id": live.id.to_string()}).to_string(),
+        ))
         .await
         .is_err()
     {
@@ -853,6 +871,8 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
                 // `Control::Resize { cols, rows }` maps to `live.resize(cols, rows)`:
                 // LivePty/Pty take `(cols, rows)` (TermModel flips internally).
                 Ok(Control::Stdin { data }) => {
+                    // Input to a dead child is dropped silently; the {"type":"exit"} frame
+                    // already informed the client that the process has ended.
                     let _ = live.write_input(data.as_bytes());
                 }
                 Ok(Control::Resize { cols, rows }) => {
@@ -861,6 +881,8 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
                 Err(_) => {}
             },
             Message::Binary(b) => {
+                // Input to a dead child is dropped silently; the {"type":"exit"} frame
+                // already informed the client that the process has ended.
                 let _ = live.write_input(&b);
             }
             Message::Close(_) => break,
