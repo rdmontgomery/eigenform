@@ -8,6 +8,7 @@ rust-version.workspace = true
 anyhow       = { workspace = true }
 thiserror    = { workspace = true }
 portable-pty = { workspace = true }
+vt100        = { workspace = true }
 tokio        = { workspace = true }
 axum         = { workspace = true }
 futures-util = { workspace = true }

@@ -18,6 +18,7 @@ tempfile   = "3"
 uuid       = { version = "1", features = ["v4"] }
 chrono     = "0.4"
 portable-pty = "0.8"
+vt100        = "0.16"
 tokio        = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
 axum         = { version = "0.7", features = ["ws"] }
 futures-util = "0.3"

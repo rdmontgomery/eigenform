@@ -20,6 +20,8 @@ use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Deserialize;
 
+pub mod host;
+
 /// What the daemon runs when a terminal connects. For slice 1 this is a fixed command
 /// (a shell for the demo, a dummy in tests) — NOT arbitrary exec from the request.
 #[derive(Clone, Debug)]
