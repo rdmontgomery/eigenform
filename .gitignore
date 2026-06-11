@@ -6,6 +6,8 @@ Cargo.lock.bak
 /web/node_modules/
 /web/dist/
 /web/.vite/
+/webterm/node_modules/
+/webterm/dist/
 
 # editor
 .idea/
