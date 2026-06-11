@@ -69,6 +69,10 @@ interface TabEntry {
  *
  * Performs initial fetch + roster render, restores persisted tabs, starts the
  * 3-second poll. Returns nothing — the shell owns the DOM from here on.
+ *
+ * Single-call contract: registers a document-level visibilitychange listener
+ * and owns the #app element for the page's lifetime. There is no teardown
+ * path — must be called exactly once per page load.
  */
 export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
@@ -153,6 +157,7 @@ export function mountShell(appEl: HTMLElement): void {
     void refreshRoster();
   }
 
+  // Phase 4 note: full-rebuilds the strip on every call — fine for stateless buttons; switch to patch-in-place if stateful controls like the drawer toggle are added.
   function renderTabStrip() {
     tabStrip.innerHTML = "";
     for (const t of tabs) {
