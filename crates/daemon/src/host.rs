@@ -419,15 +419,27 @@ impl SessionHost {
     /// the live transcript, not the pid) is the primary uuid source — reconcile is a backfill.
     /// A future guard could re-check `cwd` agreement or that the file's mtime postdates the
     /// pty's spawn; deferred until it bites.
+    ///
+    /// Unlike the 1.7 JSONL watcher, reconcile does NOT broadcast — it runs inline in the
+    /// `/api/pty` read path, so the caller already returns the freshly-adopted uuid to the
+    /// client; there is no out-of-band push to make.
     pub fn reconcile(&self, sessions_dir: &Path) {
-        let entries = match std::fs::read_dir(sessions_dir) {
+        // Early-out before touching the filesystem: in steady state every entry already
+        // has a uuid, and the `/api/pty` poll shouldn't rescan the dir each time. Snapshot
+        // the registry once and reuse it for the loop (no second `list_unswept`).
+        let entries: Vec<Arc<LivePty>> = self.list_unswept();
+        if entries.iter().all(|live| live.uuid().is_some()) {
+            return;
+        }
+
+        let dir_entries = match std::fs::read_dir(sessions_dir) {
             Ok(e) => e,
             Err(_) => return, // dir missing/unreadable: nothing to reconcile.
         };
 
         // pid → sessionId for every well-formed `<pid>.json` in the dir.
         let mut by_pid: HashMap<u32, String> = HashMap::new();
-        for entry in entries.flatten() {
+        for entry in dir_entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
@@ -442,11 +454,15 @@ impl SessionHost {
             return;
         }
 
-        for live in self.list_unswept() {
+        for live in entries {
             if live.uuid().is_some() {
                 continue; // already set: first writer wins, don't overwrite.
             }
-            if let Some(sid) = by_pid.get(&live.child_pid()) {
+            let pid = live.child_pid();
+            if pid == 0 {
+                continue; // pidless-spawn sentinel: never adopt (a stray `0.json` mustn't mass-adopt).
+            }
+            if let Some(sid) = by_pid.get(&pid) {
                 live.set_uuid(sid.clone());
             }
         }
