@@ -1,1 +1,203 @@
-/* webterm — placeholder styles; Phase 2 builds the real design */
+/* webterm — Phase 2.3 functional styles */
+
+/* ── Design tokens ──────────────────────────────────────────────────────── */
+:root {
+  --bg:            #0d0d0d;
+  --surface:       #141414;
+  --border:        #2a2a2a;
+  --text:          #d4d0c8;
+  --text-dim:      #666;
+  --text-muted:    #444;
+
+  /* State badge palette — minimal, memorable */
+  --state-working: #4ec9b0;  /* teal — active work */
+  --state-waiting: #ffa500;  /* amber — attention-grabbing, killer feature */
+  --state-idle:    #555;     /* dim gray — at rest */
+  --state-exited:  #3a3a3a;  /* very dim — dead */
+
+  --sidebar-w: 220px;
+  --tab-strip-h: 32px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+
+/* ── Shell grid ─────────────────────────────────────────────────────────── */
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────────────── */
+.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-header {
+  padding: 8px 10px 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sidebar-empty {
+  padding: 12px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.roster-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  min-width: 0;
+}
+.roster-row:hover { background: rgba(255,255,255,0.04); }
+.roster-row--disk { opacity: 0.65; }
+
+.roster-badge {
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* "waiting" badge pulses to grab attention — the design's killer feature */
+.roster-badge--waiting {
+  animation: pulse-waiting 1.2s ease-in-out infinite;
+}
+@keyframes pulse-waiting {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+.roster-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.roster-cwd {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.roster-recency {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  grid-column: 4;
+}
+
+.roster-rename-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font: inherit;
+  padding: 1px 3px;
+}
+
+/* ── Main area ──────────────────────────────────────────────────────────── */
+.main {
+  display: grid;
+  grid-template-rows: var(--tab-strip-h) 1fr;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ── Tab strip ──────────────────────────────────────────────────────────── */
+.tab-strip {
+  display: flex;
+  align-items: stretch;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+  height: var(--tab-strip-h);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 200px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.tab:hover { background: rgba(255,255,255,0.04); }
+.tab--active { background: var(--bg); color: var(--text); }
+.tab--dead { opacity: 0.5; }
+
+.tab-badge { font-size: 9px; flex-shrink: 0; }
+.tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+
+.tab-kill,
+.tab-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.tab-kill:hover  { color: #c0392b; }
+.tab-close:hover { color: var(--text); }
+
+.tab-new {
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 10px;
+  line-height: 1;
+}
+.tab-new:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+
+/* ── Terminal host ──────────────────────────────────────────────────────── */
+.term-host {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.term-pane {
+  position: absolute;
+  inset: 0;
+}
+
+/* xterm.js injects its own stylesheet; ensure it fills the pane */
+.xterm {
+  height: 100%;
+}

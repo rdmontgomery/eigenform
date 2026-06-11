@@ -1,3 +1,5 @@
 import "./style.css";
+import { mountShell } from "./shell.ts";
 
-document.getElementById("app")!.textContent = "term";
+const app = document.getElementById("app");
+if (app) mountShell(app);
