@@ -142,7 +142,7 @@ All new backend code goes in a new module `crates/daemon/src/host.rs` (`mod host
 - Create: `crates/daemon/src/host.rs`
 - Test: inline `#[cfg(test)]` in `host.rs` (pure logic — follow the daemon's inline-test convention for non-IO units)
 
-**Step 1: Read `docs.rs/vt100/0.16` for `Parser` and `Screen`.** The load-bearing API (verified): `Parser::new(rows, cols, scrollback)`, `parser.process(&[u8])`, `parser.set_size(rows, cols)`, `screen.state_formatted() -> Vec<u8>` (contents **plus** input modes: mouse, bracketed paste, application keypad/cursor), `screen.contents() -> String`, `screen.alternate_screen() -> bool`.
+**Step 1: Read `docs.rs/vt100/0.16` for `Parser` and `Screen`.** The load-bearing API (verified): `Parser::new(rows, cols, scrollback)`, `parser.process(&[u8])`, `parser.screen_mut().set_size(rows, cols)` (resize lives on `Screen`, not `Parser` — discovered in Task 1.1), `screen.state_formatted() -> Vec<u8>` (contents **plus** input modes: mouse, bracketed paste, application keypad/cursor), `screen.contents() -> String`, `screen.alternate_screen() -> bool`.
 
 **Step 2: Write failing tests**
 
@@ -194,7 +194,7 @@ impl TermModel {
         self.parser.process(bytes);
         self.modes.scan(bytes);
     }
-    pub fn resize(&mut self, rows: u16, cols: u16) { self.parser.set_size(rows, cols); }
+    pub fn resize(&mut self, rows: u16, cols: u16) { self.parser.screen_mut().set_size(rows, cols); }
     pub fn snapshot(&self) -> Vec<u8> {
         let mut out = self.parser.screen().state_formatted();
         out.extend_from_slice(&self.modes.replay());
