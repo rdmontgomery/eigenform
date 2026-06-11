@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+/// The default port `eigen daemon` binds on; `eigen ptys` targets the same default.
+const DEFAULT_PORT: u16 = 4317;
+
 #[derive(Parser, Debug)]
 #[command(name = "eigen", version, about = "control surface over Claude Code sessions")]
 struct Cli {
@@ -40,10 +43,16 @@ enum Cmd {
         #[arg(long)]
         live: bool,
     },
+    /// list live ptys held by the daemon (CLI mirror of GET /api/pty)
+    Ptys {
+        /// daemon port to query
+        #[arg(long, default_value_t = DEFAULT_PORT)]
+        port: u16,
+    },
     /// run woland: the browser workbench (serves a pty terminal at localhost)
     Daemon {
         /// port to bind on localhost
-        #[arg(long, default_value_t = 4317)]
+        #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
         /// command to run in the pty (default: $SHELL, else bash). NOT claude unless you ask.
         #[arg(long)]
@@ -200,6 +209,7 @@ fn main() -> Result<()> {
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
         Cmd::Surgery { action } => surgery(action),
+        Cmd::Ptys { port } => ptys_list(port),
         Cmd::Daemon { port, cmd, web, term, dev } => daemon(port, cmd, web, term, dev),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
@@ -213,6 +223,59 @@ fn main() -> Result<()> {
         },
         Cmd::Forest { live } => forest_list(live),
     }
+}
+
+/// Print the live pty roster — the CLI mirror of GET /api/pty.
+///
+/// One row per pty:  id  state  uuid-or-—  cwd  age
+/// Age is derived from `lastActivity` when present, else `spawnedAt`.
+/// Daemon unreachable → friendly message + nonzero exit (no panic, no backtrace).
+fn ptys_list(port: u16) -> Result<()> {
+    let url = format!("http://127.0.0.1:{port}/api/pty");
+    let body: serde_json::Value = match ureq::get(&url).call() {
+        Ok(resp) => resp
+            .into_json()
+            .with_context(|| format!("parsing JSON from {url}"))?,
+        Err(ureq::Error::Transport(_)) => {
+            eprintln!("daemon not running on :{port}");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!("HTTP error from {url}: {e}"));
+        }
+    };
+
+    let rows = body.as_array().with_context(|| "expected JSON array from /api/pty")?;
+    if rows.is_empty() {
+        // No ptys registered — print nothing (not an error).
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now();
+    for row in rows {
+        let id = row["id"].as_str().unwrap_or("?");
+        let state = row["state"].as_str().unwrap_or("?");
+        let uuid = row["uuid"].as_str().unwrap_or("—");
+        let cwd = row["cwd"].as_str().unwrap_or("?");
+        // Prefer lastActivity for age, fall back to spawnedAt.
+        let age_ts = row["lastActivity"]
+            .as_str()
+            .or_else(|| row["spawnedAt"].as_str())
+            .unwrap_or("");
+        let age = if age_ts.is_empty() {
+            "?".to_string()
+        } else {
+            match chrono::DateTime::parse_from_rfc3339(age_ts) {
+                Ok(t) => {
+                    let then = t.with_timezone(&chrono::Utc);
+                    ago(then, now)
+                }
+                Err(_) => "?".to_string(),
+            }
+        };
+        println!("{id:<4}  {state:<8}  {uuid:<36}  {cwd}  {age}");
+    }
+    Ok(())
 }
 
 /// Print the corroborated live Forest — the CLI mirror of woland's Forest surface.
@@ -574,4 +637,39 @@ fn memory_list(all_projects: bool) -> Result<()> {
 
 fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn utc(y: i32, mo: u32, d: u32, h: u32, m: u32, s: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(y, mo, d, h, m, s).unwrap()
+    }
+
+    #[test]
+    fn ago_under_45s_is_now() {
+        let now = utc(2026, 6, 11, 12, 0, 0);
+        assert_eq!(ago(utc(2026, 6, 11, 11, 59, 30), now), "now");
+        assert_eq!(ago(utc(2026, 6, 11, 12, 0, 0), now), "now"); // zero delta
+    }
+
+    #[test]
+    fn ago_minutes() {
+        let now = utc(2026, 6, 11, 12, 0, 0);
+        assert_eq!(ago(utc(2026, 6, 11, 11, 57, 0), now), "3m");
+    }
+
+    #[test]
+    fn ago_hours() {
+        let now = utc(2026, 6, 11, 12, 0, 0);
+        assert_eq!(ago(utc(2026, 6, 11, 9, 30, 0), now), "2h");
+    }
+
+    #[test]
+    fn ago_days() {
+        let now = utc(2026, 6, 11, 12, 0, 0);
+        assert_eq!(ago(utc(2026, 6, 9, 12, 0, 0), now), "2d");
+    }
 }
