@@ -3,9 +3,11 @@
  * a sorted, labelled list suitable for the sidebar.
  *
  * PURE: no fetch, no DOM, no Date.now(). Recency sorting is lexicographic on
- * ISO-8601 strings (rfc3339), which is correct because: rfc3339 timestamps are
- * monotonically comparable as ASCII strings when in the same timezone
- * representation. All eigen timestamps are UTC ("Z" suffix), so this holds.
+ * ISO-8601 strings (rfc3339). This is correct because: rfc3339 timestamps are
+ * monotonically comparable as ASCII strings when in the same UTC-offset
+ * representation. The backend emits +00:00 offsets (not the "Z" short-form),
+ * but both serialize identically to the same byte-order: lexicographic
+ * comparison within a group (all same-offset) gives chronological order.
  *
  * STATE NOTES:
  * - Live rows use PtyState ("working"|"waiting"|"idle"|"exited") from the
@@ -53,10 +55,18 @@ export interface RosterRow {
    *  forest.live=true are NOT promoted — they remain live=false in the roster. */
   live: boolean;
   ptyId?: string;
+  /**
+   * Session uuid, if known. Absent (undefined) when the pty has not yet been
+   * reconciled to a session uuid. Note: PtyInfo.uuid is null (from the registry
+   * JSON); RosterRow normalises this to undefined-when-absent. Renderers should
+   * use truthiness (`if (row.uuid)`) to guard uuid-dependent actions.
+   */
   uuid?: string;
   /** ISO-8601 string used for within-group sorting (most-recent first).
    *  For live rows: lastActivity from pty. For disk-only rows: recency from
-   *  forest. Lexicographic comparison is correct for UTC rfc3339 strings. */
+   *  forest. Lexicographic comparison within a group is correct because all
+   *  timestamps in the group share the same UTC offset (+00:00 from the backend),
+   *  making byte-order equivalent to chronological order. */
   recency: string;
 }
 
@@ -75,6 +85,15 @@ export interface LabelInput {
 // 40 chars chosen as a comfortable sidebar width budget — document: callers
 // may want to re-truncate for their display context.
 const SNIPPET_MAX = 40;
+
+/** Return the basename of a path, or "" for null/root paths. */
+function basename(cwd: string | null): string {
+  if (!cwd) return "";
+  const trimmed = cwd.replace(/\/+$/, "");
+  const slash = trimmed.lastIndexOf("/");
+  const base = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  return base;
+}
 
 // ---------------------------------------------------------------------------
 // deriveLabel
@@ -98,10 +117,7 @@ export function deriveLabel(input: LabelInput): string {
 
   // 3. CWD basename.
   if (input.cwd) {
-    // Normalise trailing slash: "/foo/bar/" → "bar", "/" → ""
-    const trimmed = input.cwd.replace(/\/+$/, "");
-    const slash = trimmed.lastIndexOf("/");
-    const base = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+    const base = basename(input.cwd);
     if (base) return base;
     // cwd="/" produces empty base — fall through.
   }
@@ -122,13 +138,9 @@ export function deriveLabel(input: LabelInput): string {
 // buildRoster helpers
 // ---------------------------------------------------------------------------
 
-/** Return the basename of a path, or "" for null/root. */
+/** Return the cwd basename for a sidebar chip, or "" for null/root. */
 function cwdChip(cwd: string | null): string {
-  if (!cwd) return "";
-  const trimmed = cwd.replace(/\/+$/, "");
-  const slash = trimmed.lastIndexOf("/");
-  const base = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
-  return base;
+  return basename(cwd);
 }
 
 // ---------------------------------------------------------------------------
