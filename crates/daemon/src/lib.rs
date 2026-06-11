@@ -59,6 +59,8 @@ pub struct AppState {
 pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty_ws))
+        .route("/api/pty", get(pty_list_route))
+        .route("/api/pty/:id", axum::routing::delete(pty_delete_route))
         .route("/session/:uuid", get(session_route))
         .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/session/:uuid/json", get(session_json_route))
@@ -524,11 +526,13 @@ summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:n
 
 #[derive(serde::Deserialize)]
 struct PtyQuery {
+    /// Re-attach to an already-registered pty by id; spawns nothing. Highest precedence.
+    attach: Option<host::PtyId>,
     /// Resume this session in the pty (spawns `claude --resume`).
     session: Option<String>,
     /// Start a fresh session: spawn `claude` in this cwd. Takes precedence over `session`.
     new: Option<String>,
-    // Absent both = the default command (a shell). Only a real connection spawns anything.
+    // Absent all = the default command (a shell). Only a real connection spawns anything.
 }
 
 async fn pty_ws(
@@ -543,8 +547,110 @@ async fn pty_ws(
     if !origin_is_local(&headers) {
         return (StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response();
     }
+
+    // Re-attach: no spawn. Resolve the live pty before upgrading so a missing id can
+    // close the socket with a clear reason rather than spawn anything.
+    if let Some(id) = query.attach {
+        let host = Arc::clone(&state.host);
+        return ws.on_upgrade(move |socket| async move {
+            match host.get(id) {
+                Some(live) => attach_socket(socket, live).await,
+                None => {
+                    let _ = close_with_reason(socket, "no live pty with that id").await;
+                }
+            }
+        });
+    }
+
+    // Otherwise spawn-and-register through the host (uniform model: even bare `/pty`
+    // registers a pty that outlives this socket).
     let command = pty_command(&state.config, &query);
-    ws.on_upgrade(move |socket| bridge(socket, command))
+    let host = Arc::clone(&state.host);
+    ws.on_upgrade(move |socket| async move {
+        let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
+        let live = match host.spawn(&command.program, &args, command.cwd.as_deref(), (80, 24)) {
+            Ok(live) => live,
+            Err(_) => {
+                let _ = close_with_reason(socket, "failed to spawn pty").await;
+                return;
+            }
+        };
+
+        // For a fresh session: watch for its new JSONL, then record the uuid on the
+        // LivePty and broadcast it to attached clients. The watcher holds a `Weak`
+        // (mirroring the pump) so an abandoned connection can't keep the pty alive.
+        if let Some((projects, dir_name)) = command.watch.clone() {
+            let weak = Arc::downgrade(&live);
+            std::thread::spawn(move || {
+                if let Some(uuid) = watch_new_session(projects, dir_name) {
+                    if let Some(live) = weak.upgrade() {
+                        live.set_uuid(uuid.clone());
+                        live.broadcast_text(format!(r#"{{"type":"session","uuid":"{uuid}"}}"#));
+                    }
+                }
+            });
+        }
+
+        attach_socket(socket, live).await;
+    })
+}
+
+/// Close a websocket with a human-readable reason (used when an attach target is gone
+/// or a spawn fails). Best-effort: a send failure means the client already left.
+async fn close_with_reason(socket: WebSocket, reason: &'static str) -> Result<(), axum::Error> {
+    use axum::extract::ws::{close_code, CloseFrame};
+    let mut socket = socket;
+    socket
+        .send(Message::Close(Some(CloseFrame {
+            code: close_code::POLICY,
+            reason: reason.into(),
+        })))
+        .await
+}
+
+/// `GET /api/pty` — the live-pty roster. Sweeps (via `host.list()`) then serializes one
+/// row per registered pty. `id` is a string (JS Number can't hold a u64 exactly);
+/// timestamps are ISO-8601 (matching `/api/forest`'s recency). `state` is `"unknown"`
+/// until Task 1.9 lands the classifier.
+async fn pty_list_route(State(state): State<AppState>) -> Response {
+    use chrono::{DateTime, Utc};
+    let rows: Vec<serde_json::Value> = state
+        .host
+        .list()
+        .iter()
+        .map(|live| {
+            let (uuid, last_activity, exited) = {
+                let meta = live.meta_snapshot();
+                (meta.uuid, meta.last_activity, meta.exited_at)
+            };
+            let to_iso = |t: SystemTime| DateTime::<Utc>::from(t).to_rfc3339();
+            serde_json::json!({
+                "id": live.id.to_string(),
+                "cwd": live.cwd.as_ref().map(|c| c.display().to_string()),
+                "uuid": uuid,
+                "state": if exited.is_some() { "exited" } else { "unknown" },
+                "spawnedAt": to_iso(live.spawned_at),
+                "lastActivity": to_iso(last_activity),
+            })
+        })
+        .collect();
+    axum::Json(rows).into_response()
+}
+
+/// `DELETE /api/pty/:id` — kill the child and unlist. 204 on success, 404 if unknown.
+async fn pty_delete_route(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    let Ok(id) = id.parse::<host::PtyId>() else {
+        return (StatusCode::NOT_FOUND, "no live pty with that id").into_response();
+    };
+    match state.host.kill(id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(host::KillError::NotFound) => {
+            (StatusCode::NOT_FOUND, "no live pty with that id").into_response()
+        }
+    }
 }
 
 /// Resolve which command a pty connection should run, spawning nothing.
@@ -684,53 +790,50 @@ enum Control {
     Resize { cols: u16, rows: u16 },
 }
 
-/// Bridge one websocket to a freshly-spawned pty: pty output → binary frames, client
-/// control messages → stdin / resize.
-async fn bridge(socket: WebSocket, command: PtyCommand) {
-    let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
-    let mut pty = match Pty::spawn(&command.program, &args, command.cwd.as_deref(), (80, 24)) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
-    let reader = match pty.reader() {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-
+/// Bridge one websocket to an already-registered [`host::LivePty`]. The protocol:
+///
+/// 1. a text frame `{"type":"pty","id":"<id>"}` announcing the pty's id,
+/// 2. the repaint snapshot as one binary frame (the current screen),
+/// 3. the live stream (binary pty output + text control frames) until the socket closes.
+///
+/// Snapshot + subscription are atomic under `live.attach()`, so no byte is lost or
+/// doubled across the seam. After subscribing we check `exited_at()`: if the child
+/// already exited, the `{"type":"exit"}` broadcast fired *before* this subscriber
+/// existed, so we synthesize one to THIS socket. Checking strictly after `attach`
+/// subscribes means we either receive the live broadcast or observe `exited_at` — never
+/// neither (the TOCTOU-safe ordering).
+///
+/// The socket read loop dispatches `Control` messages to `live.write_input` /
+/// `live.resize`. When the socket closes, the read loop ends, the pump task is aborted,
+/// and the receiver drops — which detaches us from the pty's subscriber set. The pty
+/// itself lives on.
+async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
     let (mut sink, mut stream) = socket.split();
 
-    // pty output → binary frames; control messages (e.g. a new session's uuid) → text.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Outbound>(64);
-
-    // Blocking pty reads live on a dedicated thread.
-    let read_tx = tx.clone();
-    std::thread::spawn(move || {
-        let mut reader = reader;
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if read_tx.blocking_send(Outbound::Binary(buf[..n].to_vec())).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    // For a fresh session: watch for its new JSONL and report the uuid to the client.
-    if let Some((projects, dir_name)) = command.watch.clone() {
-        let detect_tx = tx.clone();
-        std::thread::spawn(move || {
-            if let Some(uuid) = watch_new_session(projects, dir_name) {
-                let msg = format!(r#"{{"type":"session","uuid":"{uuid}"}}"#);
-                let _ = detect_tx.blocking_send(Outbound::Text(msg));
-            }
-        });
+    // 1. Announce the id.
+    if sink
+        .send(Message::Text(format!(r#"{{"type":"pty","id":"{}"}}"#, live.id)))
+        .await
+        .is_err()
+    {
+        return;
     }
-    drop(tx); // only the worker threads keep senders; rx closes when they're done
 
+    // 2. Subscribe + snapshot atomically.
+    let (snapshot, mut rx) = live.attach();
+
+    // 3a. Repaint. (Always send, even if empty — keeps the frame ordering uniform.)
+    if sink.send(Message::Binary(snapshot)).await.is_err() {
+        return;
+    }
+
+    // TOCTOU: if the child exited before we subscribed, the exit broadcast missed us.
+    // Synthesize it to this socket only. (Done after `attach` so we never miss both.)
+    if live.exited_at().is_some() && sink.send(Message::Text(r#"{"type":"exit"}"#.into())).await.is_err() {
+        return;
+    }
+
+    // 3b. Pump fan-out → socket. Ends when the channel closes or the socket send fails.
     let send_task = tokio::spawn(async move {
         while let Some(out) = rx.recv().await {
             let msg = match out {
@@ -738,29 +841,34 @@ async fn bridge(socket: WebSocket, command: PtyCommand) {
                 Outbound::Text(t) => Message::Text(t),
             };
             if sink.send(msg).await.is_err() {
-                break;
+                break; // socket gone: stop pumping (and drop rx → detach).
             }
         }
     });
 
+    // 3c. Socket read loop: client control messages → the pty.
     while let Some(Ok(msg)) = stream.next().await {
         match msg {
             Message::Text(t) => match serde_json::from_str::<Control>(&t) {
+                // `Control::Resize { cols, rows }` maps to `live.resize(cols, rows)`:
+                // LivePty/Pty take `(cols, rows)` (TermModel flips internally).
                 Ok(Control::Stdin { data }) => {
-                    let _ = pty.write_input(data.as_bytes());
+                    let _ = live.write_input(data.as_bytes());
                 }
                 Ok(Control::Resize { cols, rows }) => {
-                    let _ = pty.resize(cols, rows);
+                    let _ = live.resize(cols, rows);
                 }
                 Err(_) => {}
             },
             Message::Binary(b) => {
-                let _ = pty.write_input(&b);
+                let _ = live.write_input(&b);
             }
             Message::Close(_) => break,
             _ => {}
         }
     }
+    // Socket closed: abort the pump and drop `rx` (the task owns it), detaching us. The
+    // pump's next `send` to our dead sender is pruned by `retain` on the host side.
     send_task.abort();
 }
 
@@ -912,20 +1020,20 @@ mod tests {
 
         let resumed = pty_command(
             &cfg,
-            &PtyQuery { session: Some("abcdef00".into()), new: None },
+            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None },
         );
         assert_eq!(resumed.program, "claude");
         assert_eq!(resumed.args, vec!["--resume".to_string(), uuid.to_string()]);
         assert_eq!(resumed.cwd.as_deref(), Some(std::path::Path::new("/home/me/proj")));
 
         // No session → the configured default, never claude.
-        let default = pty_command(&cfg, &PtyQuery { session: None, new: None });
+        let default = pty_command(&cfg, &PtyQuery { attach: None, session: None, new: None });
         assert_eq!(default.program, "bash");
 
         // new=<cwd> → fresh claude in that dir, with a watch target for its new JSONL.
         let fresh = pty_command(
             &cfg,
-            &PtyQuery { session: None, new: Some("/home/me/fresh".into()) },
+            &PtyQuery { attach: None, session: None, new: Some("/home/me/fresh".into()) },
         );
         assert_eq!(fresh.program, "claude");
         assert!(fresh.args.is_empty());

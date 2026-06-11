@@ -425,6 +425,15 @@ pub struct PtyMeta {
     pub child_pid: u32,
 }
 
+/// A point-in-time copy of the mutable meta fields the `/api/pty` roster reports
+/// (Task 1.7). Taken under one `meta` lock by [`LivePty::meta_snapshot`] so the row is
+/// internally consistent (uuid/activity/exit all from the same instant).
+pub struct MetaSnapshot {
+    pub uuid: Option<String>,
+    pub last_activity: SystemTime,
+    pub exited_at: Option<SystemTime>,
+}
+
 /// The terminal model plus the set of attached subscribers, guarded together because
 /// the pump must, in one critical section, feed a chunk into the model AND fan it out
 /// to subscribers (an attach that joins between those two steps would miss the chunk
@@ -526,6 +535,26 @@ impl LivePty {
         shared
             .subscribers
             .retain(|tx| tx.send(Outbound::Text(msg.clone())).is_ok());
+    }
+
+    /// Record the claude session uuid once the fresh-session watcher detects it.
+    /// (Fresh sessions discover their uuid late, after the JSONL first appears.)
+    pub fn set_uuid(&self, uuid: String) {
+        self.meta
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .uuid = Some(uuid);
+    }
+
+    /// A consistent copy of the mutable meta fields the `/api/pty` roster reports,
+    /// taken under one lock so the row is internally consistent.
+    pub fn meta_snapshot(&self) -> MetaSnapshot {
+        let meta = self.meta.lock().unwrap_or_else(PoisonError::into_inner);
+        MetaSnapshot {
+            uuid: meta.uuid.clone(),
+            last_activity: meta.last_activity,
+            exited_at: meta.exited_at,
+        }
     }
 
     /// When the child exited, or `None` while it is still running.
