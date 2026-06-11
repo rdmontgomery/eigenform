@@ -19,3 +19,6 @@ Thumbs.db
 
 # local-only spike scratch
 /tmp-spike-*/
+
+# worktrees
+/.worktrees/
