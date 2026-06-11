@@ -629,13 +629,10 @@ struct PtyCommand {
     watch: Option<(PathBuf, String)>,
 }
 
-/// What the daemon pushes to the browser over the pty websocket.
-enum Outbound {
-    /// Raw pty output.
-    Binary(Vec<u8>),
-    /// A JSON control message (e.g. a new session's uuid).
-    Text(String),
-}
+// The bridge's outbound type now lives in `host` (Task 1.3), where Task 1.4's pump
+// fans pty output out to subscribers as `Outbound`. Re-exported so this file's bridge
+// keeps using it unchanged.
+use host::Outbound;
 
 fn origin_is_local(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
@@ -748,7 +745,6 @@ async fn bridge(socket: WebSocket, command: PtyCommand) {
 /// input via [`Pty::write_input`], and follow the terminal size via [`Pty::resize`].
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
-    #[allow(dead_code)]
     child: Box<dyn Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
 }
@@ -792,6 +788,12 @@ impl Pty {
     /// A fresh reader over the pty's output. Reads block until data or EOF.
     pub fn reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
         Ok(self.master.try_clone_reader()?)
+    }
+
+    /// OS pid of the child, for `sessions/<pid>.json` reconciliation. `None` once
+    /// the child has been reaped.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.process_id()
     }
 
     /// Send bytes to the child's stdin.

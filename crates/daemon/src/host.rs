@@ -1,4 +1,4 @@
-//! Session host: server-side terminal models that outlive a WebSocket.
+//! Session host: a registry of live ptys that outlive any single WebSocket.
 //!
 //! `TermModel` is the heart of re-attach fidelity. The daemon owns a pty that
 //! survives client disconnects; on re-attach the server must repaint a *fresh*
@@ -7,6 +7,14 @@
 //!
 //! Spike 09 confirmed claude's TUI runs in the *alternate screen*, so a single
 //! viewport grid (no scrollback ring) is sufficient — `Parser::new(rows, cols, 0)`.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+
+use tokio::sync::mpsc::UnboundedSender;
 
 /// Tracks the terminal modes vt100 does NOT model, so a re-attached xterm gets
 /// the right screen buffer and input behaviour. Covers, all observed in claude's
@@ -195,9 +203,181 @@ impl TermModel {
     }
 }
 
+/// What the daemon pushes to an attached client over the pty websocket.
+///
+/// Lives here (not `lib.rs`) because Task 1.4's reader-thread pump fans pty output
+/// out to every attached subscriber as `Outbound` values; `lib.rs`'s current bridge
+/// re-exports and keeps using it unchanged until that refactor lands.
+pub enum Outbound {
+    /// Raw pty output.
+    Binary(Vec<u8>),
+    /// A JSON control message (e.g. a new session's uuid).
+    Text(String),
+}
+
+/// A registry-allocated, monotonically increasing handle to a live pty.
+pub type PtyId = u64;
+
+/// Server-owned registry of live ptys, decoupled from any WebSocket's lifetime.
+///
+/// The registry deals only in `Arc<LivePty>`: it allocates a unique monotonic
+/// [`PtyId`], stores the entry, and serves get/list/remove. Spawning the process,
+/// the reader-thread pump, and attach/detach fan-out all land in Task 1.4 — this
+/// type intentionally knows nothing about them.
+#[derive(Default)]
+pub struct SessionHost {
+    inner: Mutex<HashMap<PtyId, Arc<LivePty>>>,
+    next_id: AtomicU64,
+}
+
+impl SessionHost {
+    /// Allocate a fresh id, build the `LivePty` around it, store and return the id.
+    ///
+    /// The id is allocated *first* and handed to `build` so the `LivePty` can carry
+    /// its own id (needed by 1.4's pump, which tags fan-out and self-removal by id).
+    /// Taking a builder closure — rather than the plan's `insert(LivePty::new(..))`
+    /// sketch — is what lets the entry know the id the registry chose for it.
+    pub fn insert(&self, build: impl FnOnce(PtyId) -> LivePty) -> PtyId {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let live = Arc::new(build(id));
+        self.inner.lock().unwrap().insert(id, live);
+        id
+    }
+
+    /// The live pty for `id`, if still registered.
+    pub fn get(&self, id: PtyId) -> Option<Arc<LivePty>> {
+        self.inner.lock().unwrap().get(&id).cloned()
+    }
+
+    /// All currently-registered live ptys (order unspecified).
+    pub fn list(&self) -> Vec<Arc<LivePty>> {
+        self.inner.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Drop `id` from the registry. The `Arc` (and its pty) lives until the last
+    /// attached client also drops its clone.
+    pub fn remove(&self, id: PtyId) {
+        self.inner.lock().unwrap().remove(&id);
+    }
+}
+
+/// Mutable, frequently-updated facts about a live pty, guarded separately from the
+/// terminal model and the pty handle so a reader updating activity never blocks an
+/// attach reading the model. Populated by Task 1.4's pump and lifecycle code.
+pub struct PtyMeta {
+    /// The claude session uuid, once detected (fresh sessions discover it late).
+    pub uuid: Option<String>,
+    /// Last time the pty produced output — drives the idle/working state detector.
+    pub last_activity: SystemTime,
+    /// Set when the child exits; `None` while running.
+    pub exited_at: Option<SystemTime>,
+    /// OS pid of the child, for `sessions/<pid>.json` reconciliation (Task 1.8).
+    pub child_pid: u32,
+}
+
+/// The terminal model plus the set of attached subscribers, guarded together because
+/// the pump must, in one critical section, feed a chunk into the model AND fan it out
+/// to subscribers (an attach that joins between those two steps would miss the chunk
+/// the snapshot didn't yet include).
+struct PtyShared {
+    // Task 1.4: the pump feeds chunks into the model; attach reads its snapshot.
+    #[allow(dead_code)]
+    model: TermModel,
+    // Task 1.4: the pump pushes every chunk to these; attach/detach add/remove senders.
+    #[allow(dead_code)]
+    subscribers: Vec<UnboundedSender<Outbound>>,
+}
+
+/// One server-side live pty: the immutable identity, the mutable meta, the shared
+/// terminal-model-plus-subscribers, and the pty handle for input/resize.
+///
+/// Three independent locks (`meta`, `shared`, `pty`) so the high-frequency paths
+/// don't serialize against each other. See the lock-ordering note on [`LivePty`]'s
+/// impl: anywhere two are held at once, the order is `shared` → `meta` → `pty`, and
+/// today (Task 1.3) no method holds more than one at a time.
+pub struct LivePty {
+    pub id: PtyId,
+    pub cwd: Option<PathBuf>,
+    pub spawned_at: SystemTime,
+    pub meta: Mutex<PtyMeta>,
+    #[allow(dead_code)] // Task 1.4: the pump feeds the model and fans out to subscribers.
+    shared: Mutex<PtyShared>,
+    #[allow(dead_code)] // Task 1.4+: write_input / resize / child reaping.
+    pty: Mutex<crate::Pty>,
+}
+
+impl LivePty {
+    /// Build a live pty around an already-spawned [`crate::Pty`]. The id comes from
+    /// the registry (see [`SessionHost::insert`]). A fresh 80x24 [`TermModel`] is
+    /// created here; Task 1.4's first resize/feed will bring it to the real size.
+    pub fn new(id: PtyId, pty: crate::Pty, cwd: Option<PathBuf>) -> Self {
+        let now = SystemTime::now();
+        let child_pid = pty.child_pid().unwrap_or(0);
+        Self {
+            id,
+            cwd,
+            spawned_at: now,
+            meta: Mutex::new(PtyMeta {
+                uuid: None,
+                last_activity: now,
+                exited_at: None,
+                child_pid,
+            }),
+            shared: Mutex::new(PtyShared {
+                model: TermModel::new(24, 80),
+                subscribers: Vec::new(),
+            }),
+            pty: Mutex::new(pty),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    /// A `LivePty` wrapping a cheap real process, for registry-semantics tests.
+    ///
+    /// Per Task 1.3: the registry stores `Arc<LivePty>` and `LivePty` holds a real
+    /// `Mutex<crate::Pty>` (no Option/generic testability seam — that would be
+    /// theater). So the "pure" map tests still spawn a trivial child. `cat` with no
+    /// args blocks reading its stdin and exits on EOF: cheap, no output, and the pty
+    /// keeps the master writer alive so it never wedges. The registry never touches
+    /// the process; these tests exercise only insert/get/list/remove/id allocation.
+    fn live_pty(host: &SessionHost, cwd: Option<PathBuf>) -> PtyId {
+        let pty = crate::Pty::spawn("cat", &[], cwd.as_deref(), (80, 24)).expect("spawn cat");
+        host.insert(|id| LivePty::new(id, pty, cwd))
+    }
+
+    #[test]
+    fn register_list_get_remove() {
+        let host = SessionHost::default();
+        let id = live_pty(&host, Some("/tmp".into()));
+        assert_eq!(host.list().len(), 1);
+        assert!(host.get(id).is_some());
+        host.remove(id);
+        assert!(host.get(id).is_none());
+        assert_eq!(host.list().len(), 0);
+    }
+
+    #[test]
+    fn ids_are_unique_and_monotonic() {
+        let host = SessionHost::default();
+        let a = live_pty(&host, None);
+        let b = live_pty(&host, None);
+        assert!(b > a, "ids must be monotonic: {b} > {a}");
+        assert_ne!(a, b, "ids must be unique");
+    }
+
+    #[test]
+    fn live_pty_carries_its_id_and_cwd() {
+        let host = SessionHost::default();
+        let id = live_pty(&host, Some("/tmp".into()));
+        let lp = host.get(id).expect("present");
+        assert_eq!(lp.id, id);
+        assert_eq!(lp.cwd.as_deref(), Some(Path::new("/tmp")));
+    }
 
     #[test]
     fn snapshot_reproduces_plain_output() {
