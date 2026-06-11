@@ -44,6 +44,15 @@ pub struct Config {
     pub dev: bool,
 }
 
+/// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
+/// holds no runtime state; the host owns the live pty registry the handlers reach for.
+/// Both fields are `Arc`, so `Clone` is cheap (axum requires `State: Clone`).
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub host: Arc<host::SessionHost>,
+}
+
 /// Build the woland HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a pty;
 /// `term_dir`, if set, is served at `/term` (mounted before the woland fallback);
 /// `web_dir`, if set, is served as static files at `/`.
@@ -81,7 +90,11 @@ pub fn app(config: Config) -> Router {
                 .fallback(tower_http::services::ServeFile::new(index)),
         );
     }
-    router.with_state(Arc::new(config))
+    let state = AppState {
+        config: Arc::new(config),
+        host: Arc::new(host::SessionHost::default()),
+    };
+    router.with_state(state)
 }
 
 /// Bind `addr` and serve woland until the process is killed.
@@ -94,9 +107,10 @@ pub async fn serve(addr: std::net::SocketAddr, config: Config) -> anyhow::Result
 /// `GET /session/:uuid` — the semantic transcript as a standalone HTML page.
 async fn session_route(
     AxumPath(uuid): AxumPath<String>,
-    State(cfg): State<Arc<Config>>,
+    State(state): State<AppState>,
 ) -> Response {
-    match session_fragment(&cfg, &uuid) {
+    let cfg = &state.config;
+    match session_fragment(cfg, &uuid) {
         Ok(frag) => Html(transcript_page(&frag)).into_response(),
         Err(e) => e.into_response(),
     }
@@ -106,9 +120,10 @@ async fn session_route(
 /// the Manuscript (no page chrome).
 async fn session_fragment_route(
     AxumPath(uuid): AxumPath<String>,
-    State(cfg): State<Arc<Config>>,
+    State(state): State<AppState>,
 ) -> Response {
-    match session_fragment(&cfg, &uuid) {
+    let cfg = &state.config;
+    match session_fragment(cfg, &uuid) {
         Ok(frag) => Html(frag).into_response(),
         Err(e) => e.into_response(),
     }
@@ -119,8 +134,9 @@ async fn session_fragment_route(
 /// opaque HTML.
 async fn session_json_route(
     AxumPath(uuid): AxumPath<String>,
-    State(cfg): State<Arc<Config>>,
+    State(state): State<AppState>,
 ) -> Response {
+    let cfg = &state.config;
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
@@ -154,15 +170,16 @@ fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'s
 /// Returns `{uuid}` of the new branch, which the client then resumes in the Furnace.
 async fn fork_route(
     AxumPath(uuid): AxumPath<String>,
-    State(cfg): State<Arc<Config>>,
+    State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    let cfg = &state.config;
     let Some(turn) = body.get("turn").and_then(|v| v.as_str()) else {
         return (StatusCode::BAD_REQUEST, "missing `turn`").into_response();
     };
     // `text` (the edited prompt) is delivered live into the resumed branch by the client,
     // not written into the file — the fork must end on a completed turn to be resumable.
-    match fork_session(&cfg, &uuid, turn) {
+    match fork_session(cfg, &uuid, turn) {
         Ok(new_uuid) => Json(serde_json::json!({ "uuid": new_uuid })).into_response(),
         Err(e) => e.into_response(),
     }
@@ -241,7 +258,8 @@ impl SessionJsonCache {
 static SESSION_CACHE: LazyLock<SessionJsonCache> = LazyLock::new(SessionJsonCache::default);
 
 /// `GET /api/sessions` — recent sessions across all projects, for the sidebar.
-async fn sessions_route(State(cfg): State<Arc<Config>>) -> Response {
+async fn sessions_route(State(state): State<AppState>) -> Response {
+    let cfg = &state.config;
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
@@ -266,7 +284,8 @@ async fn sessions_route(State(cfg): State<Arc<Config>>) -> Response {
 
 /// `GET /api/projects` — distinct project cwds (recent-first), for the new-session
 /// directory datalist.
-async fn projects_route(State(cfg): State<Arc<Config>>) -> Response {
+async fn projects_route(State(state): State<AppState>) -> Response {
+    let cfg = &state.config;
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
@@ -286,17 +305,17 @@ async fn projects_route(State(cfg): State<Arc<Config>>) -> Response {
 
 /// `GET /api/forest` — the corroborated live-Forest snapshot (liveness × JSONL state ×
 /// activity spark). Mirrors what `eigen forest --live` prints.
-async fn forest_route(State(cfg): State<Arc<Config>>) -> Response {
+async fn forest_route(State(state): State<AppState>) -> Response {
     (
         [(axum::http::header::CONTENT_TYPE, "application/json")],
-        forest_json(&cfg),
+        forest_json(&state.config),
     )
         .into_response()
 }
 
 /// `GET /api/watch/forest` — SSE that pushes the snapshot whenever it changes.
-async fn forest_watch_route(State(cfg): State<Arc<Config>>) -> Response {
-    forest_sse(cfg)
+async fn forest_watch_route(State(state): State<AppState>) -> Response {
+    forest_sse(state.config)
 }
 
 /// Compute the live-Forest snapshot as a JSON string. Empty array if the dirs aren't set.
@@ -389,7 +408,8 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
 }
 
 /// `GET /api/recent` — the most recent session uuid across all projects.
-async fn recent_route(State(cfg): State<Arc<Config>>) -> Response {
+async fn recent_route(State(state): State<AppState>) -> Response {
+    let cfg = &state.config;
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
@@ -406,8 +426,9 @@ async fn recent_route(State(cfg): State<Arc<Config>>) -> Response {
 /// JSONL is written (the live-follow signal for the right pane).
 async fn watch_route(
     AxumPath(uuid): AxumPath<String>,
-    State(cfg): State<Arc<Config>>,
+    State(state): State<AppState>,
 ) -> Response {
+    let cfg = &state.config;
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
@@ -421,7 +442,8 @@ async fn watch_route(
 }
 
 /// `GET /` in dev mode: the static index with a live-reload hook injected.
-async fn dev_index(State(cfg): State<Arc<Config>>) -> Response {
+async fn dev_index(State(state): State<AppState>) -> Response {
+    let cfg = &state.config;
     let Some(web_dir) = &cfg.web_dir else {
         return (StatusCode::NOT_FOUND, "no web dir").into_response();
     };
@@ -437,7 +459,8 @@ async fn dev_index(State(cfg): State<Arc<Config>>) -> Response {
 }
 
 /// `GET /api/dev/reload` — SSE that fires whenever the built frontend bundle changes.
-async fn dev_reload(State(cfg): State<Arc<Config>>) -> Response {
+async fn dev_reload(State(state): State<AppState>) -> Response {
+    let cfg = &state.config;
     let Some(web_dir) = &cfg.web_dir else {
         return (StatusCode::NOT_FOUND, "no web dir").into_response();
     };
@@ -510,7 +533,7 @@ struct PtyQuery {
 
 async fn pty_ws(
     ws: WebSocketUpgrade,
-    State(cfg): State<Arc<Config>>,
+    State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<PtyQuery>,
     headers: HeaderMap,
 ) -> Response {
@@ -520,7 +543,7 @@ async fn pty_ws(
     if !origin_is_local(&headers) {
         return (StatusCode::FORBIDDEN, "cross-origin websocket rejected").into_response();
     }
-    let command = pty_command(&cfg, &query);
+    let command = pty_command(&state.config, &query);
     ws.on_upgrade(move |socket| bridge(socket, command))
 }
 
