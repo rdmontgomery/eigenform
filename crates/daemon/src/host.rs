@@ -324,10 +324,11 @@ impl SessionHost {
 
     /// All currently-registered live ptys (order unspecified), after a GC sweep.
     ///
-    /// `list` is the canonical read path (the roster, the CLI mirror, 1.7's index),
-    /// so it sweeps first with the default [`SWEEP_MAX_AGE`]: a caller never sees an
-    /// entry whose final view has long expired. Use [`SessionHost::list_unswept`] if
-    /// you need the raw registry without triggering a sweep.
+    /// MUTATES the registry: it sweeps first with the default [`SWEEP_MAX_AGE`],
+    /// dropping any expired entry (one whose final view has long elapsed) before
+    /// returning, so a caller never sees a long-dead pty. `list` is the canonical
+    /// read path (the roster, the CLI mirror, 1.7's index). Use
+    /// [`SessionHost::list_unswept`] if you need the raw registry without the sweep.
     pub fn list(&self) -> Vec<Arc<LivePty>> {
         self.sweep(SWEEP_MAX_AGE);
         self.list_unswept()
@@ -403,21 +404,12 @@ pub const SWEEP_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
 /// Why a [`SessionHost::kill`] could not act. The HTTP layer (Task 1.7) maps this to
 /// a status code: `NotFound` → 404, `Ok` → 204.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KillError {
     /// No registered pty has this id (already reaped, never existed, or killed twice).
+    #[error("no live pty with that id")]
     NotFound,
 }
-
-impl std::fmt::Display for KillError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            KillError::NotFound => write!(f, "no live pty with that id"),
-        }
-    }
-}
-
-impl std::error::Error for KillError {}
 
 /// Mutable, frequently-updated facts about a live pty, guarded separately from the
 /// terminal model and the pty handle so a reader updating activity never blocks an

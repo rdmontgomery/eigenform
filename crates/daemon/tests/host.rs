@@ -144,7 +144,7 @@ async fn attached_subscriber_receives_the_exit_text_frame() {
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(frame) = rx.recv().await {
             if let Outbound::Text(msg) = frame {
-                if msg.contains("\"exit\"") {
+                if msg.contains(r#"{"type":"exit"}"#) {
                     return true;
                 }
             }
