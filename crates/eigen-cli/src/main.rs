@@ -450,6 +450,9 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     println!("woland → http://{addr}{}", if dev { "  (dev: live-reload on)" } else { "" });
+    if config.term_dir.is_some() {
+        println!("term   → http://{addr}/term");
+    }
 
     let rt = tokio::runtime::Runtime::new().context("starting tokio runtime")?;
     rt.block_on(eigen_daemon::serve(addr, config))

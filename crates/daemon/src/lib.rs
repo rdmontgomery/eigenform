@@ -43,6 +43,7 @@ pub struct Config {
 }
 
 /// Build the woland HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a pty;
+/// `term_dir`, if set, is served at `/term` (mounted before the woland fallback);
 /// `web_dir`, if set, is served as static files at `/`.
 pub fn app(config: Config) -> Router {
     let mut router = Router::new()

@@ -1,6 +1,9 @@
 //! The session transcript route: GET /session/:uuid renders the semantic HTML, and
 //! GET /api/recent reports the most recent session uuid.
 
+#[path = "helpers/mod.rs"]
+mod helpers;
+
 use eigen_daemon::{app, Config};
 
 const UUID: &str = "aaaa1111-0000-4000-8000-000000000001";
@@ -42,7 +45,7 @@ async fn start(cfg: Config) -> String {
 async fn session_route_renders_the_transcript_html() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;
-    let body = reqwest_get(&format!("{base}/session/aaaa1111")).await;
+    let body = helpers::http_get(&base, "/session/aaaa1111").await;
     assert!(body.contains("<details"), "collapsible transcript:\n{body}");
     assert!(body.contains("render me in the right pane"), "content present:\n{body}");
 }
@@ -51,7 +54,7 @@ async fn session_route_renders_the_transcript_html() {
 async fn session_fragment_route_returns_bare_html_for_in_page_injection() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;
-    let body = reqwest_get(&format!("{base}/api/session/aaaa1111")).await;
+    let body = helpers::http_get(&base, "/api/session/aaaa1111").await;
     assert!(body.contains("<details"), "transcript fragment:\n{body}");
     assert!(body.contains("render me in the right pane"));
     assert!(!body.to_lowercase().contains("<!doctype"), "fragment, not a full page:\n{body}");
@@ -61,7 +64,7 @@ async fn session_fragment_route_returns_bare_html_for_in_page_injection() {
 async fn sessions_route_lists_sessions_with_titles() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;
-    let body = reqwest_get(&format!("{base}/api/sessions")).await;
+    let body = helpers::http_get(&base, "/api/sessions").await;
     assert!(body.contains(UUID), "uuid in list:\n{body}");
     assert!(body.contains("render me in the right pane"), "title in list:\n{body}");
 }
@@ -70,7 +73,7 @@ async fn sessions_route_lists_sessions_with_titles() {
 async fn projects_route_lists_distinct_cwds() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;
-    let body = reqwest_get(&format!("{base}/api/projects")).await;
+    let body = helpers::http_get(&base, "/api/projects").await;
     assert!(body.contains("/home/me/p"), "project cwd listed:\n{body}");
 }
 
@@ -78,7 +81,7 @@ async fn projects_route_lists_distinct_cwds() {
 async fn recent_route_reports_the_latest_uuid() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;
-    let body = reqwest_get(&format!("{base}/api/recent")).await;
+    let body = helpers::http_get(&base, "/api/recent").await;
     assert!(body.contains(UUID), "recent uuid:\n{body}");
 }
 
@@ -123,16 +126,3 @@ async fn watch_emits_change_when_the_session_file_is_written() {
     assert!(saw_change, "expected an SSE 'change' event, got: {:?}", String::from_utf8_lossy(&acc));
 }
 
-/// Minimal HTTP GET without pulling in a client crate: raw request over TCP.
-async fn reqwest_get(url: &str) -> String {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let rest = url.strip_prefix("http://").unwrap();
-    let (host, path) = rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap();
-    let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    stream.write_all(req.as_bytes()).await.unwrap();
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await.unwrap();
-    let text = String::from_utf8_lossy(&buf);
-    text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()
-}

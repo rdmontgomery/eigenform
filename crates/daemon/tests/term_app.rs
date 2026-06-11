@@ -1,5 +1,8 @@
 //! Task 0.1: verify that /term serves the webterm app and / still serves woland.
 
+#[path = "helpers/mod.rs"]
+mod helpers;
+
 use eigen_daemon::{app, Config};
 
 /// Spin up the daemon with both web_dir and term_dir, return the base URL.
@@ -10,21 +13,6 @@ async fn start(cfg: Config) -> String {
         axum::serve(listener, app(cfg)).await.unwrap();
     });
     format!("http://{addr}")
-}
-
-/// Minimal HTTP GET (no external client crate): raw request over TCP.
-async fn get(base: &str, path: &str) -> String {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let host = base.strip_prefix("http://").unwrap();
-    let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    stream.write_all(req.as_bytes()).await.unwrap();
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await.unwrap();
-    let text = String::from_utf8_lossy(&buf);
-    text.split_once("\r\n\r\n")
-        .map(|(_, b)| b.to_string())
-        .unwrap_or_default()
 }
 
 #[tokio::test]
@@ -46,8 +34,8 @@ async fn serves_term_app_at_term_prefix_and_woland_at_root() {
         dev: false,
     };
     let base = start(cfg).await;
-    let body = get(&base, "/term/").await;
+    let body = helpers::http_get(&base, "/term/").await;
     assert!(body.contains("TERM"), "/term/ must serve the webterm app, got: {body:?}");
-    let body = get(&base, "/").await;
+    let body = helpers::http_get(&base, "/").await;
     assert!(body.contains("WOLAND"), "/ must still serve woland, got: {body:?}");
 }
