@@ -51,6 +51,9 @@ enum Cmd {
         /// directory of built frontend assets (default: ./web)
         #[arg(long)]
         web: Option<PathBuf>,
+        /// directory of the webterm (terminal-centerpiece) app assets to serve at /term
+        #[arg(long)]
+        term: Option<PathBuf>,
         /// dev mode: inject the live-reload hook and serve /api/dev/reload
         #[arg(long)]
         dev: bool,
@@ -197,7 +200,7 @@ fn main() -> Result<()> {
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
         Cmd::Surgery { action } => surgery(action),
-        Cmd::Daemon { port, cmd, web, dev } => daemon(port, cmd, web, dev),
+        Cmd::Daemon { port, cmd, web, term, dev } => daemon(port, cmd, web, term, dev),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
             SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
@@ -414,7 +417,7 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     Ok(())
 }
 
-fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, dev: bool) -> Result<()> {
+fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<PathBuf>, dev: bool) -> Result<()> {
     let cwd = env::current_dir().context("could not read current dir")?;
 
     // The pty command: explicit --cmd, else the user's shell, else bash. Not claude
@@ -439,6 +442,7 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, dev: bool) -> Re
         args: Vec::new(),
         cwd: Some(cwd),
         web_dir,
+        term_dir: term,
         projects_dir: Some(projects_dir()?),
         sessions_dir: Some(sessions_dir()?),
         state_dir: Some(state_dir()?),

@@ -29,6 +29,8 @@ pub struct Config {
     pub cwd: Option<PathBuf>,
     /// Directory of static frontend assets to serve at `/`. None = API only.
     pub web_dir: Option<PathBuf>,
+    /// Directory of the webterm (terminal-centerpiece) app to serve at `/term`. None = not mounted.
+    pub term_dir: Option<PathBuf>,
     /// `~/.claude/projects` (or a test dir) for session resolution. None = no transcript.
     pub projects_dir: Option<PathBuf>,
     /// `~/.claude/sessions` (or a test dir): `<pid>.json` files for liveness. None = no
@@ -55,6 +57,14 @@ pub fn app(config: Config) -> Router {
         .route("/api/projects", get(projects_route))
         .route("/api/recent", get(recent_route))
         .route("/api/watch/:uuid", get(watch_route));
+    if let Some(term_dir) = &config.term_dir {
+        let index = term_dir.join("index.html");
+        router = router.nest_service(
+            "/term",
+            tower_http::services::ServeDir::new(term_dir)
+                .fallback(tower_http::services::ServeFile::new(index)),
+        );
+    }
     if let Some(web_dir) = &config.web_dir {
         // Dev routes take precedence over the static fallback.
         if config.dev {
@@ -851,6 +861,7 @@ mod tests {
             args: vec![],
             cwd: None,
             web_dir: None,
+            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
             sessions_dir: None,
             state_dir: None,
@@ -904,6 +915,7 @@ mod tests {
             args: vec![],
             cwd: None,
             web_dir: None,
+            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
             sessions_dir: None,
             state_dir: None,

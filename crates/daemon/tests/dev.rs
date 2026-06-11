@@ -8,6 +8,7 @@ fn cfg(web_dir: std::path::PathBuf, dev: bool) -> Config {
         args: vec![],
         cwd: None,
         web_dir: Some(web_dir),
+        term_dir: None,
         projects_dir: None,
         sessions_dir: None,
         state_dir: None,

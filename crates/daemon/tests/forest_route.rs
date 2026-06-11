@@ -28,6 +28,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir, Config
         args: vec![],
         cwd: None,
         web_dir: None,
+        term_dir: None,
         projects_dir: Some(proj.path().to_path_buf()),
         sessions_dir: Some(sess.path().to_path_buf()),
         state_dir: Some(state.path().to_path_buf()),

@@ -12,6 +12,7 @@ async fn start() -> String {
         args: vec![],
         cwd: None,
         web_dir: None,
+        term_dir: None,
         projects_dir: None,
         sessions_dir: None,
         state_dir: None,
