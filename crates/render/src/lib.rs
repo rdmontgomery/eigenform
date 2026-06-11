@@ -290,7 +290,7 @@ fn fit(s: &str, width: usize) -> String {
         t
     } else {
         let mut t = s.to_string();
-        t.extend(std::iter::repeat(' ').take(width - chars.len()));
+        t.extend(std::iter::repeat_n(' ', width - chars.len()));
         t
     }
 }

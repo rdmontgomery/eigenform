@@ -40,6 +40,10 @@ pub struct Config {
     pub sessions_dir: Option<PathBuf>,
     /// `~/.eigen/state`: persisted per-session metrics (the activity spark). None = no spark.
     pub state_dir: Option<PathBuf>,
+    /// Code root for the new-session launcher (`~/projects` or similar).
+    /// `immediate_subdirs` of this path become `recent: false` candidates.
+    /// None = no subdirectory suggestions (only recents from projects_dir).
+    pub workspace_root: Option<PathBuf>,
     /// Dev mode: inject the live-reload hook and serve `/api/dev/reload`.
     pub dev: bool,
 }
@@ -70,6 +74,7 @@ pub fn app(config: Config) -> Router {
         .route("/api/watch/forest", get(forest_watch_route))
         .route("/api/projects", get(projects_route))
         .route("/api/recent", get(recent_route))
+        .route("/api/candidates", get(candidates_route))
         .route("/api/watch/:uuid", get(watch_route));
     if let Some(term_dir) = &config.term_dir {
         let index = term_dir.join("index.html");
@@ -231,6 +236,7 @@ fn load_session(cfg: &Config, uuid: &str) -> Result<eigen_surgery::Session, (Sta
 /// (whose file grows each turn) re-renders only when it actually changes.
 #[derive(Default)]
 struct SessionJsonCache {
+    #[allow(clippy::type_complexity)]
     map: Mutex<HashMap<PathBuf, (SystemTime, u64, Arc<str>)>>,
 }
 
@@ -422,6 +428,56 @@ async fn recent_route(State(state): State<AppState>) -> Response {
         },
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
     }
+}
+
+/// `GET /api/candidates` — launcher directory list: recent session cwds merged with the
+/// immediate subdirs of the configured workspace root. Response: JSON array
+/// `[{"path": string, "recent": bool}]`. If neither `workspace_root` nor `projects_dir`
+/// is set, returns an empty array. Non-UTF-8 paths are serialized via `display()` (same
+/// approach as `/api/pty`'s `cwd` field).
+async fn candidates_route(State(state): State<AppState>) -> Response {
+    let cfg = &state.config;
+
+    // Recents: deduplicated cwds from recent sessions, in recency order.
+    let recents: Vec<PathBuf> = if let Some(dir) = &cfg.projects_dir {
+        match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+            Ok(sessions) => {
+                let mut seen = std::collections::HashSet::new();
+                sessions
+                    .into_iter()
+                    .map(|s| s.cwd)
+                    .filter(|c| seen.insert(c.clone()))
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
+    // Subdirs: immediate children of the workspace root. Missing root → empty (not a 500).
+    let subdirs: Vec<PathBuf> = if let Some(root) = &cfg.workspace_root {
+        eigen_projects::immediate_subdirs(root).unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    // Short-circuit: nothing configured → empty array.
+    if recents.is_empty() && subdirs.is_empty() {
+        return axum::Json(serde_json::json!([])).into_response();
+    }
+
+    let candidates = eigen_projects::merge_candidates(&recents, &subdirs);
+    let items: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "path": c.path.display().to_string(),
+                "recent": c.recent,
+            })
+        })
+        .collect();
+    axum::Json(items).into_response()
 }
 
 /// `GET /api/watch/:uuid` — Server-Sent Events: a `change` event each time the session's
@@ -949,7 +1005,7 @@ impl Pty {
 
     /// A fresh reader over the pty's output. Reads block until data or EOF.
     pub fn reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
-        Ok(self.master.try_clone_reader()?)
+        self.master.try_clone_reader()
     }
 
     /// OS pid of the child, for `sessions/<pid>.json` reconciliation. `None` once
@@ -1046,6 +1102,7 @@ mod tests {
             projects_dir: Some(dir.path().to_path_buf()),
             sessions_dir: None,
             state_dir: None,
+            workspace_root: None,
             dev: false,
         };
 
@@ -1100,6 +1157,7 @@ mod tests {
             projects_dir: Some(dir.path().to_path_buf()),
             sessions_dir: None,
             state_dir: None,
+            workspace_root: None,
             dev: false,
         };
 

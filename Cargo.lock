@@ -390,6 +390,7 @@ dependencies = [
  "axum",
  "chrono",
  "eigen-forest",
+ "eigen-projects",
  "eigen-render",
  "eigen-surgery",
  "futures-util",

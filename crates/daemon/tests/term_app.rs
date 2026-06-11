@@ -31,6 +31,7 @@ async fn serves_term_app_at_term_prefix_and_woland_at_root() {
         projects_dir: None,
         sessions_dir: None,
         state_dir: None,
+        workspace_root: None,
         dev: false,
     };
     let base = start(cfg).await;

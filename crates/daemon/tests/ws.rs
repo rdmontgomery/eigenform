@@ -16,6 +16,7 @@ async fn start() -> String {
         projects_dir: None,
         sessions_dir: None,
         state_dir: None,
+        workspace_root: None,
         dev: false,
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

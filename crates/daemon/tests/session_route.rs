@@ -27,6 +27,7 @@ fn fixture() -> (tempfile::TempDir, Config) {
         projects_dir: Some(dir.path().to_path_buf()),
         sessions_dir: None,
         state_dir: None,
+        workspace_root: None,
         dev: false,
     };
     (dir, cfg)

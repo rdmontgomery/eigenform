@@ -63,6 +63,9 @@ enum Cmd {
         /// directory of the webterm (terminal-centerpiece) app assets to serve at /term
         #[arg(long)]
         term: Option<PathBuf>,
+        /// code root for the new-session launcher (default: ~/projects)
+        #[arg(long)]
+        workspace: Option<PathBuf>,
         /// dev mode: inject the live-reload hook and serve /api/dev/reload
         #[arg(long)]
         dev: bool,
@@ -210,7 +213,7 @@ fn main() -> Result<()> {
         },
         Cmd::Surgery { action } => surgery(action),
         Cmd::Ptys { port } => ptys_list(port),
-        Cmd::Daemon { port, cmd, web, term, dev } => daemon(port, cmd, web, term, dev),
+        Cmd::Daemon { port, cmd, web, term, workspace, dev } => daemon(port, cmd, web, term, workspace, dev),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
             SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
@@ -480,7 +483,7 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     Ok(())
 }
 
-fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<PathBuf>, dev: bool) -> Result<()> {
+fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<PathBuf>, workspace: Option<PathBuf>, dev: bool) -> Result<()> {
     let cwd = env::current_dir().context("could not read current dir")?;
 
     // The pty command: explicit --cmd, else the user's shell, else bash. Not claude
@@ -500,6 +503,13 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
         );
     }
 
+    // Workspace root: explicit --workspace, else ~/projects if it exists, else None.
+    let workspace_root = workspace.or_else(|| {
+        home_dir()
+            .map(|h| h.join("projects"))
+            .filter(|p| p.is_dir())
+    });
+
     let config = eigen_daemon::Config {
         program,
         args: Vec::new(),
@@ -509,6 +519,7 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
         projects_dir: Some(projects_dir()?),
         sessions_dir: Some(sessions_dir()?),
         state_dir: Some(state_dir()?),
+        workspace_root,
         dev,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));

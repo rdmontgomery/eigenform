@@ -166,11 +166,11 @@ pub fn list(
             Scope::Project(cwd) => &s.cwd == cwd,
         })
         .map(session_ref)
-        .filter(|r| cutoff.map_or(true, |c| r.recency >= c))
+        .filter(|r| cutoff.is_none_or(|c| r.recency >= c))
         .collect();
 
     // Recent-first; the CLI/render emits newest-at-bottom by reversing.
-    refs.sort_by(|a, b| b.recency.cmp(&a.recency));
+    refs.sort_by_key(|b| std::cmp::Reverse(b.recency));
     Ok(refs)
 }
 
@@ -269,11 +269,11 @@ pub fn session_spark(jsonl_path: &Path) -> Vec<u32> {
                     acc = acc.saturating_add(out as u32);
                 }
             }
-            Some("system") => {
-                if v.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") {
-                    spark.push(acc);
-                    acc = 0;
-                }
+            Some("system")
+                if v.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") =>
+            {
+                spark.push(acc);
+                acc = 0;
             }
             _ => {}
         }
@@ -488,10 +488,10 @@ fn scan_tail(lines: &[&str]) -> Tail {
                 }
             }
             Some("user") => last_user = Some(i),
-            Some("system") => {
-                if value.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") {
-                    last_close = Some(i);
-                }
+            Some("system")
+                if value.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") =>
+            {
+                last_close = Some(i);
             }
             _ => {}
         }

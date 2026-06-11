@@ -18,9 +18,10 @@ serde_json   = { workspace = true }
 chrono       = { workspace = true }
 notify       = { workspace = true }
 tokio-stream = { workspace = true }
-eigen-forest  = { path = "../forest" }
-eigen-surgery = { path = "../surgery" }
-eigen-render  = { path = "../render" }
+eigen-forest   = { path = "../forest" }
+eigen-surgery  = { path = "../surgery" }
+eigen-render   = { path = "../render" }
+eigen-projects = { path = "../projects" }
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"

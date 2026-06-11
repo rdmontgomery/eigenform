@@ -12,6 +12,7 @@ fn cfg(web_dir: std::path::PathBuf, dev: bool) -> Config {
         projects_dir: None,
         sessions_dir: None,
         state_dir: None,
+        workspace_root: None,
         dev,
     }
 }
