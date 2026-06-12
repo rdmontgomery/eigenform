@@ -121,7 +121,7 @@ git commit -m "daemon: serve a second app at /term (term_dir config)"
 
 **Step 1: Copy woland's build setup.** Copy `web/package.json` → `webterm/package.json`; keep the same scripts verbatim (`esbuild src/main.ts --bundle --outdir=dist --format=esm --minify`, watch variant, `tsc --noEmit`, `node --test`) and the same deps (`@xterm/xterm`, `@xterm/addon-fit`, esbuild, typescript). Change `"name"` to `"eigen-term"`. Copy `web/tsconfig.json` unchanged.
 
-**Step 2: Minimal index.html** — one `<div id="app">`, `<script type="module" src="dist/main.js">`, `<link rel="stylesheet" href="dist/main.css">`. **Important:** asset URLs must be relative (`dist/main.js`, not `/dist/main.js`) because the app is served under `/term/`.
+**Step 2: Minimal index.html** — one `<div id="app">`, `<script type="module" src="/term/dist/main.js">`, `<link rel="stylesheet" href="/term/dist/main.css">`. **Important:** asset URLs must be absolute `/term/`-prefixed, NOT relative. Rationale: axum's `nest_service` serves the index for bare `/term` (no trailing slash) without issuing a redirect, so the browser's base directory becomes `/` and relative `dist/…` URLs would resolve against woland's `/dist/` instead of this app's assets. Discovered during live acceptance — corrected from the original plan's "relative" claim.
 
 **Step 3: Minimal main.ts** — `document.getElementById("app")!.textContent = "term";` plus `import "./style.css";`.
 

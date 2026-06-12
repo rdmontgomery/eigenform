@@ -4,10 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>eigen · term</title>
-    <link rel="stylesheet" href="dist/main.css" />
+    <!-- Asset URLs are absolute /term/-prefixed: bare /term (no trailing slash) is served
+         without a redirect, so the browser's base directory would be / and relative URLs
+         would resolve against woland's dist/ instead of this app's. -->
+    <link rel="stylesheet" href="/term/dist/main.css" />
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="dist/main.js"></script>
+    <script type="module" src="/term/dist/main.js"></script>
   </body>
 </html>
