@@ -4,6 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>eigen · term</title>
+    <!-- Chrome/terminal fonts (eigen design system). Loaded here, not via CSS
+         @import — esbuild bundles xterm.css before style.css, so an @import
+         there would land mid-bundle and be ignored. Falls back to the system
+         stacks in --font-ui/--font-mono when offline. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+    />
     <!-- Asset URLs are absolute /term/-prefixed: bare /term (no trailing slash) is served
          without a redirect, so the browser's base directory would be / and relative URLs
          would resolve against woland's dist/ instead of this app's. -->

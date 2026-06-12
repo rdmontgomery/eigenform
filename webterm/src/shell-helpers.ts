@@ -94,6 +94,8 @@ export interface TabDescriptor {
   ptyId?: string;
   uuid?: string;
   label: string;
+  /** Full cwd path when known — drives the terminal-header breadcrumb. */
+  cwd?: string;
 }
 
 /** The outcome of reconciling a saved tab against current live ptys. */

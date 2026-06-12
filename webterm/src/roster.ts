@@ -48,6 +48,9 @@ export interface RosterRow {
   key: string;
   label: string;
   cwdChip: string;
+  /** Full cwd path when known (live pty cwd, else forest cwd). Drives the
+   *  terminal-header breadcrumb; cwdChip remains the short rail chip. */
+  cwd?: string;
   /** State string. For live rows: PtyState. For disk-only rows: forest state
    *  string. Kept as string (not a union) to stay honest about provenance. */
   state: string;
@@ -258,6 +261,9 @@ export function buildRoster(
       ptyId: p.id,
       recency: p.lastActivity,
     };
+    if (effectiveCwd !== null) {
+      row.cwd = effectiveCwd;
+    }
     if (resolvedUuid !== null) {
       row.uuid = resolvedUuid;
     }
@@ -291,6 +297,7 @@ export function buildRoster(
       key: `uuid:${fi.uuid}`,
       label,
       cwdChip: cwdChip(fi.cwd),
+      cwd: fi.cwd,
       state: fi.state,
       // NOTE: forest.live=true here means claude is running outside our
       // registry. We cannot attach, so this row is live=false in the roster.

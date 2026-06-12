@@ -9,15 +9,31 @@ export interface TermHandle {
 }
 
 /**
+ * Warm-ink xterm theme (eigen design system). xterm paints to canvas, which
+ * needs concrete colors — these are sRGB conversions of the CSS oklch tokens:
+ *   background = --term-bg oklch(0.155 0.013 56), foreground = cream
+ *   oklch(0.91 0.018 75), cursor/selection = --accent oklch(0.70 0.13 47).
+ * The terminal stays this dark ink slab in BOTH themes (see .term-scope).
+ */
+const TERM_THEME = {
+  background: "#110b07",
+  foreground: "#e9e0d4",
+  cursor: "#df8353",
+  cursorAccent: "#110b07",
+  selectionBackground: "#df835340",
+};
+
+/**
  * Create a pre-configured Terminal + FitAddon pair.
- * Styling (theme, font size) is minimal here — Phase 2.3 owns the full palette.
  * The caller is responsible for `term.open(element)` and the initial `fit.fit()`.
  */
 export function newTerminal(): TermHandle {
   const term = new Terminal({
     fontFamily: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
-    fontSize: 12,
+    fontSize: 12.75,
+    lineHeight: 1.2,
     cursorBlink: true,
+    theme: TERM_THEME,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -44,6 +60,9 @@ export interface PtyEvents {
 
 export interface PtyHandle {
   dispose(): void;
+  /** Send raw characters to the pty's stdin (e.g. "\x03" for interrupt).
+   *  Silently dropped if the socket is not open. */
+  sendInput(data: string): void;
 }
 
 /**
@@ -132,6 +151,11 @@ export function connectPty(
   };
 
   return {
+    sendInput(data: string) {
+      if (sock.readyState === WebSocket.OPEN) {
+        sock.send(JSON.stringify({ type: "stdin", data }));
+      }
+    },
     dispose() {
       onData?.dispose();
       onResize?.dispose();

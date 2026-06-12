@@ -1,17 +1,29 @@
 /**
- * shell.ts — Sidebar roster + tab strip + terminal host.
+ * shell.ts — Rail roster + top bar (tabs, global controls) + terminal host.
  *
- * Layout: CSS grid — left rail (sidebar) | main area (tab strip + terminal host).
+ * Layout (eigen warm-ink design, Claude Design handoff 2026-06-12):
+ *   rail (brand · search · grouped sessions · footer)
+ *   │ topbar (tabs · theme toggle · global drawer toggle)
+ *   │ term-area (header breadcrumb · term-host with one Terminal per tab)
+ *
  * One Terminal per open tab, kept alive while the tab exists, hidden via
  * display:none when inactive. Tab switch calls fit.fit() to correct dimensions.
  *
- * Pure helpers (relativeRecency, reconcileTabs, TabDescriptor, TabReconcileAction)
- * live in shell-helpers.ts — no xterm dependency, directly testable with node --test.
+ * Pure helpers (relativeRecency, ageGroup, inkFor, reconcileTabs, …) live in
+ * shell-helpers.ts — no xterm dependency, directly testable with node --test.
+ *
+ * DRAWER (global, not per-tab): the transcript drawer is toggled by a single
+ * persistent control in the top-right and follows the ACTIVE tab. Open state
+ * persists across reloads (LS_DRAWER). When the active tab has no session
+ * uuid yet, the open drawer shows a placeholder instead of a transcript.
+ *
+ * THEME: dark (default) / light, toggled from the top bar, persisted
+ * (LS_THEME). The terminal pane stays dark ink in both — see .term-scope.
  *
  * LOCALSTORAGE SCHEMA (key "eigen:term:tabs:v1"):
  *   JSON array of TabDescriptor. Versioned key — bump suffix if schema changes.
  *
- * POLL: sidebar polls GET /api/pty + GET /api/forest every 3s to update badges.
+ * POLL: rail polls GET /api/pty + GET /api/forest every 3s to update badges.
  * Interval is cleared on visibilitychange → hidden to avoid background fan-out.
  */
 
@@ -22,12 +34,16 @@ import type { PtyInfo, ForestItem } from "./types.ts";
 import {
   relativeRecency,
   reconcileTabs,
+  ageGroup,
+  inkFor,
+  type AgeGroup,
   type TabDescriptor,
   type TabReconcileAction,
 } from "./shell-helpers.ts";
 import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
+import { icon } from "./icons.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -39,13 +55,27 @@ export type { TabDescriptor, TabReconcileAction };
 
 const LS_KEY = "eigen:term:tabs:v1";
 const LS_OVERRIDES = "eigen:term:overrides:v1";
+const LS_THEME = "eigen:term:theme:v1";
+const LS_DRAWER = "eigen:term:drawer:v1";
 
-const STATE_COLORS: Record<string, string> = {
-  working: "var(--state-working)",
-  waiting: "var(--state-waiting)",
-  idle: "var(--state-idle)",
-  exited: "var(--state-exited)",
+const KNOWN_STATES = new Set(["working", "waiting", "idle", "exited"]);
+
+/** CSS dot modifier for a state string; unknown forest states render idle. */
+function dotClass(state: string): string {
+  return `dot dot--${KNOWN_STATES.has(state) ? state : "idle"}`;
+}
+
+/** The session's ink hue CSS value, from its most durable key. */
+function inkVar(uuid: string | undefined, ptyId: string | undefined, fallback: string): string {
+  return `var(--ink-${inkFor(uuid ?? ptyId ?? fallback)})`;
+}
+
+const GROUP_LABELS: Record<AgeGroup, string> = {
+  today: "Today",
+  week: "This week",
+  earlier: "Earlier",
 };
+const GROUP_ORDER: AgeGroup[] = ["today", "week", "earlier"];
 
 // ---------------------------------------------------------------------------
 // Tab registry type
@@ -61,10 +91,6 @@ interface TabEntry {
   state: string;
   /** true when the pty exited or an attach-miss closed the socket. */
   dead: boolean;
-  /** true when the transcript drawer is open for this tab. */
-  drawerOpen: boolean;
-  /** Live DrawerHandle — non-null iff drawerOpen is true. */
-  drawerHandle: DrawerHandle | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,23 +109,70 @@ interface TabEntry {
  */
 export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
+  // Theme (applied before any layout so first paint is correct)
+  // ------------------------------------------------------------------
+  let theme = localStorage.getItem(LS_THEME) === "light" ? "light" : "dark";
+  applyTheme(theme);
+
+  function applyTheme(t: string) {
+    document.documentElement.classList.toggle("theme-light", t === "light");
+  }
+
+  // ------------------------------------------------------------------
   // Skeleton DOM
   // ------------------------------------------------------------------
   appEl.innerHTML = "";
   appEl.className = "shell";
 
-  const sidebar = el("aside", "sidebar");
+  // rail
+  const rail = el("aside", "rail");
+  const railBrand = el("div", "rail-brand");
+  const brandWord = el("span", "brand-word");
+  brandWord.append(icon("mark", 20, 2.2));
+  const brandName = el("span", "brand-name");
+  brandName.textContent = "eigen";
+  brandWord.append(brandName);
+  const newBtn = el("button", "icon-btn icon-btn--boxed");
+  newBtn.title = "New session";
+  newBtn.append(icon("plus", 15));
+  railBrand.append(brandWord, newBtn);
+
+  const railSearch = el("div", "rail-search");
+  const searchBox = el("div", "rail-search-box");
+  searchBox.append(icon("search", 13));
+  const searchInput = el("input", "rail-search-input");
+  searchInput.placeholder = "Search sessions";
+  searchBox.append(searchInput);
+  railSearch.append(searchBox);
+
+  const railScroll = el("div", "rail-scroll scroll");
+  const railFoot = el("div", "rail-foot");
+  rail.append(railBrand, railSearch, railScroll, railFoot);
+
+  // main column
   const main = el("div", "main");
+  const topbar = el("div", "topbar");
   const tabStrip = el("div", "tab-strip");
+  const controls = el("div", "topbar-controls");
+  topbar.append(tabStrip, controls);
+
+  const termArea = el("div", "term-area term-scope");
+  const termHeader = el("div", "term-header");
   const termHost = el("div", "term-host");
-  main.append(tabStrip, termHost);
-  appEl.append(sidebar, main);
+  termArea.append(termHeader, termHost);
+
+  main.append(topbar, termArea);
+  appEl.append(rail, main);
 
   // ------------------------------------------------------------------
   // Tab registry
   // ------------------------------------------------------------------
   const tabs: TabEntry[] = [];
   let activeTabId: string | null = null;
+
+  function activeTab(): TabEntry | null {
+    return tabs.find((t) => t.id === activeTabId) ?? null;
+  }
 
   function saveTabs() {
     const descriptors: TabDescriptor[] = tabs.map((t) => t.descriptor);
@@ -119,17 +192,15 @@ export function mountShell(appEl: HTMLElement): void {
       }
     }
     renderTabStrip();
+    renderTermHeader();
+    syncDrawer();
+    renderRail();
   }
 
   function closeTab(id: string) {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const t = tabs[idx]!;
-
-    // Tear down the drawer if open — releases EventSource before DOM removal.
-    t.drawerHandle?.close();
-    t.drawerHandle = null;
-    t.drawerOpen = false;
 
     // Detach socket — pty stays alive in the daemon.
     t.ptyHandle?.dispose();
@@ -144,11 +215,15 @@ export function mountShell(appEl: HTMLElement): void {
     if (activeTabId === id) {
       activeTabId = null;
       const next = tabs[Math.min(idx, tabs.length - 1)];
-      if (next) activateTab(next.id);
-      else renderTabStrip();
-    } else {
-      renderTabStrip();
+      if (next) {
+        activateTab(next.id);
+        return;
+      }
     }
+    renderTabStrip();
+    renderTermHeader();
+    syncDrawer();
+    renderRail();
   }
 
   async function killTab(id: string) {
@@ -169,70 +244,127 @@ export function mountShell(appEl: HTMLElement): void {
     void refreshRoster();
   }
 
-  /** Toggle the transcript drawer for `entry`. No-op if entry has no uuid. */
-  function toggleDrawer(entry: TabEntry) {
-    const uuid = entry.descriptor.uuid ?? null;
-    if (!uuid) return;
+  // ------------------------------------------------------------------
+  // Drawer — GLOBAL toggle (persistent control top-right), follows the
+  // active tab. Replaces the old per-tab hamburger, which could open the
+  // drawer but never close it.
+  // ------------------------------------------------------------------
 
-    if (entry.drawerOpen) {
-      // Close
-      entry.drawerHandle?.close();
-      entry.drawerHandle = null;
-      entry.drawerOpen = false;
-    } else {
-      // Open — mount on the termHost so it overlays the terminal absolutely.
-      // onFork: open the forked session as a new tab + refresh the roster so
-      // the sidebar shows it immediately (copy-on-fork — source tab stays open).
-      entry.drawerHandle = mountDrawer(termHost, uuid, (newUuid) => {
-        openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
-          uuid: newUuid,
-          label: "fork",
-        });
-        void refreshRoster();
-      });
-      entry.drawerOpen = true;
-    }
-    renderTabStrip();
+  let drawerOpen = localStorage.getItem(LS_DRAWER) === "1";
+  /** Mounted transcript drawer (uuid-bound), or null. */
+  let drawerCurrent: { uuid: string; handle: DrawerHandle } | null = null;
+  /** Placeholder panel shown when the drawer is open but the active tab has
+   *  no session uuid yet. */
+  let drawerPlaceholder: HTMLElement | null = null;
+
+  function setDrawerOpen(open: boolean) {
+    drawerOpen = open;
+    localStorage.setItem(LS_DRAWER, open ? "1" : "0");
+    syncDrawer();
   }
 
-  // The tab strip is fully rebuilt on every renderTabStrip call. The drawer toggle
-  // is stateful (open/closed), but its appearance is derived from TabEntry.drawerOpen —
-  // so each rebuild reads the model and produces the correct button state without
-  // any stale-DOM risk. This is the correct pattern for this full-rebuild architecture.
+  /** Reconcile the mounted drawer against (drawerOpen, active tab). */
+  function syncDrawer() {
+    const uuid = drawerOpen ? (activeTab()?.descriptor.uuid ?? null) : null;
+
+    if (drawerPlaceholder) {
+      drawerPlaceholder.remove();
+      drawerPlaceholder = null;
+    }
+
+    if (!drawerOpen || tabs.length === 0) {
+      drawerCurrent?.handle.close();
+      drawerCurrent = null;
+      renderControls();
+      return;
+    }
+
+    if (uuid) {
+      if (drawerCurrent?.uuid !== uuid) {
+        drawerCurrent?.handle.close();
+        // onFork: open the forked session as a new tab + refresh the roster so
+        // the rail shows it immediately (copy-on-fork — source tab stays open).
+        drawerCurrent = {
+          uuid,
+          handle: mountDrawer(termHost, uuid, (newUuid) => {
+            openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
+              uuid: newUuid,
+              label: "fork",
+            });
+            void refreshRoster();
+          }),
+        };
+      }
+    } else {
+      drawerCurrent?.handle.close();
+      drawerCurrent = null;
+      drawerPlaceholder = el("div", "drawer");
+      const head = el("div", "drawer-header");
+      const title = el("span", "drawer-title");
+      title.textContent = "Transcript";
+      head.append(title);
+      const empty = el("div", "drawer-empty");
+      empty.textContent = "no transcript yet — waiting for a session uuid";
+      drawerPlaceholder.append(head, empty);
+      termHost.append(drawerPlaceholder);
+    }
+    renderControls();
+  }
+
+  // ------------------------------------------------------------------
+  // Top bar: global controls (theme · drawer)
+  // ------------------------------------------------------------------
+
+  function renderControls() {
+    controls.innerHTML = "";
+
+    const themeBtn = el("button", "icon-btn");
+    themeBtn.title = theme === "dark" ? "Light mode" : "Dark mode";
+    themeBtn.append(icon(theme === "dark" ? "sun" : "moon", 16));
+    themeBtn.addEventListener("click", () => {
+      theme = theme === "dark" ? "light" : "dark";
+      localStorage.setItem(LS_THEME, theme);
+      applyTheme(theme);
+      renderControls();
+    });
+
+    const sep = el("div", "topbar-sep");
+
+    const drawerBtn = el("button", `icon-btn${drawerOpen ? " icon-btn--active" : ""}`);
+    drawerBtn.title = drawerOpen ? "Hide transcript" : "Show transcript";
+    drawerBtn.append(icon("panel", 16));
+    drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
+
+    controls.append(themeBtn, sep, drawerBtn);
+  }
+
+  // ------------------------------------------------------------------
+  // Tab strip
+  // ------------------------------------------------------------------
+
+  // The tab strip is fully rebuilt on every renderTabStrip call; appearance is
+  // derived from the model (TabEntry), so rebuilds carry no stale-DOM risk.
   function renderTabStrip() {
     tabStrip.innerHTML = "";
     for (const t of tabs) {
       const tab = el("div", "tab");
-      if (t.id === activeTabId) tab.classList.add("tab--active");
+      if (t.id === activeTabId) {
+        tab.classList.add("tab--active");
+        tab.style.setProperty(
+          "--tab-ink",
+          inkVar(t.descriptor.uuid, t.descriptor.ptyId, t.descriptor.label),
+        );
+      }
       if (t.dead) tab.classList.add("tab--dead");
 
-      const badge = el("span", "tab-badge");
-      badge.style.color = STATE_COLORS[t.state] ?? "var(--state-idle)";
-      badge.textContent = "●";
+      const badge = el("span", dotClass(t.state));
 
       const labelEl = el("span", "tab-label");
       labelEl.textContent = t.descriptor.label;
 
-      // Drawer toggle — enabled only when the tab has a session uuid.
-      const uuid = t.descriptor.uuid ?? null;
-      const drawerBtn = el("button", "tab-drawer");
-      drawerBtn.textContent = "≡";
-      if (uuid) {
-        drawerBtn.title = t.drawerOpen ? "Close transcript drawer" : "Open transcript drawer";
-        if (t.drawerOpen) drawerBtn.classList.add("tab-drawer--open");
-        drawerBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          toggleDrawer(t);
-        });
-      } else {
-        drawerBtn.title = "Transcript drawer — available once a session uuid is assigned";
-        drawerBtn.disabled = true;
-        drawerBtn.classList.add("tab-drawer--disabled");
-      }
-
       const kill = el("button", "tab-kill");
       kill.title = "Kill pty (process terminated)";
-      kill.textContent = "☠";
+      kill.append(icon("stop", 11, 2));
       kill.addEventListener("click", (e) => {
         e.stopPropagation();
         void killTab(t.id);
@@ -240,22 +372,59 @@ export function mountShell(appEl: HTMLElement): void {
 
       const close = el("button", "tab-close");
       close.title = "Detach — close tab, pty stays alive";
-      close.textContent = "✕";
+      close.append(icon("x", 11, 2));
       close.addEventListener("click", (e) => {
         e.stopPropagation();
         closeTab(t.id);
       });
 
-      tab.append(badge, labelEl, drawerBtn, kill, close);
+      tab.append(badge, labelEl, kill, close);
       tab.addEventListener("click", () => activateTab(t.id));
       tabStrip.append(tab);
     }
 
-    const newBtn = el("button", "tab-new");
-    newBtn.textContent = "+";
-    newBtn.title = "Open new session (fuzzy launcher)";
-    newBtn.addEventListener("click", () => openPicker(newBtn));
-    tabStrip.append(newBtn);
+    const plusBtn = el("button", "tab-new");
+    plusBtn.title = "Open new session (fuzzy launcher)";
+    plusBtn.append(icon("plus", 16));
+    plusBtn.addEventListener("click", () => openPicker(plusBtn));
+    tabStrip.append(plusBtn);
+  }
+
+  // ------------------------------------------------------------------
+  // Terminal header — breadcrumb (cwd) + state chip for the active tab
+  // ------------------------------------------------------------------
+
+  function renderTermHeader() {
+    termHeader.innerHTML = "";
+    const t = activeTab();
+    if (!t) {
+      const crumb = el("span", "term-crumb");
+      crumb.textContent = "no open session";
+      termHeader.append(crumb);
+      return;
+    }
+
+    const crumb = el("span", "term-crumb");
+    const cwd = t.descriptor.cwd;
+    if (cwd) {
+      const trimmed = cwd.replace(/\/+$/, "");
+      const slash = trimmed.lastIndexOf("/");
+      crumb.append(trimmed.slice(0, slash + 1));
+      const base = document.createElement("b");
+      base.textContent = trimmed.slice(slash + 1);
+      crumb.append(base);
+    } else {
+      const base = document.createElement("b");
+      base.textContent = t.descriptor.label;
+      crumb.append(base);
+    }
+
+    const right = el("span", "term-header-right");
+    const stateChip = el("span", "chip");
+    stateChip.textContent = t.dead ? "exited" : t.state;
+    right.append(stateChip);
+
+    termHeader.append(crumb, right);
   }
 
   // ------------------------------------------------------------------
@@ -286,8 +455,6 @@ export function mountShell(appEl: HTMLElement): void {
       ptyHandle: null,
       state: "idle",
       dead: false,
-      drawerOpen: false,
-      drawerHandle: null,
     };
 
     const ptyHandle = connectPty(query, handle.term, {
@@ -302,11 +469,14 @@ export function mountShell(appEl: HTMLElement): void {
         entry.descriptor = { ...entry.descriptor, uuid };
         saveTabs();
         renderTabStrip();
+        // The active tab just gained a transcript — swap the placeholder out.
+        if (entry.id === activeTabId) syncDrawer();
       },
       onExit() {
         entry.state = "exited";
         entry.dead = true;
         renderTabStrip();
+        if (entry.id === activeTabId) renderTermHeader();
       },
       onClose(reason) {
         if (reason === "no live pty with that id") {
@@ -319,10 +489,12 @@ export function mountShell(appEl: HTMLElement): void {
           entry.dead = true;
           entry.descriptor = { ...entry.descriptor, label: `✗ ${reason}` };
           renderTabStrip();
+          if (entry.id === activeTabId) renderTermHeader();
         } else {
           // Any other close: mark dead so user can see + manually close.
           entry.dead = true;
           renderTabStrip();
+          if (entry.id === activeTabId) renderTermHeader();
         }
       },
     });
@@ -340,7 +512,7 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
-  // Picker — overlay triggered by the "+" tab-strip button
+  // Picker — overlay triggered by the "+" buttons (rail brand + tab strip)
   // ------------------------------------------------------------------
 
   /** Currently-mounted picker teardown handle (null when picker is closed). */
@@ -362,7 +534,7 @@ export function mountShell(appEl: HTMLElement): void {
           const query = create
             ? `?new=${encodeURIComponent(path)}&create=1`
             : `?new=${encodeURIComponent(path)}`;
-          openTabWithQuery(query, { label: basename(path) });
+          openTabWithQuery(query, { label: basename(path), cwd: path });
         },
         onDismiss() {
           pickerTeardown = null;
@@ -371,6 +543,8 @@ export function mountShell(appEl: HTMLElement): void {
     );
   }
 
+  newBtn.addEventListener("click", () => openPicker(newBtn));
+
   /** Path basename (everything after the last "/"). */
   function basename(p: string): string {
     const i = p.lastIndexOf("/");
@@ -378,7 +552,7 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
-  // Sidebar + roster
+  // Rail: search + grouped roster + footer
   // ------------------------------------------------------------------
 
   let overrides: Record<string, string> = {};
@@ -403,110 +577,178 @@ export function mountShell(appEl: HTMLElement): void {
     return { ptys, forest };
   }
 
-  function renderSidebar(rows: RosterRow[], now: number) {
+  /** Latest fetched roster — re-rendered locally on search input / tab switch. */
+  let lastRows: RosterRow[] = [];
+  let searchQuery = "";
+
+  searchInput.addEventListener("input", () => {
+    searchQuery = searchInput.value.trim().toLowerCase();
+    renderRail();
+  });
+
+  /** True when this row backs the active tab. */
+  function isActiveRow(row: RosterRow): boolean {
+    const d = activeTab()?.descriptor;
+    if (!d) return false;
+    if (row.ptyId && d.ptyId) return row.ptyId === d.ptyId;
+    if (row.uuid && d.uuid) return row.uuid === d.uuid;
+    return false;
+  }
+
+  function renderRail() {
     // Guard: don't clobber an active inline-rename input.
-    if (sidebar.contains(document.activeElement) &&
+    if (railScroll.contains(document.activeElement) &&
         document.activeElement instanceof HTMLInputElement &&
-        document.activeElement.classList.contains("roster-rename-input")) {
+        document.activeElement.classList.contains("rail-rename-input")) {
       return;
     }
-    sidebar.innerHTML = "";
-    const header = el("div", "sidebar-header");
-    header.textContent = "sessions";
-    sidebar.append(header);
+    const now = Date.now();
+    railScroll.innerHTML = "";
+
+    const rows = searchQuery
+      ? lastRows.filter((r) =>
+          r.label.toLowerCase().includes(searchQuery) ||
+          r.cwdChip.toLowerCase().includes(searchQuery))
+      : lastRows;
 
     if (rows.length === 0) {
-      const empty = el("div", "sidebar-empty");
-      empty.textContent = "no sessions";
-      sidebar.append(empty);
-      return;
+      const empty = el("div", "rail-empty");
+      empty.textContent = searchQuery ? "no matching sessions" : "no sessions";
+      railScroll.append(empty);
     }
 
-    for (const row of rows) {
-      const item = el("div", "roster-row");
-      if (!row.live) item.classList.add("roster-row--disk");
+    for (const group of GROUP_ORDER) {
+      const groupRows = rows.filter((r) => ageGroup(r.recency, now) === group);
+      if (groupRows.length === 0) continue;
 
-      const badge = el("span", "roster-badge");
-      badge.style.color = STATE_COLORS[row.state] ?? "var(--state-idle)";
-      badge.textContent = "●";
-      if (row.state === "waiting") badge.classList.add("roster-badge--waiting");
+      const header = el("div", "rail-group-header");
+      const label = el("span", "rail-group-label");
+      label.textContent = GROUP_LABELS[group];
+      const rule = el("span", "rail-group-rule");
+      const count = el("span", "rail-group-count");
+      count.textContent = String(groupRows.length);
+      header.append(label, rule, count);
+      railScroll.append(header);
 
-      const labelEl = el("span", "roster-label");
-      labelEl.textContent = row.label;
+      for (const row of groupRows) {
+        railScroll.append(renderRailRow(row, now));
+      }
+    }
 
-      const cwdEl = el("span", "roster-cwd");
-      cwdEl.textContent = row.cwdChip;
+    renderRailFoot();
+  }
 
-      const recencyEl = el("span", "roster-recency");
-      recencyEl.textContent = relativeRecency(row.recency, now);
+  function renderRailRow(row: RosterRow, now: number): HTMLElement {
+    const item = el("button", "rail-row");
+    item.style.setProperty("--row-ink", inkVar(row.uuid, row.ptyId, row.cwdChip));
+    if (isActiveRow(row)) item.classList.add("rail-row--active");
 
-      item.append(badge, labelEl, cwdEl, recencyEl);
+    const dotWrap = el("span", "rail-row-dot");
+    dotWrap.append(el("span", dotClass(row.state)));
 
-      // Click: open/attach to this session.
-      item.addEventListener("click", () => {
-        if (row.ptyId) {
-          openTabWithQuery(`?attach=${row.ptyId}`, {
-            ptyId: row.ptyId,
-            uuid: row.uuid,
-            label: row.label,
-          });
-        } else if (row.uuid) {
-          openTabWithQuery(`?session=${row.uuid}`, {
-            uuid: row.uuid,
-            label: row.label,
-          });
+    const body = el("span", "rail-row-body");
+    const labelEl = el("span", "rail-row-label");
+    labelEl.textContent = row.label;
+    const meta = el("span", "rail-row-meta");
+    const project = el("span", "rail-row-project");
+    project.textContent = row.cwdChip;
+    meta.append(project);
+    if (row.live) {
+      const live = el("span", "rail-row-live");
+      live.textContent = "· live";
+      meta.append(live);
+    }
+    body.append(labelEl, meta);
+
+    const recencyEl = el("span", "rail-row-recency");
+    recencyEl.textContent = relativeRecency(row.recency, now);
+
+    item.append(dotWrap, body, recencyEl);
+
+    // Click: open/attach to this session.
+    item.addEventListener("click", () => {
+      if (row.ptyId) {
+        openTabWithQuery(`?attach=${row.ptyId}`, {
+          ptyId: row.ptyId,
+          uuid: row.uuid,
+          label: row.label,
+          cwd: row.cwd,
+        });
+      } else if (row.uuid) {
+        openTabWithQuery(`?session=${row.uuid}`, {
+          uuid: row.uuid,
+          label: row.label,
+          cwd: row.cwd,
+        });
+      }
+    });
+
+    // Double-click label → inline rename → localStorage override.
+    labelEl.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      const input = document.createElement("input");
+      input.className = "rail-rename-input";
+      input.value = row.label;
+      labelEl.replaceWith(input);
+      input.focus();
+      input.select();
+
+      const commit = () => {
+        const newLabel = input.value.trim();
+        if (newLabel) {
+          const overrideKey = row.uuid ?? row.ptyId;
+          if (overrideKey) saveOverride(overrideKey, newLabel);
+        }
+        void refreshRoster();
+      };
+
+      input.addEventListener("blur", commit, { once: true });
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          input.blur();
+        } else if (ev.key === "Escape") {
+          input.removeEventListener("blur", commit);
+          void refreshRoster();
         }
       });
+    });
 
-      // Double-click label → inline rename → localStorage override.
-      labelEl.addEventListener("dblclick", (e) => {
-        e.stopPropagation();
-        const input = document.createElement("input");
-        input.className = "roster-rename-input";
-        input.value = row.label;
-        labelEl.replaceWith(input);
-        input.focus();
-        input.select();
+    return item;
+  }
 
-        const commit = () => {
-          const newLabel = input.value.trim();
-          if (newLabel) {
-            const overrideKey = row.uuid ?? row.ptyId;
-            if (overrideKey) saveOverride(overrideKey, newLabel);
-          }
-          void refreshRoster();
-        };
-
-        input.addEventListener("blur", commit, { once: true });
-        input.addEventListener("keydown", (ev) => {
-          if (ev.key === "Enter") {
-            input.blur();
-          } else if (ev.key === "Escape") {
-            input.removeEventListener("blur", commit);
-            void refreshRoster();
-          }
-        });
-      });
-
-      sidebar.append(item);
-    }
+  function renderRailFoot() {
+    railFoot.innerHTML = "";
+    const working = lastRows.filter((r) => r.live && r.state === "working").length;
+    const dot = el("span", working > 0 ? "dot dot--working" : "dot dot--idle");
+    const label = el("span");
+    label.textContent = `${working} working`;
+    const total = el("span", "rail-foot-total");
+    total.textContent = `${lastRows.length} sessions`;
+    railFoot.append(dot, label, total);
   }
 
   async function refreshRoster() {
     try {
       const { ptys, forest } = await fetchRosterData();
-      const rows = buildRoster(ptys, forest, overrides);
-      renderSidebar(rows, Date.now());
+      lastRows = buildRoster(ptys, forest, overrides);
+      renderRail();
 
-      // Update tab state badges from live pty data.
+      // Update tab state badges + cwd from live pty data.
       for (const t of tabs) {
         if (!t.descriptor.ptyId || t.dead) continue;
         const live = ptys.find((p) => p.id === t.descriptor.ptyId);
-        if (live) t.state = live.state;
+        if (live) {
+          t.state = live.state;
+          if (live.cwd && !t.descriptor.cwd) {
+            t.descriptor = { ...t.descriptor, cwd: live.cwd };
+            saveTabs();
+          }
+        }
       }
       renderTabStrip();
+      renderTermHeader();
     } catch {
-      // Daemon not reachable — keep stale sidebar.
+      // Daemon not reachable — keep stale rail.
     }
   }
 
@@ -515,15 +757,17 @@ export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
 
   async function boot() {
-    renderSidebar([], Date.now());
+    renderRail();
     renderTabStrip();
+    renderControls();
+    renderTermHeader();
 
     let ptys: PtyInfo[] = [];
     try {
       const data = await fetchRosterData();
       ptys = data.ptys;
-      const rows = buildRoster(data.ptys, data.forest, overrides);
-      renderSidebar(rows, Date.now());
+      lastRows = buildRoster(data.ptys, data.forest, overrides);
+      renderRail();
     } catch {
       // Daemon not available — skip tab restore.
     }
@@ -545,6 +789,8 @@ export function mountShell(appEl: HTMLElement): void {
     }
 
     renderTabStrip();
+    renderTermHeader();
+    syncDrawer();
   }
 
   void boot();

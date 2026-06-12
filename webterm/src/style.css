@@ -1,538 +1,925 @@
-/* webterm — Phase 2.3 functional styles */
+/* webterm — eigen warm-ink design system (Claude Design handoff, 2026-06-12).
+ *
+ * Warm ink-on-paper: the terminal is the manuscript page; the chrome is the
+ * binding. Dark (default) and light themes share one token vocabulary; the
+ * terminal pane carries its own dark token context (.term-scope) so the
+ * manuscript stays an ink slab in both modes.
+ *
+ * Fonts (Hanken Grotesk for chrome, IBM Plex Mono for terminal/data) are
+ * loaded from index.html — an @import here would land mid-bundle (after
+ * xterm.css) and be ignored.
+ */
 
-/* ── Design tokens ──────────────────────────────────────────────────────── */
+/* ── Tokens ─────────────────────────────────────────────────────────────── */
 :root {
-  --bg:            #0d0d0d;
-  --surface:       #141414;
-  --border:        #2a2a2a;
-  --text:          #d4d0c8;
-  --text-dim:      #666;
-  --text-muted:    #444;
+  --font-ui:   "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* State badge palette — minimal, memorable */
-  --state-working: #4ec9b0;  /* teal — active work */
-  --state-waiting: #ffa500;  /* amber — attention-grabbing, killer feature */
-  --state-idle:    #555;     /* dim gray — at rest */
-  --state-exited:  #3a3a3a;  /* very dim — dead */
+  /* accent (Claude clay/orange) */
+  --accent:     oklch(0.70 0.13 47);
+  --accent-2:   oklch(0.74 0.075 47);
 
-  --sidebar-w: 220px;
-  --tab-strip-h: 32px;
+  /* functional status palette (running / waiting / idle / error / success) */
+  --st-running: oklch(0.76 0.145 70);
+  --st-idle:    oklch(0.60 0.018 70);
+  --st-error:   oklch(0.64 0.15 28);
+  --st-success: oklch(0.70 0.10 140);
+
+  /* per-session ink hues — equal L/C, vary hue; keys match INK_KEYS in
+     shell-helpers.ts (inkFor) */
+  --ink-clay:  oklch(0.70 0.105 38);
+  --ink-ochre: oklch(0.74 0.10 78);
+  --ink-olive: oklch(0.70 0.09 128);
+  --ink-teal:  oklch(0.70 0.075 200);
+  --ink-slate: oklch(0.68 0.055 255);
+  --ink-plum:  oklch(0.68 0.09 330);
+
+  --row-pad: 6px;
+  --rail-w: 244px;
+  --topbar-h: 40px;
+
+  --radius: 9px;
+  --radius-sm: 6px;
 }
 
+/* ── Dark (default) — warm espresso ink ─────────────────────────────────── */
+:root, .theme-dark {
+  --bg:        oklch(0.175 0.012 58);   /* app background */
+  --surface:   oklch(0.205 0.012 58);   /* rail / drawer / topbar */
+  --raised:    oklch(0.245 0.013 58);   /* cards */
+  --raised-2:  oklch(0.285 0.014 58);   /* hover */
+  --line:      oklch(0.32 0.012 58);    /* borders */
+  --line-soft: oklch(0.27 0.011 58);
+
+  --term-bg:   oklch(0.155 0.013 56);   /* manuscript page (ink slab) */
+  --term-line: oklch(0.255 0.012 56);
+
+  --tx:        oklch(0.92 0.018 75);    /* cream primary */
+  --tx-2:      oklch(0.72 0.015 70);    /* secondary */
+  --tx-3:      oklch(0.55 0.012 65);    /* muted */
+  --tx-faint:  oklch(0.44 0.010 62);
+
+  --accent-wash: color-mix(in oklch, var(--accent) 16%, transparent);
+  --shadow: 0 1px 0 oklch(0.10 0.01 58 / 0.5), 0 8px 24px -12px oklch(0.05 0.01 58 / 0.7);
+  color-scheme: dark;
+}
+
+/* ── Light — warm paper; the terminal stays ink ─────────────────────────── */
+.theme-light {
+  --bg:        oklch(0.955 0.009 82);
+  --surface:   oklch(0.975 0.007 82);
+  --raised:    oklch(0.995 0.004 82);
+  --raised-2:  oklch(0.93 0.010 82);
+  --line:      oklch(0.86 0.012 78);
+  --line-soft: oklch(0.90 0.010 80);
+
+  --term-bg:   oklch(0.185 0.013 56);   /* page stays dark ink */
+  --term-line: oklch(0.28 0.012 56);
+
+  --tx:        oklch(0.30 0.018 58);
+  --tx-2:      oklch(0.44 0.016 60);
+  --tx-3:      oklch(0.56 0.014 62);
+  --tx-faint:  oklch(0.66 0.012 66);
+
+  --accent:      oklch(0.60 0.145 45);
+  --accent-2:    oklch(0.66 0.10 47);
+  --accent-wash: color-mix(in oklch, var(--accent) 12%, transparent);
+
+  --st-idle:   oklch(0.62 0.020 70);
+  --shadow: 0 1px 2px oklch(0.5 0.02 70 / 0.10), 0 12px 28px -16px oklch(0.4 0.03 60 / 0.30);
+  color-scheme: light;
+}
+
+/* The terminal pane keeps dark ink tokens regardless of theme. */
+.term-scope {
+  --tx:        oklch(0.91 0.018 75);
+  --tx-2:      oklch(0.70 0.015 70);
+  --tx-3:      oklch(0.54 0.012 64);
+  --tx-faint:  oklch(0.44 0.010 60);
+  --line:      var(--term-line);
+  --line-soft: color-mix(in oklch, var(--term-line) 60%, transparent);
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body { height: 100%; background: var(--bg); color: var(--text); font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--tx);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+::selection { background: var(--accent-wash); }
 
-/* ── Shell grid ─────────────────────────────────────────────────────────── */
+button { font: inherit; color: inherit; }
+
+/* thin warm scrollbars */
+.scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scroll::-webkit-scrollbar-thumb:hover { background: var(--tx-faint); }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes eigen-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes eigen-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--st-running) 55%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 5px transparent; }
+}
+@keyframes eigen-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+/* ── Status dots ────────────────────────────────────────────────────────── */
+/* State mapping (registry → palette): working = running amber (pulse + ring),
+   waiting = accent orange pulse (attention: claude is blocked on you),
+   idle = slate, exited = faint. */
+.dot {
+  position: relative;
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 99px;
+  flex: 0 0 auto;
+  background: var(--st-idle);
+}
+.dot--working {
+  background: var(--st-running);
+  animation: eigen-ring 1.8s ease-out infinite, eigen-pulse 1.4s ease-in-out infinite;
+}
+.dot--waiting {
+  background: var(--accent);
+  animation: eigen-pulse 1.2s ease-in-out infinite;
+}
+.dot--idle   { background: var(--st-idle); }
+.dot--exited { background: var(--tx-faint); }
+
+/* ── Shell layout ───────────────────────────────────────────────────────── */
 .shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
-  grid-template-rows: 1fr;
+  display: flex;
   height: 100vh;
   overflow: hidden;
 }
 
-/* ── Sidebar ────────────────────────────────────────────────────────────── */
-.sidebar {
+/* ── Rail (left) ────────────────────────────────────────────────────────── */
+.rail {
+  width: var(--rail-w);
+  flex: 0 0 var(--rail-w);
   background: var(--surface);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
+  min-height: 0;
   min-width: 0;
 }
 
-.sidebar-header {
-  padding: 8px 10px 6px;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
+.rail-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 10px;
+  height: 48px;
   flex-shrink: 0;
 }
 
-.sidebar-empty {
-  padding: 12px 10px;
-  color: var(--text-muted);
+.brand-word {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--accent);   /* mark inherits via currentColor */
+}
+.brand-name {
+  font-weight: 600;
+  font-size: 15.5px;
+  letter-spacing: -0.01em;
+  color: var(--tx);
+}
+
+.icon-btn {
+  width: 28px; height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  color: var(--tx-2);
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+.icon-btn:hover { background: var(--raised-2); color: var(--tx); }
+.icon-btn--active { background: var(--accent-wash); color: var(--accent); }
+.icon-btn--boxed { border-color: var(--line); }
+
+.rail-search {
+  padding: 0 10px 6px;
+  flex-shrink: 0;
+}
+.rail-search-box {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--tx-3);
+}
+.rail-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--tx);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+.rail-search-input::placeholder { color: var(--tx-3); }
+
+.rail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 8px 12px;
+  min-height: 0;
+}
+
+.rail-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 14px 4px 6px;
+}
+.rail-group-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+.rail-group-rule { height: 1px; flex: 1; background: var(--line-soft); }
+.rail-group-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-faint);
+}
+
+.rail-row {
+  position: relative;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  column-gap: 9px;
+  padding: var(--row-pad) 10px var(--row-pad) 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background 0.12s;
+  min-width: 0;
+}
+.rail-row:hover { background: var(--raised-2); }
+
+/* active row: ink wash + spine, tinted by the session's own hue (--row-ink) */
+.rail-row--active {
+  background: color-mix(in oklch, var(--row-ink, var(--accent)) 13%, transparent);
+  border-color: color-mix(in oklch, var(--row-ink, var(--accent)) 30%, transparent);
+}
+.rail-row--active::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 7px; bottom: 7px;
+  width: 3px;
+  border-radius: 99px;
+  background: var(--row-ink, var(--accent));
+}
+
+.rail-row-dot { display: inline-flex; justify-content: center; }
+
+.rail-row-body { min-width: 0; }
+.rail-row-label {
+  display: block;
+  font-size: 12.75px;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
+  color: var(--tx-2);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-row--active .rail-row-label { color: var(--tx); font-weight: 600; }
+
+.rail-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+.rail-row-project {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--row-ink, var(--tx-3));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-row-live {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--tx-faint);
+  white-space: nowrap;
+}
+
+.rail-row-recency {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-faint);
+  white-space: nowrap;
+}
+
+.rail-rename-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--tx);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  padding: 1px 4px;
+  outline: none;
+}
+
+.rail-empty {
+  padding: 14px 12px;
+  color: var(--tx-3);
   font-size: 12px;
 }
 
-.roster-row {
-  display: grid;
-  grid-template-columns: 14px 1fr auto auto;
+.rail-foot {
+  flex-shrink: 0;
+  border-top: 1px solid var(--line);
+  padding: 9px 14px;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 10px;
-  cursor: pointer;
-  border-bottom: 1px solid transparent;
-  min-width: 0;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-3);
 }
-.roster-row:hover { background: rgba(255,255,255,0.04); }
-.roster-row--disk { opacity: 0.65; }
+.rail-foot .dot { width: 6px; height: 6px; }
+.rail-foot-total { margin-left: auto; color: var(--tx-faint); }
 
-.roster-badge {
-  font-size: 10px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-/* "waiting" badge pulses to grab attention — the design's killer feature */
-.roster-badge--waiting {
-  animation: pulse-waiting 1.2s ease-in-out infinite;
-}
-@keyframes pulse-waiting {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
-}
-
-.roster-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.roster-cwd {
-  color: var(--text-dim);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.roster-recency {
-  color: var(--text-muted);
-  font-size: 11px;
-  white-space: nowrap;
-  flex-shrink: 0;
-  grid-column: 4;
-}
-
-.roster-rename-input {
-  width: 100%;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  font: inherit;
-  padding: 1px 3px;
-}
-
-/* ── Main area ──────────────────────────────────────────────────────────── */
+/* ── Main column ────────────────────────────────────────────────────────── */
 .main {
-  display: grid;
-  grid-template-rows: var(--tab-strip-h) 1fr;
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-/* ── Tab strip ──────────────────────────────────────────────────────────── */
+/* ── Top bar: tabs + global controls ────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: stretch;
+  height: var(--topbar-h);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
 .tab-strip {
   display: flex;
   align-items: stretch;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
   overflow-x: auto;
   overflow-y: hidden;
-  flex-shrink: 0;
-  height: var(--tab-strip-h);
+  flex: 1;
+  min-width: 0;
+  scrollbar-width: none;          /* tabs scroll, but no visible bar in 40px */
 }
+.tab-strip::-webkit-scrollbar { display: none; }
 
 .tab {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  border-right: 1px solid var(--border);
+  gap: 8px;
+  padding: 0 8px 0 11px;
   cursor: pointer;
+  user-select: none;
+  min-width: 0;
+  max-width: 230px;
+  background: transparent;
+  border-right: 1px solid var(--line);
+  border-top: 2px solid transparent;
+  color: var(--tx-2);
+  font-size: 12.25px;
+  transition: background 0.12s;
+}
+.tab:hover { background: var(--raised); }
+
+/* active tab = the dark "lip" of the manuscript page, ink top border */
+.tab--active {
+  background: var(--term-bg);
+  border-top-color: var(--tab-ink, var(--accent));
+  color: oklch(0.91 0.018 75);   /* cream — the tab joins the dark page in both themes */
+}
+.tab--dead { opacity: 0.55; }
+
+.tab .dot { width: 6px; height: 6px; }
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  max-width: 200px;
-  color: var(--text-dim);
-  font-size: 12px;
+  flex: 1;
+  font-weight: 500;
 }
-.tab:hover { background: rgba(255,255,255,0.04); }
-.tab--active { background: var(--bg); color: var(--text); }
-.tab--dead { opacity: 0.5; }
-
-.tab-badge { font-size: 9px; flex-shrink: 0; }
-.tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.tab--active .tab-label { font-weight: 600; }
 
 .tab-kill,
 .tab-close {
   background: none;
   border: none;
-  color: var(--text-muted);
   cursor: pointer;
-  font-size: 11px;
-  padding: 0 2px;
-  line-height: 1;
+  color: var(--tx-3);
+  width: 18px; height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
   flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
 }
-.tab-kill:hover  { color: #c0392b; }
-.tab-close:hover { color: var(--text); }
+.tab:hover .tab-kill, .tab:hover .tab-close,
+.tab--active .tab-kill, .tab--active .tab-close { opacity: 1; }
+.tab-kill:hover  { color: var(--st-error); background: var(--raised-2); }
+.tab-close:hover { color: var(--tx); background: var(--raised-2); }
 
 .tab-new {
-  background: none;
+  width: 38px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
   border: none;
-  border-right: 1px solid var(--border);
-  color: var(--text-dim);
+  border-right: 1px solid var(--line);
   cursor: pointer;
-  font-size: 16px;
-  padding: 0 10px;
-  line-height: 1;
+  color: var(--tx-3);
 }
-.tab-new:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.tab-new:hover { color: var(--tx); background: var(--raised); }
 
-/* ── Terminal host ──────────────────────────────────────────────────────── */
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 6px;
+  border-left: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.topbar-sep { width: 1px; height: 18px; background: var(--line); margin: 0 3px; }
+
+/* ── Terminal area (the manuscript page) ────────────────────────────────── */
+.term-area {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg);
+}
+
+.term-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0 14px;
+  background: var(--term-bg);
+  border-bottom: 1px solid var(--term-line);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  min-width: 0;
+}
+.term-crumb {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tx-3);
+}
+.term-crumb b { color: var(--tx); font-weight: 500; }
+.term-header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 5px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  color: var(--tx-2);
+  background: color-mix(in oklch, var(--tx-3) 10%, transparent);
+  border: 1px solid var(--line-soft);
+}
+
 .term-host {
   position: relative;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--term-bg);
 }
 
 .term-pane {
   position: absolute;
   inset: 0;
+  padding: 6px 0 0 8px;   /* breathe: the page has a margin */
 }
 
 /* xterm.css is imported in main.ts (xterm 5.x does not inject it); this only
    ensures the terminal fills the pane. */
-.xterm {
-  height: 100%;
-}
+.xterm { height: 100%; }
 
-/* ── Fuzzy launcher picker overlay ─────────────────────────────────────── */
+/* ── Fuzzy launcher picker overlay ──────────────────────────────────────── */
 .picker-overlay {
   z-index: 100;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-  width: 420px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  width: 440px;
   max-height: 320px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  animation: eigen-fade 0.12s ease-out;
 }
 
 .picker-input {
   background: var(--bg);
-  color: var(--text);
+  color: var(--tx);
   border: none;
-  border-bottom: 1px solid var(--border);
-  font: inherit;
-  font-size: 13px;
-  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 9px 11px;
   outline: none;
   width: 100%;
 }
-.picker-input::placeholder { color: var(--text-muted); }
+.picker-input::placeholder { color: var(--tx-3); }
 
-.picker-list {
-  overflow-y: auto;
-  flex: 1;
-}
+.picker-list { overflow-y: auto; flex: 1; }
 
 .picker-row {
   display: grid;
   grid-template-columns: 1fr auto auto;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 6px 11px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   min-width: 0;
 }
 .picker-row:hover,
-.picker-row--highlight {
-  background: rgba(255,255,255,0.07);
-}
+.picker-row--highlight { background: var(--accent-wash); }
 
 .picker-row-basename {
   font-weight: 600;
+  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
 
 .picker-row-parent {
-  color: var(--text-dim);
-  font-size: 11px;
+  color: var(--tx-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
 
 .picker-row-recent {
-  color: var(--text-muted);
-  font-size: 10px;
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-/* ── Tab drawer toggle ──────────────────────────────────────────────────────── */
-.tab-drawer {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0 3px;
-  line-height: 1;
+  color: var(--tx-faint);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
   flex-shrink: 0;
 }
-.tab-drawer:hover:not(:disabled) { color: var(--text); }
-.tab-drawer--open { color: var(--state-working); }
-.tab-drawer--open:hover { color: var(--text); }
-.tab-drawer--disabled { opacity: 0.3; cursor: default; }
 
-/* ── Transcript drawer panel ────────────────────────────────────────────────── */
+/* ── Transcript drawer ──────────────────────────────────────────────────── */
 /*
- * Absolute overlay on .term-host — slides in from the right.
- * The terminal is NOT reflowed; the drawer covers the right portion.
- * Width: 40% of the term-host (floor 360px, cap 720px) — 360px fixed ellipsized
- * tool args and assistant text too aggressively.
- * CSS transform-based open/close via the .drawer--open class.
+ * Absolute overlay on .term-host — the terminal is NOT reflowed (no pty
+ * resize when the drawer opens). Width: 40% of the term-host (floor 360px,
+ * cap 720px) — a fixed 360px ellipsized tool args too aggressively.
+ * The drawer is chrome, not page: it follows the theme (paper in light mode).
  */
 .drawer {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  top: 0; right: 0; bottom: 0;
   width: clamp(360px, 40%, 720px);
   background: var(--surface);
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   z-index: 10;
-  /* Start visible — mountDrawer is only called when the toggle is clicked */
-  transform: translateX(0);
   overflow: hidden;
+  animation: eigen-fade 0.14s ease-out;
 }
 
 .drawer-header {
   display: flex;
   align-items: center;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  padding: 0 14px;
+  height: 40px;
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
-  background: var(--surface);
 }
 
 .drawer-title {
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--tx-2);
 }
+
+.drawer-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.drawer-action {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  color: var(--tx-2);
+  transition: all 0.12s;
+}
+.drawer-action:hover { background: var(--raised-2); color: var(--tx); }
+.drawer-action--danger:hover {
+  background: color-mix(in oklch, var(--st-error) 14%, transparent);
+  color: var(--st-error);
+}
+.drawer-action--flash { color: var(--st-success); border-color: var(--st-success); }
 
 .drawer-body {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: 8px 0 16px;
 }
 
 .drawer-empty {
-  padding: 12px 10px;
-  color: var(--text-muted);
+  padding: 14px 14px;
+  color: var(--tx-3);
   font-size: 12px;
 }
 
-/* ── Turn groups ────────────────────────────────────────────────────────────── */
-.drawer-group {
-  border-bottom: 1px solid var(--border);
-}
-.drawer-group--leaf {
-  border-bottom: none;
-  opacity: 0.5;
-}
+/* ── Turn cards ─────────────────────────────────────────────────────────── */
+/* Group = user turn card (full text — the navigation spine) followed by the
+   assistant card (one-line ellipsis until expanded) and tool chip rows. */
+.drawer-group { padding: 4px 14px; }
 
-.drawer-group-header {
+.turn-card {
+  position: relative;
+  border-radius: var(--radius);
+  padding: 8px 11px 9px;
+  border: 1px solid var(--line-soft);
+  background: var(--raised);
+}
+.turn-card--user {
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  border-color: color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.turn-card + .turn-card { margin-top: 6px; }
+
+.turn-card-head {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 5px 8px 4px;
-  user-select: none;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
 }
-.drawer-group-header:hover { background: rgba(255,255,255,0.03); }
+.turn-role-dot {
+  width: 5px; height: 5px;
+  border-radius: 99px;
+  background: var(--tx-3);
+  flex-shrink: 0;
+}
+.turn-card--user .turn-role-dot { background: var(--accent); }
+.turn-role {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+.turn-card--user .turn-role { color: var(--accent); }
+.turn-num {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--tx-faint);
+  margin-left: auto;
+}
 
-.drawer-fold-btn {
+.turn-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--tx-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-wrap: pretty;
+}
+.turn-card--user .turn-text { color: var(--tx); }
+
+/* assistant collapsed: one muted ellipsis line; click to expand */
+.turn-card--collapsed .turn-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  color: var(--tx-3);
+  cursor: pointer;
+}
+
+.turn-toggle {
   background: none;
   border: none;
-  color: var(--text-muted);
   cursor: pointer;
-  font-size: 9px;
+  color: var(--tx-3);
+  width: 20px; height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
-  line-height: 1;
   flex-shrink: 0;
-  width: 12px;
 }
-.drawer-fold-btn:hover { color: var(--text); }
+.turn-toggle:hover { color: var(--tx); }
+.turn-toggle svg { transition: transform 0.15s; }
+.turn-card--collapsed .turn-toggle svg { transform: rotate(90deg); }
+.turn-card:not(.turn-card--collapsed) .turn-toggle svg { transform: rotate(-90deg); }
 
-.drawer-group-num {
-  color: var(--text-muted);
-  font-size: 10px;
+/* awaiting-input leaf */
+.turn-input {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 14px;
+  opacity: 0.8;
+}
+.turn-input-dot {
+  width: 6px; height: 6px;
+  border-radius: 99px;
+  background: var(--st-running);
+  animation: eigen-pulse 1.4s infinite;
   flex-shrink: 0;
-  min-width: 18px;
 }
-
-.drawer-group-summary {
-  color: var(--text-dim);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  flex: 1;
-}
-
-.drawer-group-content {
-  padding: 0 8px 8px 22px;  /* 22px = fold-btn width + gap */
-}
-
-/* User text — left border accent distinguishes it from assistant text */
-.drawer-user {
-  border-left: 2px solid var(--state-working);
-  padding-left: 8px;
-  color: var(--text);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin-bottom: 6px;
-}
-
-/* Assistant text — plain text v1 (markdown is backlog) */
-.drawer-assistant {
-  color: var(--text-dim);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin-bottom: 6px;
+.turn-input-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tx-faint);
+  font-style: italic;
 }
 
 /* System timing */
 .drawer-system {
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-top: 4px;
+  font-family: var(--font-mono);
+  color: var(--tx-faint);
+  font-size: 10.5px;
+  margin-top: 6px;
 }
 
-/* ── Tool rows with drill-down (Task 4.3) ───────────────────────────────────── */
-
-/*
- * .drawer-tool-wrap  — outer container (collapsed or expanded)
- * .drawer-tool-row   — always-visible one-liner header (clickable)
- * .drawer-tool-detail — expanded content area (hidden when collapsed)
- *
- * Color classes for detail lines mirror woland's .tool .body .ln.* conventions:
- *   .drawer-tool-ln--dim   default/context lines
- *   .drawer-tool-ln--add   additions (green/cool)
- *   .drawer-tool-ln--rem   removals  (cold/blue)
- *   .drawer-tool-ln--cool  informational cool lines (same as add in webterm palette)
- *
- * The <pre> is given max-height + overflow-y: auto so large inputs scroll without
- * needing a JS truncation cap beyond the server-side 50 KB limit.
- */
-
-.drawer-tool-wrap {
-  margin: 1px 0;
-}
+/* ── Tool rows with drill-down ──────────────────────────────────────────── */
+.drawer-tool-wrap { margin: 4px 0 0; }
 
 .drawer-tool-row {
   display: flex;
   align-items: baseline;
-  gap: 5px;
+  gap: 6px;
   padding: 2px 0;
   font-size: 11px;
 }
 
 .drawer-tool-chevron {
-  color: var(--text-muted);
+  color: var(--tx-faint);
   flex-shrink: 0;
   font-size: 9px;
   width: 10px;
 }
 
 .drawer-tool-kind {
-  color: var(--state-working);
+  font-family: var(--font-mono);
+  color: var(--st-success);
+  background: color-mix(in oklch, var(--st-success) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--st-success) 28%, transparent);
+  border-radius: 5px;
+  padding: 2px 6px;
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 9.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .drawer-tool-arg {
-  color: var(--text-dim);
+  font-family: var(--font-mono);
+  color: var(--tx-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
 
-/* Expanded detail area */
 .drawer-tool-detail {
   padding: 4px 0 6px 10px;
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--line);
   margin: 2px 0 2px 4px;
 }
 
 .drawer-tool-detail-label {
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--tx-faint);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   margin-bottom: 3px;
   margin-top: 4px;
 }
-.drawer-tool-detail-label:first-child {
-  margin-top: 0;
-}
+.drawer-tool-detail-label:first-child { margin-top: 0; }
 
 .drawer-tool-detail-pre {
-  font-family: inherit;
+  font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--text-dim);
+  color: var(--tx-2);
   white-space: pre;
   overflow-x: auto;
   overflow-y: auto;
   max-height: 220px;
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
   padding: 5px 7px;
   margin: 0;
   word-break: normal;
 }
 
 /* Detail line color classes (mirror woland's .ln.add / .ln.rem / .ln.cool) */
-.drawer-tool-ln {
-  display: block;
-  color: var(--text-dim);
-}
-.drawer-tool-ln--add  { color: #4ec9b0; }   /* cool/teal — matches --state-working */
-.drawer-tool-ln--rem  { color: #5f8bb0; }   /* cold/blue */
-.drawer-tool-ln--cool { color: #4ec9b0; }   /* same as add */
-.drawer-tool-ln--dim  { color: var(--text-muted); }
+.drawer-tool-ln { display: block; color: var(--tx-2); }
+.drawer-tool-ln--add  { color: var(--st-success); }
+.drawer-tool-ln--rem  { color: var(--ink-slate); }
+.drawer-tool-ln--cool { color: var(--st-success); }
+.drawer-tool-ln--dim  { color: var(--tx-3); }
 
-/* ── Per-turn fork button (Task 4.4) ───────────────────────────────────────── */
+/* ── Per-turn fork ──────────────────────────────────────────────────────── */
 .drawer-fork-btn {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--tx-3);
   cursor: pointer;
   font-size: 11px;
   padding: 0 2px;
   line-height: 1;
   flex-shrink: 0;
-  margin-left: auto;  /* push to the right of the summary */
 }
-.drawer-fork-btn:hover:not(:disabled) { color: var(--state-working); }
+.drawer-fork-btn:hover:not(:disabled) { color: var(--accent); }
 .drawer-fork-btn--disabled { opacity: 0.25; cursor: default; }
 
-/* Edit-in-place fork widget — replaces the summary span on click */
 .drawer-fork-edit {
   flex: 1;
   display: flex;
@@ -544,16 +931,16 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .drawer-fork-textarea {
   width: 100%;
   background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
+  color: var(--tx);
+  border: 1px solid var(--line);
   font: inherit;
   font-size: 12px;
   padding: 4px 6px;
   resize: vertical;
   outline: none;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
-.drawer-fork-textarea:focus { border-color: var(--state-working); }
+.drawer-fork-textarea:focus { border-color: var(--accent); }
 
 .drawer-fork-controls {
   display: flex;
@@ -563,21 +950,21 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 .drawer-fork-confirm,
 .drawer-fork-cancel {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  color: var(--tx-2);
   cursor: pointer;
   font: inherit;
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
-.drawer-fork-confirm:hover:not(:disabled) { color: var(--state-working); border-color: var(--state-working); }
-.drawer-fork-cancel:hover  { color: var(--text); }
+.drawer-fork-confirm:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.drawer-fork-cancel:hover { color: var(--tx); }
 .drawer-fork-confirm:disabled { opacity: 0.4; cursor: default; }
 
 .drawer-fork-error {
   font-size: 11px;
-  color: #c0392b;
+  color: var(--st-error);
   flex: 1;
 }
