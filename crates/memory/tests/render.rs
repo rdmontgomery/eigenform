@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use eigen_memory::{render_memory_tree, MemoryEntry, MemoryKind};
+use eigenform_memory::{render_memory_tree, MemoryEntry, MemoryKind};
 
 fn entry(name: &str, kind: MemoryKind, path: &str, desc: &str) -> MemoryEntry {
     MemoryEntry {

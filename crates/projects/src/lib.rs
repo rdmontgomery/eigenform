@@ -1,4 +1,4 @@
-//! eigen-projects: enumerate the Claude Code project directories under
+//! eigenform-projects: enumerate the Claude Code project directories under
 //! `~/.claude/projects/`, recovering each project's original cwd from
 //! its session JSONLs.
 

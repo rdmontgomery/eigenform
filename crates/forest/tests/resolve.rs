@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use eigen_forest::{resolve, ResolveError};
+use eigenform_forest::{resolve, ResolveError};
 use tempfile::tempdir;
 
 const A1: &str = "aaaa1111-0000-4000-8000-000000000001";

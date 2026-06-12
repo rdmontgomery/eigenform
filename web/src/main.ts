@@ -510,7 +510,7 @@ async function initForest(): Promise<void> {
 
 // ── dev live-reload — never drops a live session ────────────────────────────
 function devLiveReload(): void {
-  if (!document.querySelector('meta[name="eigen-dev"]')) return;
+  if (!document.querySelector('meta[name="eigenform-dev"]')) return;
   const ev = new EventSource("/api/dev/reload");
   let last = 0;
   ev.onmessage = () => {

@@ -1,8 +1,8 @@
 //! session_html: the semantic transcript as HTML — a collapsible <details> per exchange,
 //! full (untruncated) content, escaped against injection.
 
-use eigen_render::session_html;
-use eigen_surgery::Session;
+use eigenform_render::session_html;
+use eigenform_surgery::Session;
 
 const SID: &str = "abcd1234-0000-4000-8000-000000000000";
 

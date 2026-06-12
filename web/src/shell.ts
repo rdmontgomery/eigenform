@@ -1,4 +1,4 @@
-// shell.ts — chrome around the Manuscript: the masthead (woland fronts, eigen the
+// shell.ts — chrome around the Manuscript: the masthead (woland fronts, eigenform the
 // engine) with the light/dark toggle, the Forest as forking-path navigation, the
 // Furnace fidelity channel (norgie collapsed ↔ the real pty expanded), and the two
 // considered moments — the cold-fork confirm and the fork toast.
@@ -28,7 +28,7 @@ export function buildMasthead(
   setSession(session);
   const node = el("div", { class: "masthead" },
     el("div", { class: "brand" }, wolandMark(22), el("div", { style: "display:flex;align-items:baseline;gap:9px" },
-      el("span", { class: "name", text: "woland" }), el("span", { class: "engine", text: "eigen engine" }))),
+      el("span", { class: "name", text: "woland" }), el("span", { class: "engine", text: "eigenform engine" }))),
     el("div", { class: "vrule" }),
     sess,
     el("div", { class: "spacer" }),

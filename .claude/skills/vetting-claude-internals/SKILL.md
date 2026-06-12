@@ -5,7 +5,7 @@ description: Use when `claude --version` differs from the version recorded on an
 
 # Vetting Claude Code internals
 
-eigen's design rests on a small set of empirically verified claims about
+eigenform's design rests on a small set of empirically verified claims about
 Claude Code's internals — the JSONL format, `--fork-session` semantics,
 the billing flip, cold-load behavior, the bundled-skill gap, the plugin
 layouts on disk. Each is recorded in `notes/spikes/<NN>-<topic>.md` with

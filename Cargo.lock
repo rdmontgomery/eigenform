@@ -342,33 +342,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "eigen-cli"
+name = "eigenform-cli"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "eigen-daemon",
- "eigen-forest",
- "eigen-memory",
- "eigen-projects",
- "eigen-render",
- "eigen-skills",
- "eigen-surgery",
+ "eigenform-daemon",
+ "eigenform-forest",
+ "eigenform-memory",
+ "eigenform-projects",
+ "eigenform-render",
+ "eigenform-skills",
+ "eigenform-surgery",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
-name = "eigen-daemon"
+name = "eigenform-daemon"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",
  "chrono",
- "eigen-forest",
- "eigen-render",
- "eigen-surgery",
+ "eigenform-forest",
+ "eigenform-render",
+ "eigenform-surgery",
  "futures-util",
  "notify",
  "portable-pty",
@@ -383,18 +383,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-forest"
+name = "eigenform-forest"
 version = "0.0.1"
 dependencies = [
  "chrono",
- "eigen-projects",
+ "eigenform-projects",
  "serde_json",
  "tempfile",
  "thiserror",
 ]
 
 [[package]]
-name = "eigen-memory"
+name = "eigenform-memory"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -404,7 +404,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-projects"
+name = "eigenform-projects"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -414,17 +414,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-render"
+name = "eigenform-render"
 version = "0.0.1"
 dependencies = [
  "chrono",
- "eigen-forest",
- "eigen-surgery",
+ "eigenform-forest",
+ "eigenform-surgery",
  "serde_json",
 ]
 
 [[package]]
-name = "eigen-skills"
+name = "eigenform-skills"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -434,7 +434,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-surgery"
+name = "eigenform-surgery"
 version = "0.0.1"
 dependencies = [
  "serde",

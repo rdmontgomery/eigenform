@@ -1,7 +1,7 @@
 //! Structural extraction: parse must surface the fields surgery reasons about,
 //! without disturbing byte-for-byte round-trip (covered in roundtrip.rs).
 
-use eigen_surgery::{Role, Session};
+use eigenform_surgery::{Role, Session};
 
 const SID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 

@@ -4,7 +4,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 async fn start() -> String {
     let cfg = Config {

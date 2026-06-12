@@ -1,5 +1,5 @@
 [package]
-name = "eigen-daemon"
+name = "eigenform-daemon"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
@@ -17,9 +17,9 @@ serde_json   = { workspace = true }
 chrono       = { workspace = true }
 notify       = { workspace = true }
 tokio-stream = { workspace = true }
-eigen-forest  = { path = "../forest" }
-eigen-surgery = { path = "../surgery" }
-eigen-render  = { path = "../render" }
+eigenform-forest  = { path = "../forest" }
+eigenform-surgery = { path = "../surgery" }
+eigenform-render  = { path = "../render" }
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"

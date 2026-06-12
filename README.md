@@ -1,8 +1,10 @@
-# eigen
+# eigenform
 
 > manuscripts don't burn.
 
 A control surface over Claude Code (and imported Claude Chat) that performs context surgery, manages a session forest, and surfaces the eigenforms across a body of work.
+
+The binary is `eigenform`; alias it to taste (`alias ef=eigenform`). Dual-licensed [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE).
 
 ## Status
 

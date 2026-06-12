@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use eigen_skills::{render_tree, Layer, LayeredSkill, Skill};
+use eigenform_skills::{render_tree, Layer, LayeredSkill, Skill};
 
 fn sk(name: &str, layer: Layer, path: &str) -> LayeredSkill {
     LayeredSkill {

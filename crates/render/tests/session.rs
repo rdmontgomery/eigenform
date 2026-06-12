@@ -1,8 +1,8 @@
 //! session_view: build a View from a parsed session — group by exchange, glyph by role,
 //! one-line truncated previews, system rows shown muted with duration, resume leaf marked.
 
-use eigen_render::{render_text, session_view};
-use eigen_surgery::Session;
+use eigenform_render::{render_text, session_view};
+use eigenform_surgery::Session;
 
 const SID: &str = "abcd1234-0000-4000-8000-000000000000";
 

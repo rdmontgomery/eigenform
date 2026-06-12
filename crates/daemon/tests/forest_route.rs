@@ -1,7 +1,7 @@
 //! GET /api/forest: the corroborated live-Forest snapshot. The test process's own pid is
 //! a guaranteed-live process, so writing a session file for it makes the result deterministic.
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 const UUID: &str = "bbbb2222-0000-4000-8000-000000000002";
 

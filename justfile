@@ -1,4 +1,4 @@
-# eigen — canonical command invocations.
+# eigenform — canonical command invocations.
 # Engine-touching targets are human-triggered. CI never runs them.
 
 # Default target lists available recipes.
@@ -47,7 +47,7 @@ build-web:
 # Run woland: a live pty (your shell) rendered in the browser. Open the URL it prints.
 # Spawns your $SHELL, NOT claude — wiring claude --resume is a later, user-initiated slice.
 woland port="4317": build-web
-    cargo run -q -p eigen-cli -- daemon --port {{port}}
+    cargo run -q -p eigenform-cli -- daemon --port {{port}}
 
 # Hot-reload dev loop: esbuild --watch rebuilds the bundle; cargo-watch rebuilds+restarts
 # the daemon on Rust changes; the browser live-reloads on frontend changes (dev mode).
@@ -61,7 +61,7 @@ dev port="4317":
     ESBUILD=$!
     trap "kill $ESBUILD 2>/dev/null || true" EXIT
     cd ..
-    cargo watch -w crates -w Cargo.toml -x 'run -q -p eigen-cli -- daemon --port {{port}} --dev'
+    cargo watch -w crates -w Cargo.toml -x 'run -q -p eigenform-cli -- daemon --port {{port}} --dev'
 
 # --- testing -------------------------------------------------------------
 
@@ -70,6 +70,6 @@ test:
     cargo test --workspace
 
 # Live integration test (spawns real claude). Triple-gated.
-# Requires: cargo feature 'live-claude' AND env EIGEN_ALLOW_LIVE_CLAUDE=1.
+# Requires: cargo feature 'live-claude' AND env EIGENFORM_ALLOW_LIVE_CLAUDE=1.
 test-live:
-    EIGEN_ALLOW_LIVE_CLAUDE=1 cargo test --workspace --features live-claude -- --ignored
+    EIGENFORM_ALLOW_LIVE_CLAUDE=1 cargo test --workspace --features live-claude -- --ignored

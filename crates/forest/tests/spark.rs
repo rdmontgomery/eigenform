@@ -1,7 +1,7 @@
 //! session_spark: output_tokens per completed turn (the activity sparkline), and its
-//! ~/.eigen/state cache (parse-on-change, keyed by the source's mtime+len).
+//! ~/.eigenform/state cache (parse-on-change, keyed by the source's mtime+len).
 
-use eigen_forest::{cached_spark, session_spark};
+use eigenform_forest::{cached_spark, session_spark};
 
 /// One completed turn: an assistant message carrying usage, closed by a turn_duration row.
 fn turn(out: u32) -> String {

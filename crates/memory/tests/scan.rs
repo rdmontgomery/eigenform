@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eigen_memory::{scan_memory_dir, MemoryKind};
+use eigenform_memory::{scan_memory_dir, MemoryKind};
 use tempfile::tempdir;
 
 fn write_entry(dir: &std::path::Path, fname: &str, name: &str, kind: &str) -> PathBuf {

@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eigen_skills::{scan_layered, scan_many, Layer};
+use eigenform_skills::{scan_layered, scan_many, Layer};
 use tempfile::tempdir;
 
 fn write_skill(dir: &std::path::Path, fname: &str, name: &str) {

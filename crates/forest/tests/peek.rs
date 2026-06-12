@@ -2,7 +2,7 @@
 //! ai-title (else last-prompt snippet). Byte-stream tail read with size escalation.
 
 use chrono::{DateTime, Utc};
-use eigen_forest::{session_ref, SessionStub};
+use eigenform_forest::{session_ref, SessionStub};
 
 fn write_session(lines: &[String]) -> (tempfile::TempDir, SessionStub) {
     let dir = tempfile::tempdir().unwrap();

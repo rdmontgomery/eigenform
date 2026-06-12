@@ -1,7 +1,7 @@
 //! The session transcript route: GET /session/:uuid renders the semantic HTML, and
 //! GET /api/recent reports the most recent session uuid.
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 const UUID: &str = "aaaa1111-0000-4000-8000-000000000001";
 

@@ -2,8 +2,8 @@
 //! time, and title.
 
 use chrono::{DateTime, Utc};
-use eigen_forest::SessionRef;
-use eigen_render::{render_text, sessions_view};
+use eigenform_forest::SessionRef;
+use eigenform_render::{render_text, sessions_view};
 
 fn at(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)

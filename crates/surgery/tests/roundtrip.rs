@@ -2,7 +2,7 @@
 //! the exact bytes we read. This is the load-bearing invariant for surgery on rows
 //! we don't model (attachments, pr-link, queue-operation, future types).
 
-use eigen_surgery::Session;
+use eigenform_surgery::Session;
 
 /// A compact session mixing every shape the parser must survive:
 /// - opaque rows WITH a sessionId (mode, attachment, pr-link)

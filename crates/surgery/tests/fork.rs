@@ -2,7 +2,7 @@
 //! re-point the resume head, and mint a fresh session id. Prefix-only — nothing after
 //! the cut survives.
 
-use eigen_surgery::{fork_at, Session, SurgeryError};
+use eigenform_surgery::{fork_at, Session, SurgeryError};
 
 const OLD: &str = "sess-old-aaaa";
 

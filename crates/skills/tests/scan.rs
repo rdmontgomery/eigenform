@@ -1,4 +1,4 @@
-//! RED tests: each defines a behavior we want from `eigen_skills`.
+//! RED tests: each defines a behavior we want from `eigenform_skills`.
 //! Order roughly mirrors implementation order.
 
 use std::fs;
@@ -14,7 +14,7 @@ fn scan_returns_single_skill_from_directory_with_one_file() {
     )
     .unwrap();
 
-    let found = eigen_skills::scan_dir(dir.path()).unwrap();
+    let found = eigenform_skills::scan_dir(dir.path()).unwrap();
 
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].name, "my-skill");
@@ -41,7 +41,7 @@ fn scan_returns_multiple_skills_sorted_by_name() {
     )
     .unwrap();
 
-    let names: Vec<String> = eigen_skills::scan_dir(dir.path())
+    let names: Vec<String> = eigenform_skills::scan_dir(dir.path())
         .unwrap()
         .into_iter()
         .map(|s| s.name)
@@ -62,7 +62,7 @@ fn scan_finds_skill_in_subdir_skill_md_layout() {
     )
     .unwrap();
 
-    let found = eigen_skills::scan_dir(dir.path()).unwrap();
+    let found = eigenform_skills::scan_dir(dir.path()).unwrap();
 
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].name, "brainstorming");
@@ -85,7 +85,7 @@ fn scan_mixes_flat_and_nested_layouts_in_one_dir() {
     )
     .unwrap();
 
-    let names: Vec<String> = eigen_skills::scan_dir(dir.path())
+    let names: Vec<String> = eigenform_skills::scan_dir(dir.path())
         .unwrap()
         .into_iter()
         .map(|s| s.name)
@@ -109,7 +109,7 @@ fn scan_ignores_random_non_skill_files_and_dirs() {
     fs::create_dir(&stray_sub).unwrap();
     fs::write(stray_sub.join("notes.md"), "no frontmatter").unwrap();
 
-    let names: Vec<String> = eigen_skills::scan_dir(dir.path())
+    let names: Vec<String> = eigenform_skills::scan_dir(dir.path())
         .unwrap()
         .into_iter()
         .map(|s| s.name)

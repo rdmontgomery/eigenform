@@ -1,5 +1,5 @@
 [package]
-name = "eigen-surgery"
+name = "eigenform-surgery"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true

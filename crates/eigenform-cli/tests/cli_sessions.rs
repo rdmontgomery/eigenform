@@ -1,4 +1,4 @@
-//! `eigen sessions show <session> [--render text]` renders a session turn-tree.
+//! `eigenform sessions show <session> [--render text]` renders a session turn-tree.
 
 use std::process::Command;
 use tempfile::tempdir;
@@ -17,10 +17,10 @@ fn session_text() -> String {
 }
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_eigen"))
+    Command::new(env!("CARGO_BIN_EXE_eigenform"))
         .args(args)
         .output()
-        .expect("run eigen")
+        .expect("run eigenform")
 }
 
 #[test]
@@ -53,11 +53,11 @@ fn temp_home_with_session() -> (tempfile::TempDir, String) {
 }
 
 fn run_home(home: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_eigen"))
+    Command::new(env!("CARGO_BIN_EXE_eigenform"))
         .env("HOME", home)
         .args(args)
         .output()
-        .expect("run eigen")
+        .expect("run eigenform")
 }
 
 #[test]

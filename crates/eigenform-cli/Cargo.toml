@@ -1,0 +1,25 @@
+[package]
+name = "eigenform-cli"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "eigenform"
+path = "src/main.rs"
+
+[dependencies]
+anyhow         = { workspace = true }
+clap           = { workspace = true }
+eigenform-skills   = { path = "../skills" }
+eigenform-projects = { path = "../projects" }
+eigenform-memory   = { path = "../memory" }
+eigenform-surgery  = { path = "../surgery" }
+eigenform-render   = { path = "../render" }
+eigenform-forest   = { path = "../forest" }
+eigenform-daemon   = { path = "../daemon" }
+chrono         = { workspace = true }
+tokio          = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
