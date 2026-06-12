@@ -107,6 +107,10 @@ pub fn session_json(session: &Session) -> String {
                         }
                     }
                     None => {
+                        // TODO: guard against leading tool-only turns producing an empty-user exchange.
+                        // A session whose first visible turn is an assistant turn with a tool_use
+                        // produces `{"user":"","assistant":…,"tool":…}` — technically valid but the
+                        // empty `user` string renders as a blank group header in the drawer.
                         let mut e = json!({ "user": "", "assistant": text });
                         if let Some(tool) = extract_tool(turn, session) {
                             e["tool"] = tool;
@@ -221,6 +225,10 @@ fn truncate_tool_content(s: &str) -> (&str, bool) {
 
 /// Build a `tool` JSON object for the first `tool_use` block found in an assistant turn,
 /// pairing it with its result from the session. Returns `None` if the turn has no tool_use.
+///
+/// Field naming asymmetry (historical-compat): `truncated` applies to OUTPUT (pre-existing
+/// field name consumed by woland), while `inputTruncated` applies to INPUT (added in 4.1).
+/// Do not normalise these without a simultaneous woland update.
 fn extract_tool(turn: &Turn, session: &Session) -> Option<serde_json::Value> {
     let blocks = tool_use_blocks(turn);
     let (id, name, input) = blocks.into_iter().next()?;
@@ -238,6 +246,10 @@ fn extract_tool(turn: &Turn, session: &Session) -> Option<serde_json::Value> {
     };
 
     // Derive a one-word display arg from the input object (first string value found).
+    // v1 heuristic: scan object values in insertion order, take the first str.
+    // Known failure modes: non-string first field (e.g. numeric or object) falls back
+    // to `name`; a UUID-ish first field (e.g. tool_use_id leaked into input) would be
+    // shown verbatim. Both accepted for v1 — Task 4.3 drill-down renders the full input.
     let arg = input_val
         .as_object()
         .and_then(|m| m.values().find_map(|v| v.as_str()))
