@@ -753,3 +753,14 @@ Collapsed: tool kind + `arg` one-liner (already in the JSON). Expanded: pretty-p
 ## Out of scope (recorded in design §8 — do not build)
 
 User-turn spine/jump-nav (first post-v1 feature), overlay-on-terminal niceties, multiple workspaces, cross-session search, daemon-restart recovery beyond `--resume`, markdown rendering in the drawer, SSE for `/api/pty` (poll is fine), drawer-open pty resize.
+
+### Backlog: picker bare-name workspace_root exposure (3.4)
+
+The picker's `resolvePick` derives the workspace root by using the parent of the
+first non-recent candidate (Task 3.4). This heuristic breaks when all candidates
+are recent (no subdirs) — bare-name input falls through to `null`, requiring the
+user to type an absolute path.
+
+Cleaner fix: expose `workspace_root` in the GET /api/candidates response as
+`{ root: string | null, candidates: Candidate[] }`. Deferred because it changes
+the 3.1 route contract + CLI mirror + tests. Do before a public release.

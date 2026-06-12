@@ -25,6 +25,7 @@ import {
   type TabDescriptor,
   type TabReconcileAction,
 } from "./shell-helpers.ts";
+import { mountPicker } from "./picker.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -195,8 +196,8 @@ export function mountShell(appEl: HTMLElement): void {
 
     const newBtn = el("button", "tab-new");
     newBtn.textContent = "+";
-    newBtn.title = "Open new session";
-    newBtn.addEventListener("click", () => openNewPty());
+    newBtn.title = "Open new session (fuzzy launcher)";
+    newBtn.addEventListener("click", () => openPicker(newBtn));
     tabStrip.append(newBtn);
   }
 
@@ -253,6 +254,12 @@ export function mountShell(appEl: HTMLElement): void {
           // Attach-miss: drop the tab and refresh roster.
           closeTab(entry.id);
           void refreshRoster();
+        } else if (reason) {
+          // Policy close or other close with a reason: mark dead and annotate label
+          // so the user can see WHY the tab died (e.g. "create outside workspace root").
+          entry.dead = true;
+          entry.descriptor = { ...entry.descriptor, label: `✗ ${reason}` };
+          renderTabStrip();
         } else {
           // Any other close: mark dead so user can see + manually close.
           entry.dead = true;
@@ -273,8 +280,42 @@ export function mountShell(appEl: HTMLElement): void {
     return entry;
   }
 
-  function openNewPty() {
-    openTabWithQuery("", { label: "new session" });
+  // ------------------------------------------------------------------
+  // Picker — overlay triggered by the "+" tab-strip button
+  // ------------------------------------------------------------------
+
+  /** Currently-mounted picker teardown handle (null when picker is closed). */
+  let pickerTeardown: (() => void) | null = null;
+
+  function openPicker(anchorEl: HTMLButtonElement) {
+    // Idempotent: if already open, close it (toggle behaviour).
+    if (pickerTeardown !== null) {
+      pickerTeardown();
+      pickerTeardown = null;
+      return;
+    }
+    pickerTeardown = mountPicker(
+      document.body,
+      anchorEl,
+      {
+        onPick({ path, create }) {
+          pickerTeardown = null;
+          const query = create
+            ? `?new=${encodeURIComponent(path)}&create=1`
+            : `?new=${encodeURIComponent(path)}`;
+          openTabWithQuery(query, { label: basename(path) });
+        },
+        onDismiss() {
+          pickerTeardown = null;
+        },
+      },
+    );
+  }
+
+  /** Path basename (everything after the last "/"). */
+  function basename(p: string): string {
+    const i = p.lastIndexOf("/");
+    return i >= 0 ? p.slice(i + 1) : p;
   }
 
   // ------------------------------------------------------------------

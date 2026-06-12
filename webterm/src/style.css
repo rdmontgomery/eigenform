@@ -201,3 +201,73 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .xterm {
   height: 100%;
 }
+
+/* ── Fuzzy launcher picker overlay ─────────────────────────────────────── */
+.picker-overlay {
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+  width: 420px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.picker-input {
+  background: var(--bg);
+  color: var(--text);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  width: 100%;
+}
+.picker-input::placeholder { color: var(--text-muted); }
+
+.picker-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.picker-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
+}
+.picker-row:hover,
+.picker-row--highlight {
+  background: rgba(255,255,255,0.07);
+}
+
+.picker-row-basename {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.picker-row-parent {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.picker-row-recent {
+  color: var(--text-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
