@@ -97,8 +97,22 @@ pub fn session_json(session: &Session) -> String {
             Role::Assistant => {
                 let text = content_raw(turn);
                 match exchanges.last_mut() {
-                    Some(cur) => append_text(cur, "assistant", &text),
-                    None => exchanges.push(json!({ "user": "", "assistant": text })),
+                    Some(cur) => {
+                        append_text(cur, "assistant", &text);
+                        // Attach the first tool_use from this assistant turn, if any.
+                        if cur.get("tool").is_none() {
+                            if let Some(tool) = extract_tool(turn, session) {
+                                cur["tool"] = tool;
+                            }
+                        }
+                    }
+                    None => {
+                        let mut e = json!({ "user": "", "assistant": text });
+                        if let Some(tool) = extract_tool(turn, session) {
+                            e["tool"] = tool;
+                        }
+                        exchanges.push(e);
+                    }
                 }
             }
             Role::System => {
@@ -130,6 +144,126 @@ pub fn session_json(session: &Session) -> String {
         "exchanges": out,
     }))
     .expect("session json serializes")
+}
+
+/// Maximum byte length of tool output (and input) strings emitted in session_json.
+/// Inputs can be large (e.g. a Write tool with full file contents). We cap both at the
+/// same limit for simplicity; the truncated flag signals the cut to the UI.
+const TOOL_CONTENT_BYTES: usize = 50 * 1024; // 50 KB
+
+/// All `tool_use` content blocks from an assistant turn's message content array.
+/// Returns `(tool_use_id, name, input)` triples.
+fn tool_use_blocks(turn: &Turn) -> Vec<(String, String, serde_json::Value)> {
+    let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
+    let Some(blocks) = value["message"]["content"].as_array() else {
+        return Vec::new();
+    };
+    blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .filter_map(|b| {
+            let id = b.get("id")?.as_str()?.to_string();
+            let name = b.get("name")?.as_str()?.to_string();
+            let input = b.get("input").cloned().unwrap_or(serde_json::Value::Null);
+            Some((id, name, input))
+        })
+        .collect()
+}
+
+/// Find the tool_result output for a given `tool_use_id` by scanning all session turns
+/// (including invisible ones — tool_result user rows have no text content so `visible_turns`
+/// drops them). Returns the joined text content, or `None` if not found.
+fn tool_result_output(session: &Session, tool_use_id: &str) -> Option<String> {
+    for turn in session.turns() {
+        if turn.role != Role::User {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
+        let Some(blocks) = value["message"]["content"].as_array() else {
+            continue;
+        };
+        for block in blocks {
+            if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                continue;
+            }
+            if block.get("tool_use_id").and_then(|t| t.as_str()) != Some(tool_use_id) {
+                continue;
+            }
+            // content may be a string or an array of text blocks
+            let text = match &block["content"] {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => String::new(),
+            };
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// Truncate a string to at most `TOOL_CONTENT_BYTES` bytes (on a char boundary).
+/// Returns `(truncated_string, was_truncated)`.
+fn truncate_tool_content(s: &str) -> (&str, bool) {
+    if s.len() <= TOOL_CONTENT_BYTES {
+        return (s, false);
+    }
+    // Walk back to a char boundary.
+    let mut end = TOOL_CONTENT_BYTES;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&s[..end], true)
+}
+
+/// Build a `tool` JSON object for the first `tool_use` block found in an assistant turn,
+/// pairing it with its result from the session. Returns `None` if the turn has no tool_use.
+fn extract_tool(turn: &Turn, session: &Session) -> Option<serde_json::Value> {
+    let blocks = tool_use_blocks(turn);
+    let (id, name, input) = blocks.into_iter().next()?;
+
+    // Truncate input if serialized form exceeds the cap.
+    let input_str = serde_json::to_string(&input).unwrap_or_default();
+    let (input_val, input_truncated) = if input_str.len() <= TOOL_CONTENT_BYTES {
+        (input, false)
+    } else {
+        let (cut, _) = truncate_tool_content(&input_str);
+        // Re-parse the cut JSON; if it fails (mid-value cut), fall back to the string.
+        let fallback: serde_json::Value = serde_json::from_str(cut)
+            .unwrap_or_else(|_| serde_json::Value::String(cut.to_string()));
+        (fallback, true)
+    };
+
+    // Derive a one-word display arg from the input object (first string value found).
+    let arg = input_val
+        .as_object()
+        .and_then(|m| m.values().find_map(|v| v.as_str()))
+        .unwrap_or(&name)
+        .to_string();
+
+    let mut tool = json!({
+        "kind": name,
+        "arg": arg,
+        "delta": "",
+        "input": input_val,
+    });
+    if input_truncated {
+        tool["inputTruncated"] = json!(true);
+    }
+
+    // Attach output if a matching tool_result exists in the session.
+    if let Some(output_raw) = tool_result_output(session, &id) {
+        let (out, out_truncated) = truncate_tool_content(&output_raw);
+        tool["output"] = json!(out);
+        if out_truncated {
+            tool["truncated"] = json!(true);
+        }
+    }
+
+    Some(tool)
 }
 
 /// Set `obj[key]` to `text`, or append (blank-line joined) if it already holds text — so
@@ -376,8 +510,22 @@ fn turn_glyph_label(role: Role) -> (&'static str, &'static str) {
 fn is_visible(turn: &Turn) -> bool {
     match turn.role {
         Role::System => has_duration(turn),
-        _ => !content_preview(turn).is_empty(),
+        Role::Assistant => !content_preview(turn).is_empty() || has_tool_use(turn),
+        Role::User => !content_preview(turn).is_empty(),
     }
+}
+
+/// Whether an assistant turn contains at least one tool_use content block.
+fn has_tool_use(turn: &Turn) -> bool {
+    let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
+    value["message"]["content"]
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        })
+        .unwrap_or(false)
 }
 
 fn has_duration(turn: &Turn) -> bool {
@@ -576,5 +724,132 @@ mod session_json_tests {
         assert_eq!(doc["total"], 1);
         assert_eq!(doc["exchanges"].as_array().unwrap().len(), 1);
         assert_eq!(doc["exchanges"][0]["leaf"], true);
+    }
+
+    // ── tool input/output tests ──────────────────────────────────────────────
+
+    /// Build an assistant turn containing one tool_use block (and optionally a text block).
+    fn assistant_with_tool(uuid: &str, tool_id: &str, name: &str, input_json: &str, text: &str) -> String {
+        let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
+        let mut blocks = serde_json::json!([{
+            "type": "tool_use",
+            "id": tool_id,
+            "name": name,
+            "input": input,
+        }]);
+        if !text.is_empty() {
+            let arr = blocks.as_array_mut().unwrap();
+            arr.insert(0, json!({ "type": "text", "text": text }));
+        }
+        serde_json::to_string(&json!({
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": "abc12345-0000",
+            "message": { "role": "assistant", "content": blocks }
+        })).unwrap()
+    }
+
+    /// Build a user turn that is entirely a tool_result (no visible text).
+    fn tool_result_turn(uuid: &str, tool_id: &str, output: &str) -> String {
+        serde_json::to_string(&json!({
+            "type": "user",
+            "uuid": uuid,
+            "sessionId": "abc12345-0000",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": [{ "type": "text", "text": output }]
+                }]
+            }
+        })).unwrap()
+    }
+
+    #[test]
+    fn tool_use_input_and_output_are_attached_to_exchange() {
+        let input = r#"{"file_path":"/x","old_string":"a","new_string":"b"}"#;
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"edit the file"}}"#,
+            &assistant_with_tool("a1", "toolu_01", "Edit", input, "I'll edit it"),
+            &tool_result_turn("u2", "toolu_01", "ok, done"),
+            r#"{"type":"system","uuid":"s1","sessionId":"abc12345-0000","durationMs":1200}"#,
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        let ex = &doc["exchanges"][0];
+
+        assert_eq!(ex["tool"]["kind"], "Edit");
+        assert_eq!(ex["tool"]["input"]["file_path"], "/x");
+        assert_eq!(ex["tool"]["input"]["old_string"], "a");
+        assert_eq!(ex["tool"]["input"]["new_string"], "b");
+        assert_eq!(ex["tool"]["output"], "ok, done");
+        // truncated absent when content fits
+        assert!(ex["tool"]["truncated"].is_null(), "truncated absent when content fits");
+    }
+
+    #[test]
+    fn exchange_without_tool_use_has_no_tool_field() {
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"hello"}}"#,
+            r#"{"type":"assistant","uuid":"a1","sessionId":"abc12345-0000","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        // tool field must be absent (not null) for existing consumers
+        assert!(doc["exchanges"][0].get("tool").is_none(), "no tool field on plain text exchange");
+    }
+
+    #[test]
+    fn tool_output_truncated_at_50kb_with_flag() {
+        // Build an output string that is exactly 50KB + 1 byte
+        let big_output = "x".repeat(TOOL_CONTENT_BYTES + 1);
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"run it"}}"#,
+            &assistant_with_tool("a1", "toolu_02", "Bash", r#"{"command":"cat big"}"#, ""),
+            &tool_result_turn("u2", "toolu_02", &big_output),
+            r#"{"type":"system","uuid":"s1","sessionId":"abc12345-0000","durationMs":500}"#,
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        let tool = &doc["exchanges"][0]["tool"];
+
+        assert_eq!(tool["truncated"], true, "truncated flag set for oversized output");
+        let out = tool["output"].as_str().expect("output is a string");
+        assert!(out.len() <= TOOL_CONTENT_BYTES, "output capped at 50KB");
+        assert!(!out.is_empty(), "output not empty");
+    }
+
+    #[test]
+    fn tool_input_truncated_at_50kb_with_flag() {
+        // Build an input JSON whose serialized form exceeds 50KB
+        let big_value = "y".repeat(TOOL_CONTENT_BYTES + 1);
+        let input = format!(r#"{{"content":{}}}"#, serde_json::to_string(&big_value).unwrap());
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"write it"}}"#,
+            &assistant_with_tool("a1", "toolu_03", "Write", &input, ""),
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        let tool = &doc["exchanges"][0]["tool"];
+
+        assert_eq!(tool["inputTruncated"], true, "inputTruncated flag set for oversized input");
+    }
+
+    #[test]
+    fn existing_exchanges_unchanged_when_no_tools() {
+        // Verify exact parity with the pre-tool-feature behaviour for a plain session.
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"render the transcript"}}"#,
+            r#"{"type":"assistant","uuid":"a1","sessionId":"abc12345-0000","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}"#,
+            r#"{"type":"system","uuid":"s1","sessionId":"abc12345-0000","durationMs":4200}"#,
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        assert_eq!(doc["id"], "abc12345");
+        assert_eq!(doc["exchanges"][0]["user"], "render the transcript");
+        assert_eq!(doc["exchanges"][0]["assistant"], "on it");
+        assert_eq!(doc["exchanges"][0]["system"], "4.2s");
+        assert!(doc["exchanges"][0].get("tool").is_none(), "no tool field on plain exchange");
     }
 }
