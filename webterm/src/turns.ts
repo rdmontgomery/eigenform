@@ -137,6 +137,12 @@ export function groupTurns(exchanges: Exchange[]): TurnGroup[] {
     if (ex.leaf === true || ex.user !== "") {
       flush();
       current = openGroup(ex);
+      // The Rust emitter may attach a tool to the group-opening exchange
+      // ({user: "...", tool: {...}} is the common shape).  Without this,
+      // the `continue` above would silently drop the tool.
+      if (ex.tool !== undefined) {
+        current.toolExchanges.push(ex);
+      }
       continue;
     }
 

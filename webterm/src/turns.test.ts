@@ -141,6 +141,26 @@ test("assistant text is concatenated from all assistant exchanges in the group",
   assert.equal(ask!.assistantText, "part one\n\npart two");
 });
 
+test("group-opening exchange with both user text and a tool includes the tool in toolExchanges", () => {
+  // The Rust emitter attaches `tool` to the user-initiated exchange, so
+  // {user: "...", tool: {...}} is the common shape.  The group-opening `continue`
+  // was bypassing tool accumulation, silently dropping first-turn tools.
+  const openingTool = { kind: "Read", arg: "file.ts", delta: "+0 −0", input: {}, output: "" };
+  const exchanges: Exchange[] = [
+    { n: 1, tok: 0, user: "first question", uuid: "u1", tool: openingTool },
+    toolExchange(2, "Edit", "b.ts"),
+    user(3, "second question"),
+  ];
+  const groups = groupTurns(exchanges);
+  assert.equal(groups.length, 2);
+  // The opening exchange carried a tool — it must appear as the first toolExchange.
+  assert.equal(groups[0]!.toolExchanges.length, 2, "first group should have 2 tool exchanges");
+  assert.equal(groups[0]!.toolExchanges[0]!.tool!.kind, "Read");
+  assert.equal(groups[0]!.toolExchanges[1]!.tool!.kind, "Edit");
+  // Second group has no tools.
+  assert.equal(groups[1]!.toolExchanges.length, 0);
+});
+
 test("group turnNumber equals the exchange n of the opening user turn", () => {
   const exchanges: Exchange[] = [
     user(7, "q"),
