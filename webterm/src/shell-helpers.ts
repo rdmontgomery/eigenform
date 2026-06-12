@@ -58,6 +58,34 @@ export function ageGroup(iso: string, now: number): AgeGroup {
 }
 
 // ---------------------------------------------------------------------------
+// railFromPointer
+// ---------------------------------------------------------------------------
+
+export const RAIL_MIN = 180;
+export const RAIL_MAX = 480;
+export const RAIL_DEFAULT = 244;
+/** Dragging the splitter left of this hides the rail entirely. */
+export const RAIL_COLLAPSE_AT = 110;
+
+export interface RailDrag {
+  collapsed: boolean;
+  /** Rail width in px. When collapsed, the width is preserved so re-expanding
+   *  (drag right / topbar button) restores the previous size. */
+  w: number;
+}
+
+/**
+ * Map a pointer x position (px from the shell's left edge) to rail state
+ * during a splitter drag. Below RAIL_COLLAPSE_AT the rail collapses (keeping
+ * `prevW` for restore); otherwise the width tracks the pointer, clamped to
+ * [RAIL_MIN, RAIL_MAX].
+ */
+export function railFromPointer(x: number, prevW: number): RailDrag {
+  if (x < RAIL_COLLAPSE_AT) return { collapsed: true, w: prevW };
+  return { collapsed: false, w: Math.min(RAIL_MAX, Math.max(RAIL_MIN, Math.round(x))) };
+}
+
+// ---------------------------------------------------------------------------
 // inkFor
 // ---------------------------------------------------------------------------
 

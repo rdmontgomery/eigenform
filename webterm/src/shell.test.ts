@@ -8,6 +8,10 @@ import {
   ageGroup,
   inkFor,
   INK_KEYS,
+  railFromPointer,
+  RAIL_MIN,
+  RAIL_MAX,
+  RAIL_COLLAPSE_AT,
 } from "./shell-helpers.ts";
 import type { PtyInfo } from "./types.ts";
 
@@ -101,6 +105,30 @@ test("ageGroup: unparseable recency falls into earlier", () => {
   const now = 1_000_000_000_000;
   assert.equal(ageGroup("not-a-date", now), "earlier");
   assert.equal(ageGroup("", now), "earlier");
+});
+
+// ---------------------------------------------------------------------------
+// railFromPointer — rail drag-resize state (width clamp + collapse threshold)
+// ---------------------------------------------------------------------------
+
+test("railFromPointer: collapses below the threshold, preserving the last width", () => {
+  const state = railFromPointer(RAIL_COLLAPSE_AT - 1, 300);
+  assert.equal(state.collapsed, true);
+  assert.equal(state.w, 300);
+});
+
+test("railFromPointer: at or beyond the threshold the rail is visible", () => {
+  assert.equal(railFromPointer(RAIL_COLLAPSE_AT, 244).collapsed, false);
+});
+
+test("railFromPointer: clamps width to [RAIL_MIN, RAIL_MAX]", () => {
+  assert.equal(railFromPointer(RAIL_COLLAPSE_AT, 244).w, RAIL_MIN);
+  assert.equal(railFromPointer(9999, 244).w, RAIL_MAX);
+  assert.equal(railFromPointer(300, 244).w, 300);
+});
+
+test("railFromPointer: rounds fractional pointer positions", () => {
+  assert.equal(railFromPointer(300.6, 244).w, 301);
 });
 
 // ---------------------------------------------------------------------------

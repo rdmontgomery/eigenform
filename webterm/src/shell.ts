@@ -36,6 +36,8 @@ import {
   reconcileTabs,
   ageGroup,
   inkFor,
+  railFromPointer,
+  RAIL_DEFAULT,
   type AgeGroup,
   type TabDescriptor,
   type TabReconcileAction,
@@ -57,6 +59,7 @@ const LS_KEY = "eigen:term:tabs:v1";
 const LS_OVERRIDES = "eigen:term:overrides:v1";
 const LS_THEME = "eigen:term:theme:v1";
 const LS_DRAWER = "eigen:term:drawer:v1";
+const LS_RAIL = "eigen:term:rail:v1";
 
 const KNOWN_STATES = new Set(["working", "waiting", "idle", "exited"]);
 
@@ -152,9 +155,14 @@ export function mountShell(appEl: HTMLElement): void {
   // main column
   const main = el("div", "main");
   const topbar = el("div", "topbar");
+  const railBtn = el("button", "icon-btn topbar-rail-btn");
+  railBtn.title = "Show sessions";
+  const railBtnIcon = icon("panel", 16);
+  railBtnIcon.style.transform = "scaleX(-1)"; // left-panel reading of the icon
+  railBtn.append(railBtnIcon);
   const tabStrip = el("div", "tab-strip");
   const controls = el("div", "topbar-controls");
-  topbar.append(tabStrip, controls);
+  topbar.append(railBtn, tabStrip, controls);
 
   const termArea = el("div", "term-area term-scope");
   const termHeader = el("div", "term-header");
@@ -162,7 +170,84 @@ export function mountShell(appEl: HTMLElement): void {
   termArea.append(termHeader, termHost);
 
   main.append(topbar, termArea);
-  appEl.append(rail, main);
+  const resizer = el("div", "rail-resizer");
+  resizer.title = "drag to resize the rail · drag far left to hide";
+  appEl.append(rail, resizer, main);
+
+  // ------------------------------------------------------------------
+  // Rail resize / collapse — woland's splitter pattern: drag sets --rail-w
+  // live, state persists on mouseup. Dragging left past the collapse
+  // threshold hides the rail; the topbar button (or dragging back right)
+  // restores it at its previous width.
+  // ------------------------------------------------------------------
+
+  let railW = RAIL_DEFAULT;
+  let railCollapsed = false;
+  try {
+    const saved = JSON.parse(localStorage.getItem(LS_RAIL) ?? "{}") as {
+      w?: number;
+      collapsed?: boolean;
+    };
+    // Re-clamp through the drag mapper so a stale/garbage width can't stick.
+    if (typeof saved.w === "number") railW = railFromPointer(saved.w, RAIL_DEFAULT).w;
+    railCollapsed = saved.collapsed === true;
+  } catch {
+    // Corrupt entry — keep defaults.
+  }
+
+  function applyRail() {
+    document.documentElement.style.setProperty("--rail-w", `${railW}px`);
+    appEl.classList.toggle("shell--rail-collapsed", railCollapsed);
+  }
+  applyRail();
+
+  function saveRail() {
+    localStorage.setItem(LS_RAIL, JSON.stringify({ w: railW, collapsed: railCollapsed }));
+  }
+
+  /** Re-fit the active tab's xterm after the terminal pane changes width. */
+  function fitActive() {
+    const t = activeTab();
+    if (!t) return;
+    requestAnimationFrame(() => {
+      try { t.handle.fit.fit(); } catch { /* zero-size element — ok */ }
+    });
+  }
+
+  let railDragging = false;
+  resizer.addEventListener("mousedown", (e) => {
+    railDragging = true;
+    e.preventDefault();
+    resizer.classList.add("rail-resizer--dragging");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!railDragging) return;
+    const x = e.clientX - appEl.getBoundingClientRect().left;
+    const next = railFromPointer(x, railW);
+    railW = next.w;
+    railCollapsed = next.collapsed;
+    applyRail();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!railDragging) return;
+    railDragging = false;
+    resizer.classList.remove("rail-resizer--dragging");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    saveRail();
+    // One clean resize at drag end (not per-mousemove — a resize storm would
+    // SIGWINCH the pty on every pixel; spike 09's repaint handles the single one).
+    fitActive();
+  });
+
+  railBtn.addEventListener("click", () => {
+    railCollapsed = false;
+    applyRail();
+    saveRail();
+    fitActive();
+  });
 
   // ------------------------------------------------------------------
   // Tab registry

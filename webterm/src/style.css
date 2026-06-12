@@ -176,6 +176,33 @@ button { font: inherit; color: inherit; }
   min-height: 0;
   min-width: 0;
 }
+.shell--rail-collapsed .rail { display: none; }
+
+/* Invisible 5px grab strip on the rail's right edge (woland's splitter
+   pattern). Drag to resize; drag left past the threshold to hide the rail.
+   When collapsed it sits at the viewport's left edge — dragging right
+   re-opens. */
+.rail-resizer {
+  flex: 0 0 5px;
+  margin-left: -3px;
+  z-index: 20;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.14s;
+}
+.shell--rail-collapsed .rail-resizer { margin-left: 0; }
+.rail-resizer:hover,
+.rail-resizer--dragging {
+  background: color-mix(in oklch, var(--accent) 30%, transparent);
+}
+
+/* Reopen affordance — leading topbar button, visible only while collapsed. */
+.topbar-rail-btn {
+  display: none;
+  align-self: center;
+  margin: 0 2px 0 6px;
+}
+.shell--rail-collapsed .topbar-rail-btn { display: inline-flex; }
 
 .rail-brand {
   display: flex;
