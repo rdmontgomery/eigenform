@@ -467,8 +467,13 @@ export function mountShell(appEl: HTMLElement): void {
     const ptyHandle = connectPty(query, handle.term, {
       onPtyId(id) {
         entry.descriptor = { ...entry.descriptor, ptyId: id };
-        // If we opened without a ptyId, update the tab's identity.
-        if (entry.id !== id && !desc.ptyId) entry.id = id;
+        // If we opened without a ptyId, update the tab's identity — and carry
+        // activeTabId along, or activeTab() would go null for the visible tab
+        // (header would blank, drawer would unmount).
+        if (entry.id !== id && !desc.ptyId) {
+          if (activeTabId === entry.id) activeTabId = id;
+          entry.id = id;
+        }
         saveTabs();
         renderTabStrip();
       },
