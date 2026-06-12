@@ -584,6 +584,16 @@ struct PtyQuery {
     session: Option<String>,
     /// Start a fresh session: spawn `claude` in this cwd. Takes precedence over `session`.
     new: Option<String>,
+    /// When `new` is set, `create=1` tells the daemon to `fs::create_dir_all` the cwd
+    /// before spawning. Only allowed when the path is under `config.workspace_root`;
+    /// outside paths close the socket with a POLICY frame.
+    ///
+    /// Wire form: `&create=1` (non-zero = true, `0` or absent = false).
+    /// Parsed as `Option<u8>` so the query-string value `"1"` deserialises cleanly
+    /// without a custom deserialiser (axum uses serde's query deserialiser; booleans
+    /// from query strings require a custom handler because `"true"` ≠ `true`).
+    #[serde(default)]
+    create: u8,
     // Absent all = the default command (a shell). Only a real connection spawns anything.
 }
 
@@ -616,6 +626,47 @@ async fn pty_ws(
 
     // Otherwise spawn-and-register through the host (uniform model: even bare `/pty`
     // registers a pty that outlives this socket).
+
+    // `create=1` with `new=<cwd>`: create the directory if it is under workspace_root.
+    // Do the check (and mkdir) before upgrading if possible — but axum's on_upgrade pattern
+    // requires the check to happen inside the async block. We resolve early whether to allow
+    // or reject, then either proceed or close with POLICY.
+    let should_create = query.create != 0;
+    if should_create {
+        // Resolve: is `new` set and within workspace_root?
+        let create_result: Result<PathBuf, &'static str> = (|| {
+            let cwd_str = query.new.as_deref().ok_or("no cwd")?;
+            let new_path = PathBuf::from(cwd_str);
+            let root = state.config.workspace_root.as_ref().ok_or("create outside workspace root")?;
+
+            // Canonicalize the root (it must exist). Normalize the new path without
+            // canonicalizing it (it may not exist yet) by resolving `..` components manually:
+            // collect path components, skipping `.` and popping on `..`.
+            let canon_root = root.canonicalize().map_err(|_| "workspace root not accessible")?;
+            let normalized = normalize_path(&new_path);
+
+            if !normalized.starts_with(&canon_root) {
+                return Err("create outside workspace root");
+            }
+            Ok(normalized)
+        })();
+
+        match create_result {
+            Err(reason) => {
+                return ws.on_upgrade(move |socket| async move {
+                    let _ = close_with_reason(socket, reason).await;
+                });
+            }
+            Ok(dir) => {
+                if let Err(_) = std::fs::create_dir_all(&dir) {
+                    return ws.on_upgrade(move |socket| async move {
+                        let _ = close_with_reason(socket, "failed to create directory").await;
+                    });
+                }
+            }
+        }
+    }
+
     let command = pty_command(&state.config, &query);
     let host = Arc::clone(&state.host);
     ws.on_upgrade(move |socket| async move {
@@ -750,6 +801,32 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
 /// Claude Code's project dir name for a cwd: `/` → `-` (e.g. `/home/me/p` → `-home-me-p`).
 fn escaped_cwd(cwd: &str) -> String {
     cwd.replace('/', "-")
+}
+
+/// Normalize a path by resolving `.` and `..` components without touching the filesystem
+/// (i.e. without canonicalizing — the path may not exist yet). This is used to check
+/// whether a `new=<cwd>&create=1` request is under `workspace_root` even when the
+/// requested directory hasn't been created yet.
+///
+/// Rules:
+/// - `.` components are skipped.
+/// - `..` pops the last accumulated component (if any; at the root it is a no-op).
+/// - All other components are pushed.
+///
+/// The input is treated as an absolute path. If it is relative, it is used as-is
+/// (the containment check will likely fail since the root is always absolute).
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// If `path` is a `<uuid>.jsonl` directly under `<projects>/<dir_name>/` and its uuid is
@@ -1047,6 +1124,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalize_path_resolves_dotdot() {
+        // Normal path — unchanged.
+        assert_eq!(normalize_path(Path::new("/a/b/c")), PathBuf::from("/a/b/c"));
+        // Single `..` — pops one component.
+        assert_eq!(normalize_path(Path::new("/a/b/../c")), PathBuf::from("/a/c"));
+        // Double `..` — escapes the workspace.
+        assert_eq!(
+            normalize_path(Path::new("/workspace/child/../../outside")),
+            PathBuf::from("/outside")
+        );
+        // `.` is skipped.
+        assert_eq!(normalize_path(Path::new("/a/./b")), PathBuf::from("/a/b"));
+        // `..` at root is a no-op (no component to pop).
+        assert_eq!(normalize_path(Path::new("/../x")), PathBuf::from("/x"));
+    }
+
+    #[test]
     fn session_json_cache_renders_once_until_the_file_changes() {
         // The Manuscript re-fetches a session's JSON on every Forest click and SSE tick;
         // re-parsing a multi-MB transcript each time is the load latency. The cache renders
@@ -1104,20 +1198,20 @@ mod tests {
 
         let resumed = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None },
+            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, create: 0 },
         );
         assert_eq!(resumed.program, "claude");
         assert_eq!(resumed.args, vec!["--resume".to_string(), uuid.to_string()]);
         assert_eq!(resumed.cwd.as_deref(), Some(std::path::Path::new("/home/me/proj")));
 
         // No session → the configured default, never claude.
-        let default = pty_command(&cfg, &PtyQuery { attach: None, session: None, new: None });
+        let default = pty_command(&cfg, &PtyQuery { attach: None, session: None, new: None, create: 0 });
         assert_eq!(default.program, "bash");
 
         // new=<cwd> → fresh claude in that dir, with a watch target for its new JSONL.
         let fresh = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: None, new: Some("/home/me/fresh".into()) },
+            &PtyQuery { attach: None, session: None, new: Some("/home/me/fresh".into()), create: 0 },
         );
         assert_eq!(fresh.program, "claude");
         assert!(fresh.args.is_empty());
