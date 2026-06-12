@@ -3,7 +3,7 @@
 //! so the test is deterministic (no real pids).
 
 use chrono::{DateTime, Utc};
-use eigen_forest::{is_pid_alive, live_forest_with, SessionState};
+use eigenform_forest::{is_pid_alive, live_forest_with, SessionState};
 
 #[test]
 fn is_pid_alive_sees_this_running_process() {

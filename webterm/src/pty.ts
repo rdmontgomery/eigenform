@@ -9,7 +9,7 @@ export interface TermHandle {
 }
 
 /**
- * Warm-ink xterm theme (eigen design system). xterm paints to canvas, which
+ * Warm-ink xterm theme (eigenform design system). xterm paints to canvas, which
  * needs concrete colors — these are sRGB conversions of the CSS oklch tokens:
  *   background = --term-bg oklch(0.155 0.013 56), foreground = cream
  *   oklch(0.91 0.018 75), cursor/selection = --accent oklch(0.70 0.13 47).

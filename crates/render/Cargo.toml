@@ -1,5 +1,5 @@
 [package]
-name = "eigen-render"
+name = "eigenform-render"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,5 +7,5 @@ rust-version.workspace = true
 [dependencies]
 serde_json    = { workspace = true }
 chrono        = { workspace = true }
-eigen-surgery = { path = "../surgery" }
-eigen-forest  = { path = "../forest" }
+eigenform-surgery = { path = "../surgery" }
+eigenform-forest  = { path = "../forest" }

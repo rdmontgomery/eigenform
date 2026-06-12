@@ -1,4 +1,4 @@
-//! `eigen candidates [--workspace <dir>]` — CLI mirror of GET /api/candidates.
+//! `eigenform candidates [--workspace <dir>]` — CLI mirror of GET /api/candidates.
 //!
 //! Computed locally: recent session cwds merged with immediate workspace subdirs.
 //! Mirrors the daemon's candidates_route (crates/daemon/src/lib.rs) exactly.
@@ -39,12 +39,12 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir) {
 }
 
 fn run(home: &std::path::Path, extra_args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_eigen"))
+    Command::new(env!("CARGO_BIN_EXE_eigenform"))
         .env("HOME", home)
         .args(["candidates"])
         .args(extra_args)
         .output()
-        .expect("run eigen")
+        .expect("run eigenform")
 }
 
 #[test]

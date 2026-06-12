@@ -1,4 +1,4 @@
-//! eigen-render: project an internal View tree to text (and later json/html).
+//! eigenform-render: project an internal View tree to text (and later json/html).
 //!
 //! The View tree is an internal, refactor-freely IR — not a published schema. v0.1
 //! ships the `text` projection only; json/html land when a consumer exists (browser
@@ -7,8 +7,8 @@
 use std::fmt::Write as _;
 
 use chrono::{DateTime, Utc};
-use eigen_forest::SessionRef;
-use eigen_surgery::{Role, Session, Turn};
+use eigenform_forest::SessionRef;
+use eigenform_surgery::{Role, Session, Turn};
 use serde_json::json;
 
 /// Render a recent-session list: one row per session, newest at the bottom.
@@ -702,7 +702,7 @@ fn render_node(node: &Node, prefix: &str, is_last: bool, out: &mut String) {
 #[cfg(test)]
 mod session_json_tests {
     use super::*;
-    use eigen_surgery::Session;
+    use eigenform_surgery::Session;
 
     fn parse(lines: &[&str]) -> Session {
         Session::parse_str(&(lines.join("\n") + "\n")).unwrap_or_else(|e| match e {})

@@ -4,7 +4,7 @@
 //! A guard bails only on the `exact-other` case: the old id as the full value of a
 //! non-`sessionId` key.
 
-use eigen_surgery::rewrite_session_id;
+use eigenform_surgery::rewrite_session_id;
 
 const OLD: &str = "old-session-uuid-0000";
 const NEW: &str = "new-session-uuid-1111";

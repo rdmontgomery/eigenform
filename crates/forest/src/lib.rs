@@ -1,4 +1,4 @@
-//! eigen-forest: discover and resolve Claude Code sessions across projects.
+//! eigenform-forest: discover and resolve Claude Code sessions across projects.
 //!
 //! v0.1 kills path-pasting: resolve a session by uuid (or unique prefix) machine-wide,
 //! and list recent sessions per project. See
@@ -64,7 +64,7 @@ pub enum ResolveError {
 /// Enumerate every session under `projects_dir/<project>/<uuid>.jsonl`, attaching each
 /// project's recovered cwd. Reads no session contents.
 pub fn enumerate_session_stubs(projects_dir: &Path) -> Result<Vec<SessionStub>> {
-    let cwd_by_dir: HashMap<String, PathBuf> = eigen_projects::enumerate_projects(projects_dir)
+    let cwd_by_dir: HashMap<String, PathBuf> = eigenform_projects::enumerate_projects(projects_dir)
         .map(|projects| {
             projects
                 .into_iter()
@@ -293,7 +293,7 @@ fn mtime_millis(path: &Path) -> Option<(i64, u64)> {
 }
 
 /// [`session_spark`] cached to `state_dir/<session_id>.json`, keyed by the JSONL's
-/// (mtime, len). A static transcript is parsed once; the cache (eigen's `~/.eigen/state`)
+/// (mtime, len). A static transcript is parsed once; the cache (eigenform's `~/.eigenform/state`)
 /// survives restarts and is shared with the CLI.
 pub fn cached_spark(state_dir: &Path, session_id: &str, jsonl_path: &Path) -> Vec<u32> {
     let stamp = mtime_millis(jsonl_path);

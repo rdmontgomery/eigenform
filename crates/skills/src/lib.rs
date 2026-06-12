@@ -1,4 +1,4 @@
-//! eigen-skills: scan and reason about Claude Code skill directories.
+//! eigenform-skills: scan and reason about Claude Code skill directories.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

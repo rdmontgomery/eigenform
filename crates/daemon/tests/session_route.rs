@@ -4,7 +4,7 @@
 #[path = "helpers/mod.rs"]
 mod helpers;
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 const UUID: &str = "aaaa1111-0000-4000-8000-000000000001";
 

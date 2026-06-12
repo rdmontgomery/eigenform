@@ -1,6 +1,6 @@
 //! Dev mode: `GET /` injects a live-reload hook; prod serves the static index untouched.
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 fn cfg(web_dir: std::path::PathBuf, dev: bool) -> Config {
     Config {
@@ -52,7 +52,7 @@ async fn dev_mode_injects_the_reload_meta() {
     let web = web_with_index();
     let host = start(cfg(web.path().to_path_buf(), true)).await;
     let body = get(&host, "/").await;
-    assert!(body.contains(r#"<meta name="eigen-dev""#), "dev meta injected:\n{body}");
+    assert!(body.contains(r#"<meta name="eigenform-dev""#), "dev meta injected:\n{body}");
 }
 
 #[tokio::test]
@@ -60,5 +60,5 @@ async fn prod_mode_serves_static_index_without_meta() {
     let web = web_with_index();
     let host = start(cfg(web.path().to_path_buf(), false)).await;
     let body = get(&host, "/").await;
-    assert!(!body.contains("eigen-dev"), "no dev meta in prod:\n{body}");
+    assert!(!body.contains("eigenform-dev"), "no dev meta in prod:\n{body}");
 }

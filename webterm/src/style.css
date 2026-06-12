@@ -1,4 +1,4 @@
-/* webterm — eigen warm-ink design system (Claude Design handoff, 2026-06-12).
+/* webterm — eigenform warm-ink design system (Claude Design handoff, 2026-06-12).
  *
  * Warm ink-on-paper: the terminal is the manuscript page; the chrome is the
  * binding. Dark (default) and light themes share one token vocabulary; the
@@ -128,12 +128,12 @@ button { font: inherit; color: inherit; }
 .scroll::-webkit-scrollbar-thumb:hover { background: var(--tx-faint); }
 .scroll::-webkit-scrollbar-track { background: transparent; }
 
-@keyframes eigen-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@keyframes eigen-ring {
+@keyframes eigenform-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes eigenform-ring {
   0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--st-running) 55%, transparent); }
   70%, 100% { box-shadow: 0 0 0 5px transparent; }
 }
-@keyframes eigen-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes eigenform-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 /* ── Status dots ────────────────────────────────────────────────────────── */
 /* State mapping (registry → palette): working = running amber (pulse + ring),
@@ -149,11 +149,11 @@ button { font: inherit; color: inherit; }
 }
 .dot--working {
   background: var(--st-running);
-  animation: eigen-ring 1.8s ease-out infinite, eigen-pulse 1.4s ease-in-out infinite;
+  animation: eigenform-ring 1.8s ease-out infinite, eigenform-pulse 1.4s ease-in-out infinite;
 }
 .dot--waiting {
   background: var(--accent);
-  animation: eigen-pulse 1.2s ease-in-out infinite;
+  animation: eigenform-pulse 1.2s ease-in-out infinite;
 }
 .dot--idle   { background: var(--st-idle); }
 .dot--exited { background: var(--tx-faint); }
@@ -604,7 +604,7 @@ button { font: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: eigen-fade 0.12s ease-out;
+  animation: eigenform-fade 0.12s ease-out;
 }
 
 .picker-input {
@@ -677,7 +677,7 @@ button { font: inherit; color: inherit; }
   flex-direction: column;
   z-index: 10;
   overflow: hidden;
-  animation: eigen-fade 0.14s ease-out;
+  animation: eigenform-fade 0.14s ease-out;
 }
 
 .drawer-header {
@@ -836,7 +836,7 @@ button { font: inherit; color: inherit; }
   width: 6px; height: 6px;
   border-radius: 99px;
   background: var(--st-running);
-  animation: eigen-pulse 1.4s infinite;
+  animation: eigenform-pulse 1.4s infinite;
   flex-shrink: 0;
 }
 .turn-input-label {
@@ -1031,7 +1031,7 @@ button { font: inherit; color: inherit; }
 }
 .tool-todo--doing .tool-todo-ring {
   border: 2px solid var(--st-running);
-  animation: eigen-pulse 1.3s infinite;
+  animation: eigenform-pulse 1.3s infinite;
 }
 .tool-todo-text { font-size: 12px; color: var(--tx-2); }
 .tool-todo--done .tool-todo-text { text-decoration: line-through; color: var(--tx-faint); }

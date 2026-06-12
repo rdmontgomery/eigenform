@@ -1,4 +1,4 @@
-//! End-to-end CLI: `eigen surgery <op>` parses a session file, performs surgery, writes
+//! End-to-end CLI: `eigenform surgery <op>` parses a session file, performs surgery, writes
 //! the new session beside the source, and prints the new uuid.
 
 use std::process::Command;
@@ -23,10 +23,10 @@ fn session_text() -> String {
 }
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_eigen"))
+    Command::new(env!("CARGO_BIN_EXE_eigenform"))
         .args(args)
         .output()
-        .expect("run eigen")
+        .expect("run eigenform")
 }
 
 #[test]
@@ -80,11 +80,11 @@ fn fork_resolves_the_source_by_uuid_prefix() {
     std::fs::create_dir_all(&pdir).unwrap();
     std::fs::write(pdir.join(format!("{OLD}.jsonl")), session_text()).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_eigen"))
+    let out = Command::new(env!("CARGO_BIN_EXE_eigenform"))
         .env("HOME", home.path())
         .args(["surgery", "fork", "11111111", "--at", A1])
         .output()
-        .expect("run eigen");
+        .expect("run eigenform");
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
 
     let new_uuid = String::from_utf8(out.stdout).unwrap().trim().to_string();

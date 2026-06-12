@@ -2,9 +2,9 @@
 //! whatever real Claude Code sessions a machine has, so schema drift across versions
 //! surfaces automatically. Strictly bounded and graceful:
 //!
-//! - Corpus dir: `EIGEN_CORPUS_DIR`, else `~/.claude/projects`. Absent/empty → skip+pass.
+//! - Corpus dir: `EIGENFORM_CORPUS_DIR`, else `~/.claude/projects`. Absent/empty → skip+pass.
 //! - Validates at most 64 sessions (newest first) under a 128 MiB budget; logs anything
-//!   skipped. `EIGEN_CORPUS_FULL=1` lifts the count cap.
+//!   skipped. `EIGENFORM_CORPUS_FULL=1` lifts the count cap.
 //! - Per session: parse succeeds · re-emit byte-identical · guarded swap finds 0 stray ·
 //!   the resume leaf resolves to a real row uuid.
 
@@ -13,7 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use eigen_surgery::{rewrite_session_id, Session};
+use eigenform_surgery::{rewrite_session_id, Session};
 
 const MAX_SESSIONS: usize = 64;
 const BYTE_BUDGET: u64 = 128 * 1024 * 1024;
@@ -21,7 +21,7 @@ const PER_FILE_MAX: u64 = 32 * 1024 * 1024;
 const SENTINEL_ID: &str = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 
 fn corpus_dir() -> Option<PathBuf> {
-    if let Ok(d) = std::env::var("EIGEN_CORPUS_DIR") {
+    if let Ok(d) = std::env::var("EIGENFORM_CORPUS_DIR") {
         return Some(PathBuf::from(d));
     }
     std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".claude/projects"))
@@ -63,7 +63,7 @@ fn all_row_uuids(contents: &str) -> HashSet<String> {
 #[test]
 fn corpus_round_trips_and_guards_cleanly_across_versions() {
     let Some(dir) = corpus_dir() else {
-        eprintln!("corpus test skipped: no HOME / EIGEN_CORPUS_DIR");
+        eprintln!("corpus test skipped: no HOME / EIGENFORM_CORPUS_DIR");
         return;
     };
     if !dir.is_dir() {
@@ -78,7 +78,7 @@ fn corpus_round_trips_and_guards_cleanly_across_versions() {
     }
     sessions.sort_by(|a, b| b.2.cmp(&a.2)); // newest first
 
-    let cap = if std::env::var("EIGEN_CORPUS_FULL").is_ok() {
+    let cap = if std::env::var("EIGENFORM_CORPUS_FULL").is_ok() {
         usize::MAX
     } else {
         MAX_SESSIONS
@@ -134,7 +134,7 @@ fn corpus_round_trips_and_guards_cleanly_across_versions() {
     eprintln!(
         "corpus: validated {validated}/{total_found} sessions ({:.1} MiB); \
          skipped {skipped_size} over-size, {skipped_cap} over cap/budget \
-         (set EIGEN_CORPUS_FULL=1 to lift the count cap)",
+         (set EIGENFORM_CORPUS_FULL=1 to lift the count cap)",
         spent as f64 / (1024.0 * 1024.0),
     );
     assert!(validated > 0, "corpus present but nothing validated");

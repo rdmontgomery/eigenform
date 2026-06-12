@@ -7,7 +7,7 @@
  * drawer overlays it). It is mounted/unmounted by the shell's GLOBAL top-right
  * toggle and follows the active tab.
  *
- * Card model (eigen design, tool-call pass 2026-06-12):
+ * Card model (eigenform design, tool-call pass 2026-06-12):
  *   - Each turn group renders as a user card followed by an assistant card.
  *   - USER turns default expanded (the navigation spine) but are collapsible.
  *   - ASSISTANT turns default to a single muted ellipsis line — the prose's
@@ -27,7 +27,7 @@
  *   already open it collapses (icon rotates 180°), otherwise it expands.
  *
  * Collapse state PERSISTS per session: { turnCol, toolMap } in localStorage
- * under "eigen:term:drawerstate:<uuid>". turnCol is keyed "u:<n>" / "a:<n>"
+ * under "eigenform:term:drawerstate:<uuid>". turnCol is keyed "u:<n>" / "a:<n>"
  * (true = collapsed); toolMap is keyed toolExpandKey(n, i) (true = open).
  * Defaults (absent key): user expanded, assistant collapsed, tool closed.
  * The drawer remounts per session switch (shell's syncDrawer), so state loads
@@ -187,7 +187,7 @@ export function mountDrawer(
   // Collapse state — persisted per session
   // ------------------------------------------------------------------
 
-  const STORE_KEY = `eigen:term:drawerstate:${uuid}`;
+  const STORE_KEY = `eigenform:term:drawerstate:${uuid}`;
 
   /** true = collapsed. Keys "u:<n>" (user card) / "a:<n>" (assistant card). */
   let turnCol: Record<string, boolean> = {};

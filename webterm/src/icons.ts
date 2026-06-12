@@ -1,5 +1,5 @@
 /**
- * icons.ts — inline stroke-icon set from the eigen design system.
+ * icons.ts — inline stroke-icon set from the eigenform design system.
  *
  * Each icon is a 24×24 viewBox of stroke paths (round caps/joins), rendered at
  * a given pixel size and colored via currentColor. All path data is static —

@@ -1,10 +1,10 @@
-// Wire types for the eigen-daemon HTTP/WS API.
+// Wire types for the eigenform-daemon HTTP/WS API.
 // Each type mirrors serde's actual output field-for-field — do not diverge.
 
 /**
  * One row from GET /api/candidates.
  * - `path`: absolute directory path.
- * - `recent`: true when this path comes from a recent eigen session.
+ * - `recent`: true when this path comes from a recent eigenform session.
  */
 export interface Candidate {
   path: string;

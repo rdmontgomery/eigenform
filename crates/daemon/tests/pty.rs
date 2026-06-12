@@ -2,7 +2,7 @@
 
 use std::io::Read;
 
-use eigen_daemon::Pty;
+use eigenform_daemon::Pty;
 
 /// Read until `needle` appears or the stream ends. Bounded so a wedged child can't hang
 /// the test forever.

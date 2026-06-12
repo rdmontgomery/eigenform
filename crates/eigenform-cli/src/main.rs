@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-/// The default port `eigen daemon` binds on; `eigen ptys` targets the same default.
+/// The default port `eigenform daemon` binds on; `eigenform ptys` targets the same default.
 const DEFAULT_PORT: u16 = 4317;
 
 #[derive(Parser, Debug)]
-#[command(name = "eigen", version, about = "control surface over Claude Code sessions")]
+#[command(name = "eigenform", version, about = "control surface over Claude Code sessions")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -167,12 +167,12 @@ enum RoleArg {
     System,
 }
 
-impl From<RoleArg> for eigen_surgery::Role {
+impl From<RoleArg> for eigenform_surgery::Role {
     fn from(r: RoleArg) -> Self {
         match r {
-            RoleArg::User => eigen_surgery::Role::User,
-            RoleArg::Assistant => eigen_surgery::Role::Assistant,
-            RoleArg::System => eigen_surgery::Role::System,
+            RoleArg::User => eigenform_surgery::Role::User,
+            RoleArg::Assistant => eigenform_surgery::Role::Assistant,
+            RoleArg::System => eigenform_surgery::Role::System,
         }
     }
 }
@@ -298,12 +298,12 @@ fn ptys_list(port: u16) -> Result<()> {
 /// Computed entirely from disk — no daemon required.
 fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
     // Recents: de-duplicated cwds from recent sessions, in recency order.
-    // Dedup delegated to eigen_projects::unique_cwds (shared with daemon's candidates_route).
+    // Dedup delegated to eigenform_projects::unique_cwds (shared with daemon's candidates_route).
     let recents: Vec<PathBuf> = {
         let dir = projects_dir()?;
-        match eigen_forest::list(&dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+        match eigenform_forest::list(&dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
             Ok(sessions) => {
-                eigen_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
+                eigenform_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
             }
             Err(_) => vec![],
         }
@@ -323,11 +323,11 @@ fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
             .filter(|p| p.is_dir())
     });
     let subdirs: Vec<PathBuf> = match &workspace_root {
-        Some(root) => eigen_projects::immediate_subdirs(root).unwrap_or_default(),
+        Some(root) => eigenform_projects::immediate_subdirs(root).unwrap_or_default(),
         None => vec![],
     };
 
-    let candidates = eigen_projects::merge_candidates(&recents, &subdirs);
+    let candidates = eigenform_projects::merge_candidates(&recents, &subdirs);
     for c in &candidates {
         if c.recent {
             println!("{}  [recent]", c.path.display());
@@ -341,15 +341,15 @@ fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
 /// Print the corroborated live Forest — the CLI mirror of woland's Forest surface.
 fn forest_list(live_only: bool) -> Result<()> {
     let now = chrono::Utc::now();
-    let rows = eigen_forest::live_forest(&projects_dir()?, &sessions_dir()?, &state_dir()?, now);
+    let rows = eigenform_forest::live_forest(&projects_dir()?, &sessions_dir()?, &state_dir()?, now);
     for r in rows {
         if live_only && !r.live {
             continue;
         }
         let badge = match r.state {
-            eigen_forest::SessionState::Ready => "● ready  ",
-            eigen_forest::SessionState::Working => "◐ working",
-            eigen_forest::SessionState::Recent => "  recent ",
+            eigenform_forest::SessionState::Ready => "● ready  ",
+            eigenform_forest::SessionState::Working => "◐ working",
+            eigenform_forest::SessionState::Recent => "  recent ",
         };
         let ago = ago(r.recency, now);
         let total: u32 = r.spark.iter().sum();
@@ -403,7 +403,7 @@ fn sessions_dir() -> Result<PathBuf> {
 fn state_dir() -> Result<PathBuf> {
     Ok(home_dir()
         .context("could not determine home directory")?
-        .join(".eigen/state"))
+        .join(".eigenform/state"))
 }
 
 /// Resolve a `<uuid|prefix|path>` argument to a session file path. A literal existing
@@ -414,12 +414,12 @@ fn resolve_session(session: &str) -> Result<PathBuf> {
         return Ok(PathBuf::from(session));
     }
     let dir = projects_dir()?;
-    match eigen_forest::resolve(&dir, session) {
+    match eigenform_forest::resolve(&dir, session) {
         Ok(p) => Ok(p),
-        Err(eigen_forest::ResolveError::Ambiguous(candidates)) => {
+        Err(eigenform_forest::ResolveError::Ambiguous(candidates)) => {
             eprintln!("`{session}` is ambiguous — {} sessions match:", candidates.len());
             for c in &candidates {
-                let title = eigen_forest::session_ref(c)
+                let title = eigenform_forest::session_ref(c)
                     .title
                     .unwrap_or_else(|| "(untitled)".to_string());
                 eprintln!("  {}  {}", &c.uuid[..c.uuid.len().min(8)], title);
@@ -434,8 +434,8 @@ fn sessions_show(session: String, render: RenderFormat) -> Result<()> {
     require_text(render)?;
     let path = resolve_session(&session)?;
     let src = load_session(&path)?;
-    let view = eigen_render::session_view(&src);
-    print!("{}", eigen_render::render_text(&view));
+    let view = eigenform_render::session_view(&src);
+    print!("{}", eigenform_render::render_text(&view));
     Ok(())
 }
 
@@ -449,19 +449,19 @@ fn sessions_list(
     let dir = projects_dir()?;
 
     let scope = if all_projects {
-        eigen_forest::Scope::AllProjects
+        eigenform_forest::Scope::AllProjects
     } else {
         let here = match cwd {
             Some(c) => c,
             None => env::current_dir().context("could not read current dir")?,
         };
-        eigen_forest::Scope::Project(here)
+        eigenform_forest::Scope::Project(here)
     };
 
     let window = parse_since(since.as_deref())?;
     let now = chrono::Utc::now();
-    let sessions = eigen_forest::list(&dir, scope, window, now).map_err(|e| anyhow::anyhow!("{e}"))?;
-    print!("{}", eigen_render::render_text(&eigen_render::sessions_view(&sessions, now, all_projects)));
+    let sessions = eigenform_forest::list(&dir, scope, window, now).map_err(|e| anyhow::anyhow!("{e}"))?;
+    print!("{}", eigenform_render::render_text(&eigenform_render::sessions_view(&sessions, now, all_projects)));
     Ok(())
 }
 
@@ -502,16 +502,16 @@ fn surgery(action: SurgeryAction) -> Result<()> {
             let new = match edit {
                 Some(edit_path) => {
                     let text = read_text(&edit_path)?;
-                    eigen_surgery::edit_then_fork(&src, &at, &text)
+                    eigenform_surgery::edit_then_fork(&src, &at, &text)
                 }
-                None => eigen_surgery::fork_at(&src, &at),
+                None => eigenform_surgery::fork_at(&src, &at),
             };
             (path, new, diff.then_some(src))
         }
         SurgeryAction::Rewind { session, to } => {
             let path = resolve_session(&session)?;
             let src = load_session(&path)?;
-            let new = eigen_surgery::rewind_to(&src, &to);
+            let new = eigenform_surgery::rewind_to(&src, &to);
             (path, new, None)
         }
         SurgeryAction::Inject {
@@ -523,7 +523,7 @@ fn surgery(action: SurgeryAction) -> Result<()> {
             let path = resolve_session(&session)?;
             let src = load_session(&path)?;
             let text = read_text(&content)?;
-            let new = eigen_surgery::inject(&src, &at, as_role.into(), &text);
+            let new = eigenform_surgery::inject(&src, &at, as_role.into(), &text);
             (path, new, None)
         }
     };
@@ -532,10 +532,10 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     let projects_dir = session_path
         .parent()
         .context("source session has no parent directory")?;
-    let uuid = eigen_surgery::write(&new, projects_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let uuid = eigenform_surgery::write(&new, projects_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("{uuid}");
     if let Some(src) = diff_src {
-        eprint!("{}", eigen_render::render_text(&eigen_render::fork_diff_view(&src, &new)));
+        eprint!("{}", eigenform_render::render_text(&eigenform_render::fork_diff_view(&src, &new)));
     }
     Ok(())
 }
@@ -584,7 +584,7 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
         }
     }
 
-    let config = eigen_daemon::Config {
+    let config = eigenform_daemon::Config {
         program,
         args: Vec::new(),
         cwd: Some(cwd),
@@ -603,7 +603,7 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
     }
 
     let rt = tokio::runtime::Runtime::new().context("starting tokio runtime")?;
-    rt.block_on(eigen_daemon::serve(addr, config))
+    rt.block_on(eigenform_daemon::serve(addr, config))
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
@@ -611,14 +611,14 @@ fn sessions_diff(a: String, b: String, render: RenderFormat) -> Result<()> {
     require_text(render)?;
     let source = load_session(&resolve_session(&a)?)?;
     let fork = load_session(&resolve_session(&b)?)?;
-    print!("{}", eigen_render::render_text(&eigen_render::fork_diff_view(&source, &fork)));
+    print!("{}", eigenform_render::render_text(&eigenform_render::fork_diff_view(&source, &fork)));
     Ok(())
 }
 
-fn load_session(path: &PathBuf) -> Result<eigen_surgery::Session> {
+fn load_session(path: &PathBuf) -> Result<eigenform_surgery::Session> {
     let contents =
         std::fs::read_to_string(path).with_context(|| format!("reading session {path:?}"))?;
-    eigen_surgery::Session::parse_str(&contents).map_err(|e| anyhow::anyhow!("{e}"))
+    eigenform_surgery::Session::parse_str(&contents).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 fn read_text(path: &PathBuf) -> Result<String> {
@@ -632,11 +632,11 @@ fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
         None => env::current_dir().context("could not read current dir")?,
     };
 
-    let roots = eigen_skills::canonical_roots(&home, &cwd);
-    let found = eigen_skills::scan_many(&roots)
+    let roots = eigenform_skills::canonical_roots(&home, &cwd);
+    let found = eigenform_skills::scan_many(&roots)
         .with_context(|| format!("scanning skills under home={:?} cwd={:?}", home, cwd))?;
 
-    print!("{}", eigen_skills::render_tree(&found));
+    print!("{}", eigenform_skills::render_tree(&found));
     Ok(())
 }
 
@@ -644,16 +644,16 @@ fn skills_list(all_projects: bool) -> Result<()> {
     let home = home_dir().context("could not determine home directory")?;
 
     if !all_projects {
-        anyhow::bail!("eigen skills list currently requires --all-projects");
+        anyhow::bail!("eigenform skills list currently requires --all-projects");
     }
 
     let projects_dir = home.join(".claude/projects");
-    let projects = eigen_projects::enumerate_projects(&projects_dir)
+    let projects = eigenform_projects::enumerate_projects(&projects_dir)
         .with_context(|| format!("enumerating projects in {:?}", projects_dir))?;
 
     let cwds: Vec<PathBuf> = projects.iter().map(|p| p.cwd.clone()).collect();
-    let roots = eigen_skills::all_projects_roots(&home, &cwds);
-    let found = eigen_skills::scan_many(&roots)
+    let roots = eigenform_skills::all_projects_roots(&home, &cwds);
+    let found = eigenform_skills::scan_many(&roots)
         .with_context(|| "scanning skills across all projects")?;
 
     println!("# projects discovered: {}", projects.len());
@@ -661,7 +661,7 @@ fn skills_list(all_projects: bool) -> Result<()> {
         println!("#   {} -> {}", p.dir_name, p.cwd.display());
     }
     println!();
-    print!("{}", eigen_skills::render_tree(&found));
+    print!("{}", eigenform_skills::render_tree(&found));
     Ok(())
 }
 
@@ -673,7 +673,7 @@ fn memory_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     };
     let projects_dir = home.join(".claude/projects");
 
-    let project = eigen_projects::project_for_cwd(&projects_dir, &cwd)
+    let project = eigenform_projects::project_for_cwd(&projects_dir, &cwd)
         .with_context(|| format!("looking up project for cwd {:?}", cwd))?;
     let Some(project) = project else {
         println!("MEMORY");
@@ -684,23 +684,23 @@ fn memory_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     };
 
     let memory_dir = projects_dir.join(&project.dir_name).join("memory");
-    let entries = eigen_memory::scan_memory_dir(&memory_dir)
+    let entries = eigenform_memory::scan_memory_dir(&memory_dir)
         .with_context(|| format!("scanning memory in {:?}", memory_dir))?;
 
     println!("# project: {} -> {}", project.dir_name, project.cwd.display());
     println!("# memory dir: {}", memory_dir.display());
     println!();
-    print!("{}", eigen_memory::render_memory_tree(&entries));
+    print!("{}", eigenform_memory::render_memory_tree(&entries));
     Ok(())
 }
 
 fn memory_list(all_projects: bool) -> Result<()> {
     let home = home_dir().context("could not determine home directory")?;
     if !all_projects {
-        anyhow::bail!("eigen memory list currently requires --all-projects");
+        anyhow::bail!("eigenform memory list currently requires --all-projects");
     }
     let projects_dir = home.join(".claude/projects");
-    let projects = eigen_projects::enumerate_projects(&projects_dir)
+    let projects = eigenform_projects::enumerate_projects(&projects_dir)
         .with_context(|| format!("enumerating projects in {:?}", projects_dir))?;
 
     println!("# projects discovered: {}", projects.len());
@@ -708,13 +708,13 @@ fn memory_list(all_projects: bool) -> Result<()> {
 
     for p in &projects {
         let memory_dir = projects_dir.join(&p.dir_name).join("memory");
-        let entries = eigen_memory::scan_memory_dir(&memory_dir)
+        let entries = eigenform_memory::scan_memory_dir(&memory_dir)
             .with_context(|| format!("scanning {:?}", memory_dir))?;
 
         println!("================================================================");
         println!("project: {} -> {}", p.dir_name, p.cwd.display());
         println!("================================================================");
-        print!("{}", eigen_memory::render_memory_tree(&entries));
+        print!("{}", eigenform_memory::render_memory_tree(&entries));
         println!();
     }
     Ok(())

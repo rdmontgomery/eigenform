@@ -8,7 +8,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 /// Spawn the daemon with `program: "sh"` so a bare `/pty` runs a shell. Returns the
 /// `http://addr` base; callers derive the `ws://` url from it.

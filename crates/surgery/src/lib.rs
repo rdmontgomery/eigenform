@@ -1,4 +1,4 @@
-//! eigen-surgery: context surgery on Claude Code session JSONL files.
+//! eigenform-surgery: context surgery on Claude Code session JSONL files.
 //!
 //! Passthrough model: only user/assistant/system turns and `last-prompt` rows are
 //! modeled; every other row is retained as a verbatim line. See

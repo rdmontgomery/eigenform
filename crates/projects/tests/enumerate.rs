@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eigen_projects::enumerate_projects;
+use eigenform_projects::enumerate_projects;
 use tempfile::tempdir;
 
 fn write_jsonl_with_cwd(path: &std::path::Path, cwd: &str) {
@@ -62,7 +62,7 @@ fn project_for_cwd_finds_matching_project() {
     fs::create_dir(&pdir).unwrap();
     write_jsonl_with_cwd(&pdir.join("s.jsonl"), "/tmp/x/y");
 
-    let p = eigen_projects::project_for_cwd(projects_dir.path(), &PathBuf::from("/tmp/x/y"))
+    let p = eigenform_projects::project_for_cwd(projects_dir.path(), &PathBuf::from("/tmp/x/y"))
         .unwrap()
         .expect("expected to find the matching project");
     assert_eq!(p.dir_name, "-tmp-x-y");
@@ -71,7 +71,7 @@ fn project_for_cwd_finds_matching_project() {
 #[test]
 fn project_for_cwd_returns_none_when_no_match() {
     let projects_dir = tempdir().unwrap();
-    let p = eigen_projects::project_for_cwd(projects_dir.path(), &PathBuf::from("/no/such")).unwrap();
+    let p = eigenform_projects::project_for_cwd(projects_dir.path(), &PathBuf::from("/no/such")).unwrap();
     assert!(p.is_none());
 }
 

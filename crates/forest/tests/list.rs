@@ -2,7 +2,7 @@
 //! sort recent-first.
 
 use chrono::{DateTime, Duration, Utc};
-use eigen_forest::{list, Scope};
+use eigenform_forest::{list, Scope};
 
 fn ts(s: &str) -> &str {
     s

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eigen_projects::{immediate_subdirs, merge_candidates, unique_cwds, Candidate};
+use eigenform_projects::{immediate_subdirs, merge_candidates, unique_cwds, Candidate};
 use tempfile::tempdir;
 
 #[test]

@@ -1,4 +1,4 @@
-//! eigen-projects: enumerate the Claude Code project directories under
+//! eigenform-projects: enumerate the Claude Code project directories under
 //! `~/.claude/projects/`, recovering each project's original cwd from
 //! its session JSONLs.
 
@@ -98,8 +98,8 @@ pub fn immediate_subdirs(root: &Path) -> Result<Vec<PathBuf>> {
 /// Deduplicate an ordered stream of `PathBuf` cwds, preserving first-seen order.
 ///
 /// Both `candidates_route` (daemon) and `candidates_list` (CLI) extract cwds from
-/// session lists before calling this. Accepting a plain iterator keeps eigen-projects
-/// free of a dependency on eigen-forest's `Session` type.
+/// session lists before calling this. Accepting a plain iterator keeps eigenform-projects
+/// free of a dependency on eigenform-forest's `Session` type.
 pub fn unique_cwds<I: IntoIterator<Item = PathBuf>>(cwds: I) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     cwds.into_iter().filter(|c| seen.insert(c.clone())).collect()

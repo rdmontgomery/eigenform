@@ -363,19 +363,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "eigen-cli"
+name = "eigenform-cli"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "eigen-daemon",
- "eigen-forest",
- "eigen-memory",
- "eigen-projects",
- "eigen-render",
- "eigen-skills",
- "eigen-surgery",
+ "eigenform-daemon",
+ "eigenform-forest",
+ "eigenform-memory",
+ "eigenform-projects",
+ "eigenform-render",
+ "eigenform-skills",
+ "eigenform-surgery",
  "serde_json",
  "tempfile",
  "tokio",
@@ -383,16 +383,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-daemon"
+name = "eigenform-daemon"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",
  "chrono",
- "eigen-forest",
- "eigen-projects",
- "eigen-render",
- "eigen-surgery",
+ "eigenform-forest",
+ "eigenform-projects",
+ "eigenform-render",
+ "eigenform-surgery",
  "futures-util",
  "notify",
  "portable-pty",
@@ -408,18 +408,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-forest"
+name = "eigenform-forest"
 version = "0.0.1"
 dependencies = [
  "chrono",
- "eigen-projects",
+ "eigenform-projects",
  "serde_json",
  "tempfile",
  "thiserror",
 ]
 
 [[package]]
-name = "eigen-memory"
+name = "eigenform-memory"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -429,7 +429,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-projects"
+name = "eigenform-projects"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -439,17 +439,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-render"
+name = "eigenform-render"
 version = "0.0.1"
 dependencies = [
  "chrono",
- "eigen-forest",
- "eigen-surgery",
+ "eigenform-forest",
+ "eigenform-surgery",
  "serde_json",
 ]
 
 [[package]]
-name = "eigen-skills"
+name = "eigenform-skills"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -459,7 +459,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eigen-surgery"
+name = "eigenform-surgery"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -2470,9 +2470,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.8.2"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
 
 [[package]]
 name = "zerotrie"

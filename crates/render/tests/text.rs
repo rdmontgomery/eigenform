@@ -1,6 +1,6 @@
 //! The text projection: a View tree rendered with box-drawing connectors.
 
-use eigen_render::{render_text, Node, View};
+use eigenform_render::{render_text, Node, View};
 
 #[test]
 fn render_text_draws_tree_connectors_and_glyphs() {

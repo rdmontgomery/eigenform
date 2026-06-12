@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use eigen_skills::{canonical_roots, Layer};
+use eigenform_skills::{canonical_roots, Layer};
 use tempfile::tempdir;
 
 #[test]

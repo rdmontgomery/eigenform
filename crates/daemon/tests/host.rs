@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use eigen_daemon::host::{KillError, Outbound, SessionHost};
+use eigenform_daemon::host::{KillError, Outbound, SessionHost};
 
 /// Drain `Binary` frames from `rx` until the accumulated bytes contain `needle`,
 /// or the timeout fires (which fails the test). `Text` frames are ignored — only

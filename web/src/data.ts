@@ -98,7 +98,7 @@ export function loadSession(): Session {
 }
 
 // ── LIVE: a real session's transcript as structured exchanges ──────────────
-// GET /api/session/:uuid/json (eigen_render::session_json). Content is ground truth;
+// GET /api/session/:uuid/json (eigenform_render::session_json). Content is ground truth;
 // per-turn token/cost fields stay 0 (the cache model is still stubbed). Returns null
 // if the session can't be loaded, so the caller can leave the current view in place.
 export async function fetchSession(uuid: string): Promise<Session | null> {

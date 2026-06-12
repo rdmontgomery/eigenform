@@ -1,7 +1,7 @@
 /**
  * shell.ts — Rail roster + top bar (tabs, global controls) + terminal host.
  *
- * Layout (eigen warm-ink design, Claude Design handoff 2026-06-12):
+ * Layout (eigenform warm-ink design, Claude Design handoff 2026-06-12):
  *   rail (brand · search · grouped sessions · footer)
  *   │ topbar (tabs · theme toggle · global drawer toggle)
  *   │ term-area (header breadcrumb · term-host with one Terminal per tab)
@@ -20,7 +20,7 @@
  * THEME: dark (default) / light, toggled from the top bar, persisted
  * (LS_THEME). The terminal pane stays dark ink in both — see .term-scope.
  *
- * LOCALSTORAGE SCHEMA (key "eigen:term:tabs:v1"):
+ * LOCALSTORAGE SCHEMA (key "eigenform:term:tabs:v1"):
  *   JSON array of TabDescriptor. Versioned key — bump suffix if schema changes.
  *
  * POLL: rail polls GET /api/pty + GET /api/forest every 3s to update badges.
@@ -55,11 +55,11 @@ export type { TabDescriptor, TabReconcileAction };
 // Internal constants
 // ---------------------------------------------------------------------------
 
-const LS_KEY = "eigen:term:tabs:v1";
-const LS_OVERRIDES = "eigen:term:overrides:v1";
-const LS_THEME = "eigen:term:theme:v1";
-const LS_DRAWER = "eigen:term:drawer:v1";
-const LS_RAIL = "eigen:term:rail:v1";
+const LS_KEY = "eigenform:term:tabs:v1";
+const LS_OVERRIDES = "eigenform:term:overrides:v1";
+const LS_THEME = "eigenform:term:theme:v1";
+const LS_DRAWER = "eigenform:term:drawer:v1";
+const LS_RAIL = "eigenform:term:rail:v1";
 
 const KNOWN_STATES = new Set(["working", "waiting", "idle", "exited"]);
 
@@ -133,7 +133,7 @@ export function mountShell(appEl: HTMLElement): void {
   const brandWord = el("span", "brand-word");
   brandWord.append(icon("mark", 20, 2.2));
   const brandName = el("span", "brand-name");
-  brandName.textContent = "eigen";
+  brandName.textContent = "eigenform";
   brandWord.append(brandName);
   const newBtn = el("button", "icon-btn icon-btn--boxed");
   newBtn.title = "New session";

@@ -22,7 +22,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite::Message;
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 /// Spawn the daemon with `program: "sh"` and a configured `workspace_root`.
 /// Returns `(base_url, workspace_root TempDir)`.

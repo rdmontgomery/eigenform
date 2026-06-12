@@ -4,7 +4,7 @@
 //! (woland), not written here — so the new leaf is always a completed turn, the only
 //! shape `claude --resume` accepts (spike 03).
 
-use eigen_surgery::{fork_before, Session, SurgeryError};
+use eigenform_surgery::{fork_before, Session, SurgeryError};
 
 const OLD: &str = "sess-old-aaaa";
 const U1: &str = "turn-u1";

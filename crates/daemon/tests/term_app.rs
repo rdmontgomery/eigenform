@@ -4,7 +4,7 @@
 #[path = "helpers/mod.rs"]
 mod helpers;
 
-use eigen_daemon::{app, Config};
+use eigenform_daemon::{app, Config};
 
 /// Spin up the daemon with both web_dir and term_dir, return the base URL.
 async fn start(cfg: Config) -> String {

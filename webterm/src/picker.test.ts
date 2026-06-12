@@ -39,7 +39,7 @@ function c(path: string, recent = false): Candidate {
 
 test("highlighted candidate → use its path, create=false", () => {
   const result = resolvePick(
-    "eigen",                           // typed
+    "eigenform",                           // typed
     c("/home/user/projects/eigen"),    // highlighted
     [c("/home/user/projects/eigen"), c("/home/user/projects/foo", false)],
   );

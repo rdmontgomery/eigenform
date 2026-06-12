@@ -2,7 +2,7 @@
 //! as the new resume head. Validated end-to-end by spike 03 Run 2 (a fully synthetic
 //! turn loaded and was recalled).
 
-use eigen_surgery::{inject, Role, Session, SurgeryError};
+use eigenform_surgery::{inject, Role, Session, SurgeryError};
 
 const OLD: &str = "sess-old-aaaa";
 const U1: &str = "turn-u1";

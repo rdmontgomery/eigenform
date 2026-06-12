@@ -1,7 +1,7 @@
 //! write: persist a sealed session as <session_id>.jsonl into a projects dir, never
 //! overwriting an existing file. Returns the new session id.
 
-use eigen_surgery::{fork_at, write, Session, WriteError};
+use eigenform_surgery::{fork_at, write, Session, WriteError};
 use tempfile::tempdir;
 
 fn forked() -> Session {

@@ -4,7 +4,7 @@
  * Maps the wire Tool {kind, arg, input, output} into a typed, glanceable view
  * for the drawer: verb + tinted icon, a one-line headline, an optional
  * accessory (diff stat / match count), and a structured body — no raw JSON
- * for the common types (eigen design handoff, tool-call pass 2026-06-12).
+ * for the common types (eigenform design handoff, tool-call pass 2026-06-12).
  *
  * Honesty rule: everything here is DERIVED from fields that actually exist in
  * session_json. The prototype's status ✓/✗ and duration columns are omitted —

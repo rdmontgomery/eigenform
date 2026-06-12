@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eigen_skills::{all_projects_roots, Layer};
+use eigenform_skills::{all_projects_roots, Layer};
 use tempfile::tempdir;
 
 #[test]

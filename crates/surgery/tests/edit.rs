@@ -3,7 +3,7 @@
 //! resume head. NB: this materializes the edited turn for static inspection / the diff
 //! view; for a *resumable* branch use fork_before (see fork_before.rs / spike 03).
 
-use eigen_surgery::{edit_then_fork, Session, SurgeryError};
+use eigenform_surgery::{edit_then_fork, Session, SurgeryError};
 
 const OLD: &str = "sess-old-aaaa";
 const U1: &str = "turn-u1";
@@ -71,7 +71,7 @@ fn edit_the_first_turn_preserves_null_parent() {
 
 #[test]
 fn edit_derives_the_role_from_the_target_turn() {
-    use eigen_surgery::Role;
+    use eigenform_surgery::Role;
     // A1 is an assistant turn; editing it must keep an assistant content block.
     let edited = edit_then_fork(&two_turns(), A1, "as if I'd said this").unwrap();
     let last = *edited.turns().last().unwrap();

@@ -1,4 +1,4 @@
-//! eigen-memory: scan and reason about Claude Code auto-memory directories
+//! eigenform-memory: scan and reason about Claude Code auto-memory directories
 //! (`~/.claude/projects/<escaped-cwd>/memory/`).
 
 use std::collections::BTreeMap;

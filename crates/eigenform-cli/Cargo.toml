@@ -1,23 +1,23 @@
 [package]
-name = "eigen-cli"
+name = "eigenform-cli"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "eigen"
+name = "eigenform"
 path = "src/main.rs"
 
 [dependencies]
 anyhow         = { workspace = true }
 clap           = { workspace = true }
-eigen-skills   = { path = "../skills" }
-eigen-projects = { path = "../projects" }
-eigen-memory   = { path = "../memory" }
-eigen-surgery  = { path = "../surgery" }
-eigen-render   = { path = "../render" }
-eigen-forest   = { path = "../forest" }
-eigen-daemon   = { path = "../daemon" }
+eigenform-skills   = { path = "../skills" }
+eigenform-projects = { path = "../projects" }
+eigenform-memory   = { path = "../memory" }
+eigenform-surgery  = { path = "../surgery" }
+eigenform-render   = { path = "../render" }
+eigenform-forest   = { path = "../forest" }
+eigenform-daemon   = { path = "../daemon" }
 chrono         = { workspace = true }
 tokio          = { workspace = true }
 ureq           = { workspace = true }

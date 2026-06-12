@@ -1,4 +1,4 @@
-//! eigen-daemon: the woland backend — pty manager + http/ws server.
+//! eigenform-daemon: the woland backend — pty manager + http/ws server.
 //!
 //! Slice 1: the pty bridge. Spawn an arbitrary command in a pty and stream its stdio.
 //! The bridge drives ANY command; real `claude --resume` is launched only by the user,
@@ -38,7 +38,7 @@ pub struct Config {
     /// `~/.claude/sessions` (or a test dir): `<pid>.json` files for liveness. None = no
     /// live Forest.
     pub sessions_dir: Option<PathBuf>,
-    /// `~/.eigen/state`: persisted per-session metrics (the activity spark). None = no spark.
+    /// `~/.eigenform/state`: persisted per-session metrics (the activity spark). None = no spark.
     pub state_dir: Option<PathBuf>,
     /// Code root for the new-session launcher (`~/projects` or similar).
     /// `immediate_subdirs` of this path become `recent: false` candidates.
@@ -147,15 +147,15 @@ async fn session_json_route(
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
-    let Ok(path) = eigen_forest::resolve(dir, &uuid) else {
+    let Ok(path) = eigenform_forest::resolve(dir, &uuid) else {
         return (StatusCode::NOT_FOUND, "no such session").into_response();
     };
     // Render once per (file, mtime, len); repeat views and forest-browsing skip the
     // multi-MB read+parse+serialize that dominates the manuscript load latency.
     match SESSION_CACHE.get_or_render(&path, || {
         let contents = std::fs::read_to_string(&path).unwrap_or_default();
-        let session = eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
-        eigen_render::session_json(&session)
+        let session = eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+        eigenform_render::session_json(&session)
     }) {
         Ok(json) => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -168,7 +168,7 @@ async fn session_json_route(
 
 /// Resolve, read, parse, and render a session's transcript fragment.
 fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'static str)> {
-    Ok(eigen_render::session_html(&load_session(cfg, uuid)?))
+    Ok(eigenform_render::session_html(&load_session(cfg, uuid)?))
 }
 
 /// `POST /api/session/:uuid/fork` — edit-then-fork at a turn. Body `{turn, text}`:
@@ -205,30 +205,30 @@ fn fork_session(
         .as_ref()
         .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
     let src_path =
-        eigen_forest::resolve(dir, src_uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
+        eigenform_forest::resolve(dir, src_uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
     let contents = std::fs::read_to_string(&src_path)
         .map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
-    let session = eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
-    let forked = eigen_surgery::fork_before(&session, turn)
+    let session = eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+    let forked = eigenform_surgery::fork_before(&session, turn)
         .map_err(|_| (StatusCode::UNPROCESSABLE_ENTITY, "cannot fork before that turn"))?;
     let project_dir = src_path
         .parent()
         .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "session path has no parent"))?;
-    eigen_surgery::write(&forked, project_dir)
+    eigenform_surgery::write(&forked, project_dir)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not write fork"))
 }
 
 /// Resolve, read, and parse a session's JSONL into a [`Session`].
-fn load_session(cfg: &Config, uuid: &str) -> Result<eigen_surgery::Session, (StatusCode, &'static str)> {
+fn load_session(cfg: &Config, uuid: &str) -> Result<eigenform_surgery::Session, (StatusCode, &'static str)> {
     let dir = cfg
         .projects_dir
         .as_ref()
         .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
-    let path = eigen_forest::resolve(dir, uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
+    let path = eigenform_forest::resolve(dir, uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
     let contents =
         std::fs::read_to_string(&path).map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
     // parse_str is currently infallible (ParseError is uninhabited).
-    Ok(eigen_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {}))
+    Ok(eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {}))
 }
 
 /// Cache of rendered session JSON, keyed by file path and invalidated by the file's
@@ -271,7 +271,7 @@ async fn sessions_route(State(state): State<AppState>) -> Response {
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
-    match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
         Ok(sessions) => {
             let items: Vec<_> = sessions
                 .iter()
@@ -297,7 +297,7 @@ async fn projects_route(State(state): State<AppState>) -> Response {
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
-    match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
         Ok(sessions) => {
             let mut seen = std::collections::HashSet::new();
             let cwds: Vec<String> = sessions
@@ -312,7 +312,7 @@ async fn projects_route(State(state): State<AppState>) -> Response {
 }
 
 /// `GET /api/forest` — the corroborated live-Forest snapshot (liveness × JSONL state ×
-/// activity spark). Mirrors what `eigen forest --live` prints.
+/// activity spark). Mirrors what `eigenform forest --live` prints.
 async fn forest_route(State(state): State<AppState>) -> Response {
     (
         [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -334,7 +334,7 @@ fn forest_json(cfg: &Config) -> String {
         return "[]".to_string();
     };
     let rows: Vec<serde_json::Value> =
-        eigen_forest::live_forest(projects, sessions, state, chrono::Utc::now())
+        eigenform_forest::live_forest(projects, sessions, state, chrono::Utc::now())
             .into_iter()
             .map(|s| {
                 serde_json::json!({
@@ -421,7 +421,7 @@ async fn recent_route(State(state): State<AppState>) -> Response {
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
-    match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
         Ok(mut sessions) => match sessions.drain(..).next() {
             Some(s) => s.uuid.into_response(),
             None => (StatusCode::NOT_FOUND, "no sessions").into_response(),
@@ -439,11 +439,11 @@ async fn candidates_route(State(state): State<AppState>) -> Response {
     let cfg = &state.config;
 
     // Recents: deduplicated cwds from recent sessions, in recency order.
-    // Dedup delegated to eigen_projects::unique_cwds (shared with CLI mirror).
+    // Dedup delegated to eigenform_projects::unique_cwds (shared with CLI mirror).
     let recents: Vec<PathBuf> = if let Some(dir) = &cfg.projects_dir {
-        match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
+        match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
             Ok(sessions) => {
-                eigen_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
+                eigenform_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
             }
             Err(_) => vec![],
         }
@@ -453,7 +453,7 @@ async fn candidates_route(State(state): State<AppState>) -> Response {
 
     // Subdirs: immediate children of the workspace root. Missing root → empty (not a 500).
     let subdirs: Vec<PathBuf> = if let Some(root) = &cfg.workspace_root {
-        eigen_projects::immediate_subdirs(root).unwrap_or_default()
+        eigenform_projects::immediate_subdirs(root).unwrap_or_default()
     } else {
         vec![]
     };
@@ -463,7 +463,7 @@ async fn candidates_route(State(state): State<AppState>) -> Response {
         return axum::Json(serde_json::json!([])).into_response();
     }
 
-    let candidates = eigen_projects::merge_candidates(&recents, &subdirs);
+    let candidates = eigenform_projects::merge_candidates(&recents, &subdirs);
     let items: Vec<serde_json::Value> = candidates
         .iter()
         .map(|c| {
@@ -486,7 +486,7 @@ async fn watch_route(
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
     };
-    let path = match eigen_forest::resolve(dir, &uuid) {
+    let path = match eigenform_forest::resolve(dir, &uuid) {
         Ok(p) => p,
         Err(_) => return (StatusCode::NOT_FOUND, "no such session").into_response(),
     };
@@ -506,7 +506,7 @@ async fn dev_index(State(state): State<AppState>) -> Response {
     };
     let injected = html.replacen(
         "<head>",
-        "<head>\n    <meta name=\"eigen-dev\" content=\"1\" />",
+        "<head>\n    <meta name=\"eigenform-dev\" content=\"1\" />",
         1,
     );
     Html(injected).into_response()
@@ -784,7 +784,7 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
         };
     }
     if let (Some(uuid), Some(dir)) = (&query.session, &cfg.projects_dir) {
-        if let Ok(stub) = eigen_forest::resolve_stub(dir, uuid) {
+        if let Ok(stub) = eigenform_forest::resolve_stub(dir, uuid) {
             return PtyCommand {
                 program: "claude".to_string(),
                 args: vec!["--resume".to_string(), stub.uuid],
@@ -1265,7 +1265,7 @@ mod tests {
         assert!(!body.contains("second prompt"), "the edited turn is dropped (delivered live)");
         assert!(!body.contains("reply two"), "the downstream reply is dropped");
         // resumable: the new resume head is the completed-turn system row, not a user turn
-        let forked_session = eigen_surgery::Session::parse_str(&body).unwrap_or_else(|e| match e {});
+        let forked_session = eigenform_surgery::Session::parse_str(&body).unwrap_or_else(|e| match e {});
         assert_eq!(forked_session.resume_leaf().as_deref(), Some("s1"));
 
         // copy-on-fork: the source is byte-for-byte untouched

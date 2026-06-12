@@ -1,7 +1,7 @@
 /**
  * turns.ts — Pure grouping logic for the transcript drawer.
  *
- * Wire type `Exchange` mirrors `eigen_render::session_json` output exactly.
+ * Wire type `Exchange` mirrors `eigenform_render::session_json` output exactly.
  * `groupTurns` collapses consecutive non-user exchanges between user turns
  * into a single `TurnGroup` (design §6: "a multi-message assistant turn
  * (tool-use rounds before the next user turn) collapses as one group").

@@ -1,8 +1,8 @@
 //! fork_diff_view: side-by-side diff of a source session and a fork, aligned by turn
 //! uuid (fork_at preserves uuids). Source left, fork right; summary + leaf move.
 
-use eigen_render::{fork_diff_view, render_text};
-use eigen_surgery::{edit_then_fork, fork_at, inject, Role, Session};
+use eigenform_render::{fork_diff_view, render_text};
+use eigenform_surgery::{edit_then_fork, fork_at, inject, Role, Session};
 
 const SID: &str = "abcd1234-0000-4000-8000-000000000000";
 const U1: &str = "u1";

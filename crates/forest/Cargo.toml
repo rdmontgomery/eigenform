@@ -1,5 +1,5 @@
 [package]
-name = "eigen-forest"
+name = "eigenform-forest"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ rust-version.workspace = true
 serde_json     = { workspace = true }
 thiserror      = { workspace = true }
 chrono         = { workspace = true }
-eigen-projects = { path = "../projects" }
+eigenform-projects = { path = "../projects" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
