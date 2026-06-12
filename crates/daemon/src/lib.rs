@@ -648,6 +648,9 @@ async fn pty_ws(
             if !normalized.starts_with(&canon_root) {
                 return Err("create outside workspace root");
             }
+            if normalized == canon_root {
+                return Err("create target is the workspace root");
+            }
             Ok(normalized)
         })();
 
@@ -815,7 +818,7 @@ fn escaped_cwd(cwd: &str) -> String {
 ///
 /// The input is treated as an absolute path. If it is relative, it is used as-is
 /// (the containment check will likely fail since the root is always absolute).
-fn normalize_path(path: &Path) -> PathBuf {
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in path.components() {
         match comp {

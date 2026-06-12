@@ -146,3 +146,22 @@ test("whitespace-only typed with no highlight → null", () => {
   const result = resolvePick("   ", null, [c("/root/a")]);
   assert.equal(result, null);
 });
+
+// ---------------------------------------------------------------------------
+// relative paths (contains "/" but doesn't start with "/") → unsupported
+// ---------------------------------------------------------------------------
+
+test("relative path with slash → null (unsupported)", () => {
+  const result = resolvePick("foo/bar", null, [c("/root/a"), c("/root/b", false)]);
+  assert.equal(result, null);
+});
+
+test("relative path with leading dot-slash → null (unsupported)", () => {
+  const result = resolvePick("./subdir", null, [c("/root/a")]);
+  assert.equal(result, null);
+});
+
+test("relative path with multiple segments → null (unsupported)", () => {
+  const result = resolvePick("parent/child/leaf", null, [c("/root/a", false)]);
+  assert.equal(result, null);
+});

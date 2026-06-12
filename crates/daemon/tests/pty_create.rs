@@ -259,3 +259,46 @@ async fn no_create_flag_missing_dir_stays_missing() {
         "directory must NOT be created when create flag is absent"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Case (d): ?new=<workspace_root>&create=1 → rejected (root itself is the target)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_flag_with_workspace_root_as_target_is_rejected() {
+    let (base, workspace) = start_with_workspace().await;
+
+    // new= is the workspace root itself — within containment, but equal to root.
+    let root_str = workspace.path().to_str().unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
+        &base,
+        &format!("new={root_str}&create=1"),
+    ))
+    .await
+    .expect("ws upgrade ok");
+
+    // Expect a POLICY close — not a pty hello.
+    let mut got_policy_close = false;
+    for _ in 0..20 {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+            Ok(Some(Ok(Message::Close(Some(frame))))) => {
+                got_policy_close = frame.reason.contains("workspace root");
+                break;
+            }
+            Ok(Some(Ok(Message::Close(None)))) | Ok(None) => {
+                got_policy_close = true;
+                break;
+            }
+            Ok(Some(Ok(Message::Text(_)))) => {
+                // pty hello received — spawn happened. Test fails.
+                break;
+            }
+            Ok(Some(Ok(_))) => continue,
+            _ => break,
+        }
+    }
+    assert!(
+        got_policy_close,
+        "create with new=<workspace_root> must close the socket with a POLICY reason"
+    );
+}

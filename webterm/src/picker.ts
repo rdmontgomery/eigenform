@@ -82,7 +82,13 @@ export function resolvePick(
     return { path: text, create: !known };
   }
 
-  // 3. Bare name (no "/" anywhere). Resolve against workspace_root proxy.
+  // 3. Relative path: contains "/" but doesn't start with "/" — unsupported.
+  //    Relative paths unsupported — absolute path or plain name.
+  if (text.includes("/")) {
+    return null;
+  }
+
+  // 4. Bare name (no "/" anywhere). Resolve against workspace_root proxy.
   //    Proxy = parent of the first non-recent candidate.
   const firstNonRecent = candidates.find((c) => !c.recent);
   if (!firstNonRecent) {
