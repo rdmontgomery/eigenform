@@ -26,6 +26,8 @@ import {
   type TabReconcileAction,
 } from "./shell-helpers.ts";
 import { mountPicker } from "./picker.ts";
+import { mountDrawer } from "./drawer.ts";
+import type { DrawerHandle } from "./drawer.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -59,6 +61,10 @@ interface TabEntry {
   state: string;
   /** true when the pty exited or an attach-miss closed the socket. */
   dead: boolean;
+  /** true when the transcript drawer is open for this tab. */
+  drawerOpen: boolean;
+  /** Live DrawerHandle — non-null iff drawerOpen is true. */
+  drawerHandle: DrawerHandle | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +126,11 @@ export function mountShell(appEl: HTMLElement): void {
     if (idx < 0) return;
     const t = tabs[idx]!;
 
+    // Tear down the drawer if open — releases EventSource before DOM removal.
+    t.drawerHandle?.close();
+    t.drawerHandle = null;
+    t.drawerOpen = false;
+
     // Detach socket — pty stays alive in the daemon.
     t.ptyHandle?.dispose();
     t.ptyHandle = null;
@@ -158,7 +169,28 @@ export function mountShell(appEl: HTMLElement): void {
     void refreshRoster();
   }
 
-  // Phase 4 note: full-rebuilds the strip on every call — fine for stateless buttons; switch to patch-in-place if stateful controls like the drawer toggle are added.
+  /** Toggle the transcript drawer for `entry`. No-op if entry has no uuid. */
+  function toggleDrawer(entry: TabEntry) {
+    const uuid = entry.descriptor.uuid ?? null;
+    if (!uuid) return;
+
+    if (entry.drawerOpen) {
+      // Close
+      entry.drawerHandle?.close();
+      entry.drawerHandle = null;
+      entry.drawerOpen = false;
+    } else {
+      // Open — mount on the termHost so it overlays the terminal absolutely
+      entry.drawerHandle = mountDrawer(termHost, uuid);
+      entry.drawerOpen = true;
+    }
+    renderTabStrip();
+  }
+
+  // The tab strip is fully rebuilt on every renderTabStrip call. The drawer toggle
+  // is stateful (open/closed), but its appearance is derived from TabEntry.drawerOpen —
+  // so each rebuild reads the model and produces the correct button state without
+  // any stale-DOM risk. This is the correct pattern for this full-rebuild architecture.
   function renderTabStrip() {
     tabStrip.innerHTML = "";
     for (const t of tabs) {
@@ -172,6 +204,23 @@ export function mountShell(appEl: HTMLElement): void {
 
       const labelEl = el("span", "tab-label");
       labelEl.textContent = t.descriptor.label;
+
+      // Drawer toggle — enabled only when the tab has a session uuid.
+      const uuid = t.descriptor.uuid ?? null;
+      const drawerBtn = el("button", "tab-drawer");
+      drawerBtn.textContent = "≡";
+      if (uuid) {
+        drawerBtn.title = t.drawerOpen ? "Close transcript drawer" : "Open transcript drawer";
+        if (t.drawerOpen) drawerBtn.classList.add("tab-drawer--open");
+        drawerBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          toggleDrawer(t);
+        });
+      } else {
+        drawerBtn.title = "Transcript drawer — available once a session uuid is assigned";
+        drawerBtn.disabled = true;
+        drawerBtn.classList.add("tab-drawer--disabled");
+      }
 
       const kill = el("button", "tab-kill");
       kill.title = "Kill pty (process terminated)";
@@ -189,7 +238,7 @@ export function mountShell(appEl: HTMLElement): void {
         closeTab(t.id);
       });
 
-      tab.append(badge, labelEl, kill, close);
+      tab.append(badge, labelEl, drawerBtn, kill, close);
       tab.addEventListener("click", () => activateTab(t.id));
       tabStrip.append(tab);
     }
@@ -229,6 +278,8 @@ export function mountShell(appEl: HTMLElement): void {
       ptyHandle: null,
       state: "idle",
       dead: false,
+      drawerOpen: false,
+      drawerHandle: null,
     };
 
     const ptyHandle = connectPty(query, handle.term, {
