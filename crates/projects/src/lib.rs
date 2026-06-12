@@ -95,6 +95,16 @@ pub fn immediate_subdirs(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Deduplicate an ordered stream of `PathBuf` cwds, preserving first-seen order.
+///
+/// Both `candidates_route` (daemon) and `candidates_list` (CLI) extract cwds from
+/// session lists before calling this. Accepting a plain iterator keeps eigen-projects
+/// free of a dependency on eigen-forest's `Session` type.
+pub fn unique_cwds<I: IntoIterator<Item = PathBuf>>(cwds: I) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    cwds.into_iter().filter(|c| seen.insert(c.clone())).collect()
+}
+
 /// Merge recent session cwds with the immediate subdirs of the code root into
 /// one candidate list: recents first (in order, de-duplicated), then any
 /// subdir not already present as a recent, each tagged `recent: false`.

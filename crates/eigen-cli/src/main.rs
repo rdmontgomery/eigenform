@@ -298,17 +298,12 @@ fn ptys_list(port: u16) -> Result<()> {
 /// Computed entirely from disk — no daemon required.
 fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
     // Recents: de-duplicated cwds from recent sessions, in recency order.
-    // Mirrors the daemon's candidates_route logic in crates/daemon/src/lib.rs.
+    // Dedup delegated to eigen_projects::unique_cwds (shared with daemon's candidates_route).
     let recents: Vec<PathBuf> = {
         let dir = projects_dir()?;
         match eigen_forest::list(&dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
             Ok(sessions) => {
-                let mut seen = std::collections::HashSet::new();
-                sessions
-                    .into_iter()
-                    .map(|s| s.cwd)
-                    .filter(|c| seen.insert(c.clone()))
-                    .collect()
+                eigen_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
             }
             Err(_) => vec![],
         }

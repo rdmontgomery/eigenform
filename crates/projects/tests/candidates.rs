@@ -1,8 +1,41 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eigen_projects::{immediate_subdirs, merge_candidates, Candidate};
+use eigen_projects::{immediate_subdirs, merge_candidates, unique_cwds, Candidate};
 use tempfile::tempdir;
+
+#[test]
+fn unique_cwds_deduplicates_preserving_first_seen_order() {
+    let input = vec![
+        PathBuf::from("/a"),
+        PathBuf::from("/b"),
+        PathBuf::from("/a"), // duplicate — must be dropped
+        PathBuf::from("/c"),
+        PathBuf::from("/b"), // duplicate — must be dropped
+    ];
+    let result = unique_cwds(input);
+    assert_eq!(
+        result,
+        vec![
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            PathBuf::from("/c"),
+        ]
+    );
+}
+
+#[test]
+fn unique_cwds_empty_input_returns_empty() {
+    let result = unique_cwds(Vec::<PathBuf>::new());
+    assert_eq!(result, Vec::<PathBuf>::new());
+}
+
+#[test]
+fn unique_cwds_no_duplicates_returns_same_order() {
+    let input = vec![PathBuf::from("/z"), PathBuf::from("/a"), PathBuf::from("/m")];
+    let result = unique_cwds(input.clone());
+    assert_eq!(result, input);
+}
 
 #[test]
 fn immediate_subdirs_returns_only_dirs_sorted_by_name() {

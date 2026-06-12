@@ -439,15 +439,11 @@ async fn candidates_route(State(state): State<AppState>) -> Response {
     let cfg = &state.config;
 
     // Recents: deduplicated cwds from recent sessions, in recency order.
+    // Dedup delegated to eigen_projects::unique_cwds (shared with CLI mirror).
     let recents: Vec<PathBuf> = if let Some(dir) = &cfg.projects_dir {
         match eigen_forest::list(dir, eigen_forest::Scope::AllProjects, None, chrono::Utc::now()) {
             Ok(sessions) => {
-                let mut seen = std::collections::HashSet::new();
-                sessions
-                    .into_iter()
-                    .map(|s| s.cwd)
-                    .filter(|c| seen.insert(c.clone()))
-                    .collect()
+                eigen_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
             }
             Err(_) => vec![],
         }
