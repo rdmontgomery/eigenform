@@ -286,13 +286,20 @@ export function mountShell(appEl: HTMLElement): void {
         // the rail shows it immediately (copy-on-fork — source tab stays open).
         drawerCurrent = {
           uuid,
-          handle: mountDrawer(termHost, uuid, (newUuid) => {
-            openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
-              uuid: newUuid,
-              label: "fork",
-            });
-            void refreshRoster();
-          }),
+          handle: mountDrawer(
+            termHost,
+            uuid,
+            (newUuid) => {
+              openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
+                uuid: newUuid,
+                label: "fork",
+              });
+              void refreshRoster();
+            },
+            // interrupt routes ^C to the ACTIVE tab's socket — the drawer is
+            // only ever mounted for the active tab's uuid (syncDrawer invariant).
+            { interrupt: () => activeTab()?.ptyHandle?.sendInput("\x03") },
+          ),
         };
       }
     } else {

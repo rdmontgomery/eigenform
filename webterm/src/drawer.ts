@@ -1,67 +1,56 @@
 /**
- * drawer.ts — Transcript drawer: grouped turns, SSE live updates, auto-scroll.
+ * drawer.ts — Transcript drawer: turn cards, SSE live updates, auto-scroll.
  *
  * The drawer is an absolute overlay panel anchored to the right side of .term-host.
- * It slides in/out via CSS transform — the pty is NOT resized when the drawer opens
- * (the terminal stays primary; the drawer overlays it).
+ * The pty is NOT resized when the drawer opens (the terminal stays primary; the
+ * drawer overlays it). It is mounted/unmounted by the shell's GLOBAL top-right
+ * toggle and follows the active tab.
+ *
+ * Card model (eigen design, Claude Design handoff 2026-06-12):
+ *   - Each turn group renders as a user card followed by an assistant card.
+ *   - USER turns stay full — they are the navigation spine of the session.
+ *   - ASSISTANT turns collapse to a single muted ellipsis line by default;
+ *     click the text or the chevron to expand. Tool drill-down rows and system
+ *     timing live inside the expanded assistant card; a muted "· N tools" count
+ *     in the card head keeps the signal visible while collapsed.
+ *   - The leaf group renders as a pulsing "awaiting input…" row.
+ *
+ * Quick actions (header row):
+ *   - interrupt: sends ^C to the active tab's pty via a shell-injected callback
+ *     (the drawer knows nothing about sockets).
+ *   - copy: copies a plain-text rendering of the transcript to the clipboard.
  *
  * Data flow:
  *   1. On open: fetchSession(uuid) → initial render
- *   2. EventSource /api/watch/:uuid → re-fetch + re-render on unnamed message events
- *      (daemon emits unnamed SSE events; onmessage handles them).
- *      A named "change" listener is also registered as a safety-net mirror of
- *      woland's followManuscript, in case the daemon is updated to name its events.
- *   3. Auto-scroll to bottom unless the user has scrolled up (stick-to-bottom rule)
+ *   2. EventSource /api/watch/:uuid → re-fetch + re-render on unnamed message
+ *      events (named "change" listener kept as a safety net, mirroring woland).
+ *   3. Auto-scroll to bottom unless the user has scrolled up (stick-to-bottom).
  *
  * Lifecycle:
  *   - mountDrawer() returns a DrawerHandle with a close() method
  *   - close() tears down the EventSource and removes the DOM node
- *   - The caller (shell.ts) must call close() on both drawer-close and tab-close
+ *   - The caller (shell.ts) must call close() on drawer-close / tab switch
  *
- * Toggle-placement rationale:
- *   The drawer toggle button lives inside the tab strip entry (rendered by
- *   renderTabStrip in shell.ts). Because renderTabStrip does a full innerHTML
- *   rebuild every 3 s, the button's appearance is re-derived from TabEntry.drawerOpen
- *   on each rebuild — stateless from the DOM's perspective, stateful in the model.
- *   This avoids both the "stale button after rebuild" problem AND the need to move
- *   the toggle outside the strip. See shell.ts: TabEntry gains a `drawerOpen` flag
- *   and a `drawerHandle` field.
+ * Tool drill-down:
+ *   Each tool one-liner is clickable; clicking toggles expansion to the
+ *   pretty-printed `tool.input` JSON + `tool.output` in a <pre>, plus
+ *   `detail.lines` colored spans when present. Expansion state is keyed by
+ *   toolExpandKey(group.turnNumber, toolIndex) — stable across SSE re-renders
+ *   (the daemon never renumbers exchanges). All content is set via textContent
+ *   (never innerHTML) — XSS-safe.
  *
- * Tool drill-down (Task 4.3):
- *   Each tool one-liner is clickable; clicking toggles expansion. Expanded state
- *   shows pretty-printed `tool.input` JSON + `tool.output` in a <pre>, plus
- *   `detail.lines` colored spans when present. Truncation notices are shown when
- *   `truncated` or `inputTruncated` are set.
- *
- *   Expansion state is keyed by `${group.turnNumber}:${toolIndex}`.
- *   `group.turnNumber` is the exchange `n` of the group's opening user turn —
- *   stable for the lifetime of a session (the daemon never renumbers exchanges).
- *   A new group appearing above shifts no existing turnNumbers, so the key is
- *   stable across SSE re-renders.
- *
- *   Input is rendered via JSON.stringify(input, null, 2) inside a <pre> with
- *   CSS max-height + overflow-y: auto — no JS cap beyond the server-side 50 KB.
- *   Output is set via textContent (not innerHTML) — XSS-safe for both input and
- *   output paths.
- *
- * Per-turn edit-and-fork (Task 4.4):
- *   Each non-leaf user turn with a uuid shows a fork button (✂) in the header.
- *   Clicking it swaps the summary span for a textarea (prefilled with group.userText)
- *   plus confirm/cancel buttons. Esc or cancel restores the summary. Confirm POSTs
- *   `{turn: group.uuid, text}` to /api/session/:uuid/fork and calls onFork(newUuid).
- *
- *   SSE re-render guard: an active edit is tracked by `editingTurnNumber`. When a
- *   re-render fires while an edit is in progress, the full render() call is
- *   suppressed — the entire drawer body is left intact to avoid clobbering the
- *   textarea. (Same concept as shell.ts's roster-rename-input guard, which also
- *   freezes the whole sidebar while a rename is active.)
- *
- *   Double-submit guard: the confirm button is disabled while a fetch is in flight.
- *   Failure shows an inline error message; the source session is never mutated.
+ * Per-turn edit-and-fork:
+ *   Each user card with a uuid shows a fork affordance in its head. Clicking
+ *   swaps the card text for a textarea (prefilled) plus confirm/cancel.
+ *   Esc or cancel restores; confirm POSTs {turn, text} to /api/session/:uuid/fork
+ *   and calls onFork(newUuid). While an edit is open, SSE re-renders are
+ *   suppressed (editingTurnNumber guard) so the textarea is never clobbered,
+ *   and the confirm button is disabled while the fetch is in flight.
  */
 
 import { groupTurns, toolExpandKey } from "./turns.ts";
 import type { TurnGroup, Exchange, Tool } from "./turns.ts";
+import { icon } from "./icons.ts";
 
 // ---------------------------------------------------------------------------
 // Minimal session fetch (mirrors web/src/data.ts fetchSession — do not import
@@ -119,6 +108,12 @@ export interface DrawerHandle {
   close(): void;
 }
 
+/** Shell-injected quick actions. Buttons render only for provided callbacks. */
+export interface DrawerActions {
+  /** Send an interrupt (^C) to the session's pty. */
+  interrupt?: () => void;
+}
+
 /**
  * Mount the transcript drawer for `uuid` into `hostEl` (.term-host).
  *
@@ -127,24 +122,43 @@ export interface DrawerHandle {
  * @param onFork   Called with the new session uuid when a fork succeeds.
  *                 Kept decoupled from shell internals — drawer doesn't know what
  *                 openTabWithQuery or refreshRoster are.
+ * @param actions  Optional quick-action callbacks (see DrawerActions).
  * @returns        DrawerHandle — caller must call .close() on tab-close or toggle-off
  */
 export function mountDrawer(
   hostEl: HTMLElement,
   uuid: string,
   onFork: (newUuid: string) => void = () => {},
+  actions: DrawerActions = {},
 ): DrawerHandle {
   // ------------------------------------------------------------------
   // DOM structure
   // ------------------------------------------------------------------
   const panel = el("div", "drawer");
+
   const header = el("div", "drawer-header");
   const headerTitle = el("span", "drawer-title");
-  headerTitle.textContent = "transcript";
-  header.append(headerTitle);
+  headerTitle.textContent = "Transcript";
+  const headerCount = el("span", "chip");
+  headerCount.textContent = "0 turns";
+  header.append(headerTitle, headerCount);
 
-  const body = el("div", "drawer-body");
-  panel.append(header, body);
+  const actionsRow = el("div", "drawer-actions");
+  if (actions.interrupt) {
+    const stopBtn = el("button", "drawer-action drawer-action--danger");
+    stopBtn.title = "Interrupt (send ^C)";
+    stopBtn.append(icon("stop", 13));
+    stopBtn.addEventListener("click", () => actions.interrupt!());
+    actionsRow.append(stopBtn);
+  }
+  const copyBtn = el("button", "drawer-action");
+  copyBtn.title = "Copy transcript";
+  copyBtn.append(icon("copy", 13));
+  copyBtn.addEventListener("click", () => void copyTranscript(copyBtn));
+  actionsRow.append(copyBtn);
+
+  const body = el("div", "drawer-body scroll");
+  panel.append(header, actionsRow, body);
   hostEl.append(panel);
 
   // ------------------------------------------------------------------
@@ -165,8 +179,9 @@ export function mountDrawer(
   // Render
   // ------------------------------------------------------------------
 
-  /** Fold state keyed by group turnNumber. Default: all open. */
-  const folded = new Set<number>();
+  /** Assistant cards expanded by the user, keyed by group turnNumber.
+   *  DEFAULT IS COLLAPSED — user turns are the spine, assistant turns ellipse. */
+  const expandedAsst = new Set<number>();
 
   /**
    * Tool expansion state keyed by toolExpandKey(group.turnNumber, toolIndex).
@@ -175,14 +190,14 @@ export function mountDrawer(
    */
   const toolExpanded = new Set<string>();
 
-  /** The most recently rendered groups — used by fold click handlers to avoid
-   *  rendering stale group data when an SSE tick arrives between render and click.
-   */
+  /** The most recently rendered groups — used by click handlers and the
+   *  transcript copier so an SSE tick between render and click can't serve
+   *  stale group data. */
   let currentGroups: TurnGroup[] = [];
 
   /**
    * When non-null, the turnNumber of the group currently being edited in-place.
-   * An SSE re-render that would clobber the textarea is suppressed for that group.
+   * An SSE re-render that would clobber the textarea is suppressed.
    * Set when the fork textarea opens; cleared on cancel or confirm.
    */
   let editingTurnNumber: number | null = null;
@@ -196,6 +211,9 @@ export function mountDrawer(
 
     const wasNearBottom = isNearBottom();
     const prevScrollTop = body.scrollTop;
+
+    const turnCount = groups.filter((g) => !g.isLeaf).length;
+    headerCount.textContent = turnCount === 1 ? "1 turn" : `${turnCount} turns`;
 
     body.innerHTML = "";
 
@@ -219,135 +237,154 @@ export function mountDrawer(
 
   function renderGroup(group: TurnGroup): HTMLElement {
     const wrap = el("div", "drawer-group");
-    if (group.isLeaf) wrap.classList.add("drawer-group--leaf");
 
-    // Header row: turn number + first line of user text (or "assistant" if none)
-    const headerRow = el("div", "drawer-group-header");
-    const numEl = el("span", "drawer-group-num");
-    numEl.textContent = `${group.turnNumber}`;
-
-    const summaryEl = el("span", "drawer-group-summary");
     if (group.isLeaf) {
-      summaryEl.textContent = "[ input ]";
-    } else {
-      const firstLine = group.userText.split("\n")[0]?.trim() ?? "";
-      summaryEl.textContent = firstLine || "(assistant)";
+      const row = el("div", "turn-input");
+      row.append(el("span", "turn-input-dot"));
+      const label = el("span", "turn-input-label");
+      label.textContent = "awaiting input…";
+      row.append(label);
+      wrap.append(row);
+      return wrap;
     }
 
-    const isFolded = folded.has(group.turnNumber);
-    const foldBtn = el("button", "drawer-fold-btn");
-    foldBtn.textContent = isFolded ? "▶" : "▼";
-    foldBtn.title = isFolded ? "expand" : "collapse";
-    foldBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (folded.has(group.turnNumber)) {
-        folded.delete(group.turnNumber);
-      } else {
-        folded.add(group.turnNumber);
-      }
-      // Re-render the full groups list so fold state is applied consistently
-      // and no stale group data from a previous SSE tick is shown.
-      render(currentGroups);
-    });
-
-    headerRow.append(foldBtn, numEl, summaryEl);
-
-    // Fork button — only on non-leaf user turns with a uuid.
-    // Disabled if no uuid (e.g. unsent leaf or live turn not yet committed).
-    if (!group.isLeaf && group.userText !== "") {
-      const forkBtn = el("button", "drawer-fork-btn");
-      forkBtn.textContent = "✂";
-      if (group.uuid) {
-        forkBtn.title = "Edit and fork from this turn";
-        forkBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          openForkEdit(group, summaryEl, forkBtn, headerRow);
-        });
-      } else {
-        forkBtn.title = "Fork unavailable — no uuid on this turn";
-        forkBtn.disabled = true;
-        forkBtn.classList.add("drawer-fork-btn--disabled");
-      }
-      headerRow.append(forkBtn);
+    if (group.userText) {
+      wrap.append(renderUserCard(group));
     }
-
-    // Click on header row (not the buttons) also toggles fold.
-    headerRow.addEventListener("click", (e) => {
-      if (editingTurnNumber !== null) return;
-      if (e.target === foldBtn) return;
-      foldBtn.click();
-    });
-    headerRow.style.cursor = "pointer";
-
-    wrap.append(headerRow);
-
-    if (!isFolded && !group.isLeaf) {
-      const contentEl = el("div", "drawer-group-content");
-
-      // User text (left-border accent)
-      if (group.userText) {
-        const userEl = el("div", "drawer-user");
-        userEl.textContent = group.userText;
-        contentEl.append(userEl);
-      }
-
-      // Assistant text (plain text v1; markdown is backlog)
-      if (group.assistantText) {
-        const asst = el("div", "drawer-assistant");
-        asst.textContent = group.assistantText;
-        contentEl.append(asst);
-      }
-
-      // Tool rows with drill-down expansion
-      group.toolExchanges.forEach((ex, idx) => {
-        contentEl.append(renderToolRow(ex.tool!, group.turnNumber, idx));
-      });
-
-      // System timing
-      if (group.systemText) {
-        const sys = el("div", "drawer-system");
-        sys.textContent = group.systemText;
-        contentEl.append(sys);
-      }
-
-      wrap.append(contentEl);
+    if (group.assistantText || group.toolExchanges.length > 0 || group.systemText) {
+      wrap.append(renderAssistantCard(group));
     }
-
     return wrap;
   }
 
+  /** USER card — full text, always. The navigation spine. */
+  function renderUserCard(group: TurnGroup): HTMLElement {
+    const card = el("div", "turn-card turn-card--user");
+
+    const head = el("div", "turn-card-head");
+    head.append(el("span", "turn-role-dot"));
+    const role = el("span", "turn-role");
+    role.textContent = "you";
+    head.append(role);
+
+    const num = el("span", "turn-num");
+    num.textContent = `${group.turnNumber}`;
+    head.append(num);
+
+    const forkBtn = el("button", "drawer-fork-btn");
+    forkBtn.append(icon("fork", 13));
+    if (group.uuid) {
+      forkBtn.title = "Edit and fork from this turn";
+      forkBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openForkEdit(group, textEl, forkBtn);
+      });
+    } else {
+      forkBtn.title = "Fork unavailable — no uuid on this turn";
+      forkBtn.disabled = true;
+      forkBtn.classList.add("drawer-fork-btn--disabled");
+    }
+    head.append(forkBtn);
+
+    const textEl = el("p", "turn-text");
+    textEl.textContent = group.userText;
+
+    card.append(head, textEl);
+    return card;
+  }
+
+  /** ASSISTANT card — one-line ellipsis until expanded. */
+  function renderAssistantCard(group: TurnGroup): HTMLElement {
+    const isExpanded = expandedAsst.has(group.turnNumber);
+    const card = el(
+      "div",
+      `turn-card turn-card--assistant${isExpanded ? "" : " turn-card--collapsed"}`,
+    );
+
+    const head = el("div", "turn-card-head");
+    head.append(el("span", "turn-role-dot"));
+    const role = el("span", "turn-role");
+    role.textContent = "assistant";
+    head.append(role);
+
+    if (group.toolExchanges.length > 0) {
+      const toolCount = el("span", "turn-num");
+      toolCount.textContent =
+        group.toolExchanges.length === 1 ? "· 1 tool" : `· ${group.toolExchanges.length} tools`;
+      toolCount.style.marginLeft = "0";
+      head.append(toolCount);
+    }
+
+    const spacer = el("span");
+    spacer.style.flex = "1";
+    head.append(spacer);
+
+    const toggle = el("button", "turn-toggle");
+    toggle.title = isExpanded ? "Collapse" : "Expand";
+    toggle.append(icon("chevron", 13));
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleAsst(group.turnNumber);
+    });
+    head.append(toggle);
+
+    const textEl = el("p", "turn-text");
+    textEl.textContent = group.assistantText || "(tool calls only)";
+    if (!isExpanded) {
+      textEl.addEventListener("click", () => toggleAsst(group.turnNumber));
+    }
+
+    card.append(head, textEl);
+
+    if (isExpanded) {
+      group.toolExchanges.forEach((ex, idx) => {
+        card.append(renderToolRow(ex.tool!, group.turnNumber, idx));
+      });
+      if (group.systemText) {
+        const sys = el("div", "drawer-system");
+        sys.textContent = group.systemText;
+        card.append(sys);
+      }
+    }
+
+    return card;
+  }
+
+  function toggleAsst(turnNumber: number) {
+    if (editingTurnNumber !== null) return;
+    if (expandedAsst.has(turnNumber)) {
+      expandedAsst.delete(turnNumber);
+    } else {
+      expandedAsst.add(turnNumber);
+    }
+    render(currentGroups);
+  }
+
   /**
-   * Open the inline fork-edit UI for a group.
+   * Open the inline fork-edit UI for a user card.
    *
-   * Replaces the `summaryEl` span with a textarea (prefilled) + confirm/cancel.
+   * Replaces the card's text with a textarea (prefilled) + confirm/cancel.
    * Sets `editingTurnNumber` to suppress SSE re-renders while editing.
    * On cancel or confirm (success or failure): clears `editingTurnNumber` and
    * calls render(currentGroups) to restore the normal view.
    *
-   * @param group      The TurnGroup being forked (must have group.uuid set — caller guards).
-   * @param summaryEl  The summary span to swap out for the edit widget.
-   * @param forkBtn    The fork button — hidden while editing to avoid confusion.
-   * @param headerRow  The header row — click-to-fold is inhibited while editing.
+   * @param group    The TurnGroup being forked (must have group.uuid set — caller guards).
+   * @param textEl   The card's text node to swap out for the edit widget.
+   * @param forkBtn  The fork button — hidden while editing to avoid confusion.
    */
   function openForkEdit(
     group: TurnGroup,
-    summaryEl: HTMLElement,
+    textEl: HTMLElement,
     forkBtn: HTMLButtonElement,
-    headerRow: HTMLElement,
   ) {
-    // Only one edit open at a time (clicking fork on another group while editing
-    // is blocked because SSE render suppresses the full rebuild, and the fork
-    // button on other groups still works — but we guard via editingTurnNumber).
+    // Only one edit open at a time.
     if (editingTurnNumber !== null) return;
     editingTurnNumber = group.turnNumber;
 
     // Hide the fork button while editing.
     forkBtn.style.display = "none";
 
-    // Disable the fold-toggle click while editing.
-    headerRow.style.cursor = "default";
-
-    // Build the edit widget in place of summaryEl.
+    // Build the edit widget in place of the card text.
     const editWrap = el("div", "drawer-fork-edit");
 
     const textarea = el("textarea", "drawer-fork-textarea");
@@ -364,7 +401,7 @@ export function mountDrawer(
     controls.append(confirmBtn, cancelBtn, errorEl);
     editWrap.append(controls);
 
-    summaryEl.replaceWith(editWrap);
+    textEl.replaceWith(editWrap);
 
     // Focus + select all for immediate editing.
     textarea.focus();
@@ -413,11 +450,6 @@ export function mountDrawer(
         e.preventDefault();
         void confirm();
       }
-    });
-
-    // Prevent header fold toggle from firing while clicking inside the edit widget.
-    editWrap.addEventListener("click", (e) => {
-      e.stopPropagation();
     });
   }
 
@@ -521,6 +553,29 @@ export function mountDrawer(
     }
 
     return wrap;
+  }
+
+  // ------------------------------------------------------------------
+  // Copy transcript — plain-text rendering of the current groups
+  // ------------------------------------------------------------------
+
+  async function copyTranscript(btn: HTMLButtonElement) {
+    const parts: string[] = [];
+    for (const g of currentGroups) {
+      if (g.isLeaf) continue;
+      if (g.userText) parts.push(`## turn ${g.turnNumber} — user\n${g.userText}`);
+      if (g.assistantText) parts.push(`assistant:\n${g.assistantText}`);
+      for (const ex of g.toolExchanges) {
+        if (ex.tool) parts.push(`[tool] ${ex.tool.kind} ${ex.tool.arg}`);
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(parts.join("\n\n"));
+      btn.classList.add("drawer-action--flash");
+      setTimeout(() => btn.classList.remove("drawer-action--flash"), 900);
+    } catch {
+      // Clipboard unavailable (permissions / non-secure context) — no-op.
+    }
   }
 
   // ------------------------------------------------------------------
