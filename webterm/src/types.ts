@@ -1,6 +1,16 @@
 // Wire types for the eigen-daemon HTTP/WS API.
 // Each type mirrors serde's actual output field-for-field — do not diverge.
 
+/**
+ * One row from GET /api/candidates.
+ * - `path`: absolute directory path.
+ * - `recent`: true when this path comes from a recent eigen session.
+ */
+export interface Candidate {
+  path: string;
+  recent: boolean;
+}
+
 /** State taxonomy from Task 1.9; matches `SessionState::as_str()` exactly. */
 export type PtyState = "working" | "waiting" | "idle" | "exited";
 
