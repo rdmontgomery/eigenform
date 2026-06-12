@@ -309,6 +309,12 @@ fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
         }
     };
 
+    // Absolutize user-supplied --workspace so it resolves correctly regardless of CWD.
+    let workspace = workspace.map(|p| {
+        let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        absolutize(&cwd, p)
+    });
+
     // Subdirs: immediate children of the workspace root.
     // Workspace resolution: explicit --workspace, else ~/projects if it exists, else None.
     let workspace_root = workspace.or_else(|| {
@@ -543,6 +549,12 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
         .or_else(|| env::var("SHELL").ok())
         .unwrap_or_else(|| "bash".to_string());
 
+    // Absolutize user-supplied paths so tower-http's ServeDir doesn't double-resolve
+    // them against the process CWD per request.
+    let web = web.map(|p| absolutize(&cwd, p));
+    let term = term.map(|p| absolutize(&cwd, p));
+    let workspace = workspace.map(|p| absolutize(&cwd, p));
+
     // Frontend assets: explicit --web, else ./web if it has a built bundle.
     let web_dir = web.or_else(|| {
         let candidate = cwd.join("web");
@@ -560,6 +572,17 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
             .map(|h| h.join("projects"))
             .filter(|p| p.is_dir())
     });
+
+    // Warn early if --term points at a directory without an index.html so the
+    // user sees a clear diagnosis instead of silent 404s.
+    if let Some(ref t) = term {
+        if !t.join("index.html").is_file() {
+            eprintln!(
+                "warning: --term dir {} has no index.html; /term will serve 404s",
+                t.display()
+            );
+        }
+    }
 
     let config = eigen_daemon::Config {
         program,
@@ -701,10 +724,38 @@ fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(PathBuf::from)
 }
 
+/// Return `p` unchanged if it is already absolute; otherwise join it onto `cwd`.
+fn absolutize(cwd: &std::path::Path, p: PathBuf) -> PathBuf {
+    if p.is_absolute() { p } else { cwd.join(p) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    // ── absolutize ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn absolutize_relative_is_joined_to_cwd() {
+        let cwd = PathBuf::from("/home/user/myproject");
+        let rel = PathBuf::from("webterm");
+        assert_eq!(absolutize(&cwd, rel), PathBuf::from("/home/user/myproject/webterm"));
+    }
+
+    #[test]
+    fn absolutize_absolute_is_unchanged() {
+        let cwd = PathBuf::from("/home/user/myproject");
+        let abs = PathBuf::from("/opt/assets/webterm");
+        assert_eq!(absolutize(&cwd, abs.clone()), abs);
+    }
+
+    #[test]
+    fn absolutize_dot_relative_is_joined() {
+        let cwd = PathBuf::from("/home/user/myproject");
+        let dot = PathBuf::from("./webterm");
+        assert_eq!(absolutize(&cwd, dot), PathBuf::from("/home/user/myproject/webterm"));
+    }
 
     fn utc(y: i32, mo: u32, d: u32, h: u32, m: u32, s: u32) -> chrono::DateTime<chrono::Utc> {
         chrono::Utc.with_ymd_and_hms(y, mo, d, h, m, s).unwrap()
