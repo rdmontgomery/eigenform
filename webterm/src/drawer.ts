@@ -51,10 +51,10 @@
  *   `{turn: group.uuid, text}` to /api/session/:uuid/fork and calls onFork(newUuid).
  *
  *   SSE re-render guard: an active edit is tracked by `editingTurnNumber`. When a
- *   re-render fires while an edit is in progress, the affected group's header is
- *   rebuilt but the edit textarea is not clobbered — the render call is skipped
- *   for that group and the textarea is left intact. (Same concept as shell.ts's
- *   roster-rename-input guard.) The rest of the drawer re-renders normally.
+ *   re-render fires while an edit is in progress, the full render() call is
+ *   suppressed — the entire drawer body is left intact to avoid clobbering the
+ *   textarea. (Same concept as shell.ts's roster-rename-input guard, which also
+ *   freezes the whole sidebar while a rename is active.)
  *
  *   Double-submit guard: the confirm button is disabled while a fetch is in flight.
  *   Failure shows an inline error message; the source session is never mutated.
