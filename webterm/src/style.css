@@ -197,7 +197,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   inset: 0;
 }
 
-/* xterm.js injects its own stylesheet; ensure it fills the pane */
+/* xterm.css is imported in main.ts (xterm 5.x does not inject it); this only
+   ensures the terminal fills the pane. */
 .xterm {
   height: 100%;
 }
@@ -292,7 +293,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 /*
  * Absolute overlay on .term-host — slides in from the right.
  * The terminal is NOT reflowed; the drawer covers the right portion.
- * Width: 360px — enough for tool args without hiding too much of the terminal.
+ * Width: 40% of the term-host (floor 360px, cap 720px) — 360px fixed ellipsized
+ * tool args and assistant text too aggressively.
  * CSS transform-based open/close via the .drawer--open class.
  */
 .drawer {
@@ -300,7 +302,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   top: 0;
   right: 0;
   bottom: 0;
-  width: 360px;
+  width: clamp(360px, 40%, 720px);
   background: var(--surface);
   border-left: 1px solid var(--border);
   display: flex;
