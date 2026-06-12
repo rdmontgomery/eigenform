@@ -418,13 +418,40 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   margin-top: 4px;
 }
 
-/* ── Tool one-liners (Task 4.3 will expand these) ───────────────────────────── */
+/* ── Tool rows with drill-down (Task 4.3) ───────────────────────────────────── */
+
+/*
+ * .drawer-tool-wrap  — outer container (collapsed or expanded)
+ * .drawer-tool-row   — always-visible one-liner header (clickable)
+ * .drawer-tool-detail — expanded content area (hidden when collapsed)
+ *
+ * Color classes for detail lines mirror woland's .tool .body .ln.* conventions:
+ *   .drawer-tool-ln--dim   default/context lines
+ *   .drawer-tool-ln--add   additions (green/cool)
+ *   .drawer-tool-ln--rem   removals  (cold/blue)
+ *   .drawer-tool-ln--cool  informational cool lines (same as add in webterm palette)
+ *
+ * The <pre> is given max-height + overflow-y: auto so large inputs scroll without
+ * needing a JS truncation cap beyond the server-side 50 KB limit.
+ */
+
+.drawer-tool-wrap {
+  margin: 1px 0;
+}
+
 .drawer-tool-row {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 5px;
   padding: 2px 0;
   font-size: 11px;
+}
+
+.drawer-tool-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 9px;
+  width: 10px;
 }
 
 .drawer-tool-kind {
@@ -442,3 +469,48 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   white-space: nowrap;
   min-width: 0;
 }
+
+/* Expanded detail area */
+.drawer-tool-detail {
+  padding: 4px 0 6px 10px;
+  border-left: 1px solid var(--border);
+  margin: 2px 0 2px 4px;
+}
+
+.drawer-tool-detail-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+  margin-top: 4px;
+}
+.drawer-tool-detail-label:first-child {
+  margin-top: 0;
+}
+
+.drawer-tool-detail-pre {
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 220px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 5px 7px;
+  margin: 0;
+  word-break: normal;
+}
+
+/* Detail line color classes (mirror woland's .ln.add / .ln.rem / .ln.cool) */
+.drawer-tool-ln {
+  display: block;
+  color: var(--text-dim);
+}
+.drawer-tool-ln--add  { color: #4ec9b0; }   /* cool/teal — matches --state-working */
+.drawer-tool-ln--rem  { color: #5f8bb0; }   /* cold/blue */
+.drawer-tool-ln--cool { color: #4ec9b0; }   /* same as add */
+.drawer-tool-ln--dim  { color: var(--text-muted); }

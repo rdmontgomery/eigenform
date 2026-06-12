@@ -93,6 +93,28 @@ export interface TurnGroup {
 }
 
 // ---------------------------------------------------------------------------
+// toolExpandKey — stable expansion key for a tool row
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a stable string key for a tool row in the drawer's expansion state map.
+ *
+ * Key: `${turnNumber}:${toolIndex}` where
+ *   - `turnNumber` is `group.turnNumber` == exchange `n` of the opening user turn.
+ *     The daemon never renumbers exchanges, so this is stable for the session's
+ *     lifetime. A new group appearing above shifts no existing turnNumbers.
+ *   - `toolIndex` is the 0-based index within `group.toolExchanges`.
+ *     Tool insertion order within a group is append-only (the daemon doesn't
+ *     reorder past exchanges), so this is stable across SSE re-renders.
+ *
+ * The combination is globally unique: two groups cannot share a turnNumber, and
+ * two tools within the same group cannot share an index.
+ */
+export function toolExpandKey(turnNumber: number, toolIndex: number): string {
+  return `${turnNumber}:${toolIndex}`;
+}
+
+// ---------------------------------------------------------------------------
 // groupTurns — the one pure function
 // ---------------------------------------------------------------------------
 

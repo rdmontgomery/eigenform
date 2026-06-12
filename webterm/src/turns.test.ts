@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupTurns } from "./turns.ts";
+import { groupTurns, toolExpandKey } from "./turns.ts";
 import type { Exchange, TurnGroup } from "./turns.ts";
 
 // ---------------------------------------------------------------------------
@@ -170,4 +170,73 @@ test("group turnNumber equals the exchange n of the opening user turn", () => {
   const groups = groupTurns(exchanges);
   assert.equal(groups[0]!.turnNumber, 7);
   assert.equal(groups[1]!.turnNumber, 9);
+});
+
+// ---------------------------------------------------------------------------
+// toolExpandKey — pure helper
+// ---------------------------------------------------------------------------
+
+test("toolExpandKey produces a stable string key", () => {
+  assert.equal(toolExpandKey(1, 0), "1:0");
+  assert.equal(toolExpandKey(7, 3), "7:3");
+  assert.equal(toolExpandKey(0, 0), "0:0");
+});
+
+test("toolExpandKey keys are unique across (turnNumber, toolIndex) pairs", () => {
+  const keys = [
+    toolExpandKey(1, 0),
+    toolExpandKey(1, 1),
+    toolExpandKey(2, 0),
+    toolExpandKey(2, 1),
+  ];
+  const unique = new Set(keys);
+  assert.equal(unique.size, keys.length, "all keys must be distinct");
+});
+
+test("toolExpandKey does not collide across groups (turnNumber stable per session)", () => {
+  // Simulate two groups with same tool count — keys must not collide.
+  const keysG1 = [0, 1, 2].map((i) => toolExpandKey(7, i));
+  const keysG2 = [0, 1, 2].map((i) => toolExpandKey(9, i));
+  const allKeys = [...keysG1, ...keysG2];
+  const unique = new Set(allKeys);
+  assert.equal(unique.size, allKeys.length, "no collision between groups");
+});
+
+test("tool exchanges carry input, output, truncated, inputTruncated, and detail through grouping", () => {
+  const exchanges: Exchange[] = [
+    user(1, "ask"),
+    {
+      n: 2,
+      tok: 0,
+      user: "",
+      tool: {
+        kind: "Read",
+        arg: "file.ts",
+        delta: "+3 −0",
+        input: { path: "file.ts" },
+        output: "content here",
+        truncated: false,
+        inputTruncated: false,
+        detail: {
+          tok: 12,
+          lines: [
+            { t: "+ added line", c: "add" },
+            { t: "  context", c: "dim" },
+            { t: "- removed", c: "rem" },
+          ],
+        },
+      },
+    },
+  ];
+  const groups = groupTurns(exchanges);
+  assert.equal(groups.length, 1);
+  const t = groups[0]!.toolExchanges[0]!.tool!;
+  assert.deepEqual(t.input, { path: "file.ts" });
+  assert.equal(t.output, "content here");
+  assert.equal(t.truncated, false);
+  assert.equal(t.inputTruncated, false);
+  assert.ok(t.detail !== undefined);
+  assert.equal(t.detail!.lines.length, 3);
+  assert.equal(t.detail!.lines[0]!.c, "add");
+  assert.equal(t.detail!.lines[2]!.c, "rem");
 });

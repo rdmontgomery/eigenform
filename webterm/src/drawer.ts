@@ -7,7 +7,10 @@
  *
  * Data flow:
  *   1. On open: fetchSession(uuid) → initial render
- *   2. EventSource /api/watch/:uuid → re-fetch + re-render on "change" events
+ *   2. EventSource /api/watch/:uuid → re-fetch + re-render on unnamed message events
+ *      (daemon emits unnamed SSE events; onmessage handles them).
+ *      A named "change" listener is also registered as a safety-net mirror of
+ *      woland's followManuscript, in case the daemon is updated to name its events.
  *   3. Auto-scroll to bottom unless the user has scrolled up (stick-to-bottom rule)
  *
  * Lifecycle:
@@ -23,10 +26,27 @@
  *   This avoids both the "stale button after rebuild" problem AND the need to move
  *   the toggle outside the strip. See shell.ts: TabEntry gains a `drawerOpen` flag
  *   and a `drawerHandle` field.
+ *
+ * Tool drill-down (Task 4.3):
+ *   Each tool one-liner is clickable; clicking toggles expansion. Expanded state
+ *   shows pretty-printed `tool.input` JSON + `tool.output` in a <pre>, plus
+ *   `detail.lines` colored spans when present. Truncation notices are shown when
+ *   `truncated` or `inputTruncated` are set.
+ *
+ *   Expansion state is keyed by `${group.turnNumber}:${toolIndex}`.
+ *   `group.turnNumber` is the exchange `n` of the group's opening user turn —
+ *   stable for the lifetime of a session (the daemon never renumbers exchanges).
+ *   A new group appearing above shifts no existing turnNumbers, so the key is
+ *   stable across SSE re-renders.
+ *
+ *   Input is rendered via JSON.stringify(input, null, 2) inside a <pre> with
+ *   CSS max-height + overflow-y: auto — no JS cap beyond the server-side 50 KB.
+ *   Output is set via textContent (not innerHTML) — XSS-safe for both input and
+ *   output paths.
  */
 
-import { groupTurns } from "./turns.ts";
-import type { TurnGroup, Exchange } from "./turns.ts";
+import { groupTurns, toolExpandKey } from "./turns.ts";
+import type { TurnGroup, Exchange, Tool } from "./turns.ts";
 
 // ---------------------------------------------------------------------------
 // Minimal session fetch (mirrors web/src/data.ts fetchSession — do not import
@@ -102,7 +122,20 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
   /** Fold state keyed by group turnNumber. Default: all open. */
   const folded = new Set<number>();
 
+  /**
+   * Tool expansion state keyed by toolExpandKey(group.turnNumber, toolIndex).
+   * Stable across SSE re-renders because group.turnNumber == exchange.n of the
+   * opening user turn, which the daemon never renumbers.
+   */
+  const toolExpanded = new Set<string>();
+
+  /** The most recently rendered groups — used by fold click handlers to avoid
+   *  rendering stale group data when an SSE tick arrives between render and click.
+   */
+  let currentGroups: TurnGroup[] = [];
+
   function render(groups: TurnGroup[]) {
+    currentGroups = groups;
     const wasNearBottom = isNearBottom();
     const prevScrollTop = body.scrollTop;
 
@@ -154,9 +187,9 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
       } else {
         folded.add(group.turnNumber);
       }
-      // Re-render just this group in-place.
-      const fresh = renderGroup(group);
-      wrap.replaceWith(fresh);
+      // Re-render the full groups list so fold state is applied consistently
+      // and no stale group data from a previous SSE tick is shown.
+      render(currentGroups);
     });
 
     headerRow.append(foldBtn, numEl, summaryEl);
@@ -187,10 +220,10 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
         contentEl.append(asst);
       }
 
-      // Tool one-liners (Task 4.3 will expand these — leave a clean seam)
-      for (const ex of group.toolExchanges) {
-        contentEl.append(renderToolRow(ex.tool!));
-      }
+      // Tool rows with drill-down expansion
+      group.toolExchanges.forEach((ex, idx) => {
+        contentEl.append(renderToolRow(ex.tool!, group.turnNumber, idx));
+      });
 
       // System timing
       if (group.systemText) {
@@ -206,17 +239,105 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
   }
 
   /**
-   * Render a tool exchange as a one-liner.
-   * Clean seam for Task 4.3: a future drill-down replaces this function in-place.
+   * Render a tool exchange row with drill-down expansion.
+   *
+   * Collapsed: kind badge + arg one-liner.
+   * Expanded: pretty-printed tool.input JSON + tool.output, with detail.lines
+   *   colored spans when present (classes dim/add/rem/cool mirror woland's
+   *   .tool .body .ln.* conventions; webterm-local equivalents in style.css).
+   *   Truncation notices are shown when truncated/inputTruncated are set.
+   *
+   * XSS safety: all user-controlled content is set via textContent (never innerHTML).
+   * Input JSON: rendered via JSON.stringify(input, null, 2) inside a <pre> with
+   *   CSS max-height + overflow-y: auto — no extra JS cap needed beyond the
+   *   server-side 50 KB limit.
+   *
+   * @param tool       The Tool object from the exchange.
+   * @param turnNumber The group's turnNumber (stable key component).
+   * @param toolIndex  Index within group.toolExchanges (stable for a given SSE frame).
    */
-  function renderToolRow(tool: NonNullable<Exchange["tool"]>): HTMLElement {
+  function renderToolRow(tool: Tool, turnNumber: number, toolIndex: number): HTMLElement {
+    const key = toolExpandKey(turnNumber, toolIndex);
+    const isExpanded = toolExpanded.has(key);
+
+    const wrap = el("div", "drawer-tool-wrap");
+
+    // One-liner header (always visible)
     const row = el("div", "drawer-tool-row");
+    row.style.cursor = "pointer";
     const kindEl = el("span", "drawer-tool-kind");
     kindEl.textContent = tool.kind;
     const argEl = el("span", "drawer-tool-arg");
     argEl.textContent = tool.arg;
-    row.append(kindEl, argEl);
-    return row;
+    const chevron = el("span", "drawer-tool-chevron");
+    chevron.textContent = isExpanded ? "▾" : "▸";
+    row.append(chevron, kindEl, argEl);
+    wrap.append(row);
+
+    // Toggle expansion on click
+    row.addEventListener("click", () => {
+      if (toolExpanded.has(key)) {
+        toolExpanded.delete(key);
+      } else {
+        toolExpanded.add(key);
+      }
+      render(currentGroups);
+    });
+
+    if (isExpanded) {
+      const detail = el("div", "drawer-tool-detail");
+
+      // --- Input section ---
+      if (tool.input !== undefined) {
+        const inputLabel = el("div", "drawer-tool-detail-label");
+        inputLabel.textContent = tool.inputTruncated === true
+          ? "input (truncated at 50 KB)"
+          : "input";
+        detail.append(inputLabel);
+
+        const inputPre = el("pre", "drawer-tool-detail-pre");
+        inputPre.textContent = JSON.stringify(tool.input, null, 2);
+        detail.append(inputPre);
+      }
+
+      // --- Output section ---
+      // detail.lines takes precedence over raw output when present, as it
+      // carries color annotations.
+      if (tool.detail && tool.detail.lines.length > 0) {
+        const outputLabel = el("div", "drawer-tool-detail-label");
+        outputLabel.textContent = tool.truncated === true
+          ? "output (truncated at 50 KB)"
+          : "output";
+        detail.append(outputLabel);
+
+        const pre = el("pre", "drawer-tool-detail-pre");
+        for (const line of tool.detail.lines) {
+          const span = el("span", `drawer-tool-ln drawer-tool-ln--${line.c}`);
+          span.textContent = line.t + "\n";
+          pre.append(span);
+        }
+        detail.append(pre);
+      } else if (tool.output !== undefined && tool.output !== "") {
+        const outputLabel = el("div", "drawer-tool-detail-label");
+        outputLabel.textContent = tool.truncated === true
+          ? "output (truncated at 50 KB)"
+          : "output";
+        detail.append(outputLabel);
+
+        const outputPre = el("pre", "drawer-tool-detail-pre");
+        outputPre.textContent = tool.output;
+        detail.append(outputPre);
+      } else if (tool.truncated === true) {
+        // output was present but got trimmed to empty — show notice only
+        const notice = el("div", "drawer-tool-detail-label");
+        notice.textContent = "output (truncated at 50 KB)";
+        detail.append(notice);
+      }
+
+      wrap.append(detail);
+    }
+
+    return wrap;
   }
 
   // ------------------------------------------------------------------
@@ -238,7 +359,11 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
   void load();
 
   es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
+  // The daemon sends unnamed SSE events; onmessage handles them.
+  // The named "change" listener is a safety net in case the daemon is updated
+  // to emit named events (mirrors woland's followManuscript pattern).
   es.onmessage = () => void load();
+  es.addEventListener("change", () => void load());
   es.onerror = () => {
     // EventSource will auto-reconnect; no action needed here.
   };
