@@ -273,6 +273,7 @@ export function mountDrawer(
 
     // Click on header row (not the buttons) also toggles fold.
     headerRow.addEventListener("click", (e) => {
+      if (editingTurnNumber !== null) return;
       if (e.target === foldBtn) return;
       foldBtn.click();
     });
