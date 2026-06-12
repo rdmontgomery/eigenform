@@ -5,6 +5,9 @@ import assert from "node:assert/strict";
 import {
   relativeRecency,
   reconcileTabs,
+  ageGroup,
+  inkFor,
+  INK_KEYS,
 } from "./shell-helpers.ts";
 import type { PtyInfo } from "./types.ts";
 
@@ -33,28 +36,28 @@ test("relativeRecency: just now for < 60s", () => {
   assert.equal(relativeRecency(iso, now), "just now");
 });
 
-test("relativeRecency: minutes ago for 1-59m", () => {
+test("relativeRecency: compact minutes for 1-59m", () => {
   const now = 1_000_000_000_000;
   const iso2m = new Date(now - 2 * 60_000).toISOString();
   const iso59m = new Date(now - 59 * 60_000).toISOString();
-  assert.equal(relativeRecency(iso2m, now), "2m ago");
-  assert.equal(relativeRecency(iso59m, now), "59m ago");
+  assert.equal(relativeRecency(iso2m, now), "2m");
+  assert.equal(relativeRecency(iso59m, now), "59m");
 });
 
-test("relativeRecency: hours ago for 1-23h", () => {
+test("relativeRecency: compact hours for 1-23h", () => {
   const now = 1_000_000_000_000;
   const iso1h = new Date(now - 1 * 3_600_000).toISOString();
   const iso23h = new Date(now - 23 * 3_600_000).toISOString();
-  assert.equal(relativeRecency(iso1h, now), "1h ago");
-  assert.equal(relativeRecency(iso23h, now), "23h ago");
+  assert.equal(relativeRecency(iso1h, now), "1h");
+  assert.equal(relativeRecency(iso23h, now), "23h");
 });
 
-test("relativeRecency: days ago for >= 24h", () => {
+test("relativeRecency: compact days for >= 24h", () => {
   const now = 1_000_000_000_000;
   const iso1d = new Date(now - 24 * 3_600_000).toISOString();
   const iso3d = new Date(now - 3 * 24 * 3_600_000).toISOString();
-  assert.equal(relativeRecency(iso1d, now), "1d ago");
-  assert.equal(relativeRecency(iso3d, now), "3d ago");
+  assert.equal(relativeRecency(iso1d, now), "1d");
+  assert.equal(relativeRecency(iso3d, now), "3d");
 });
 
 test("relativeRecency: returns empty string for unparseable ISO (NaN guard)", () => {
@@ -68,8 +71,57 @@ test("relativeRecency: handles +00:00 offset strings from backend", () => {
   const now = 1_000_000_000_000;
   const isoZ = new Date(now - 5 * 60_000).toISOString(); // "Z" form
   const isoOffset = isoZ.replace("Z", "+00:00"); // "+00:00" form
-  assert.equal(relativeRecency(isoZ, now), "5m ago");
-  assert.equal(relativeRecency(isoOffset, now), "5m ago");
+  assert.equal(relativeRecency(isoZ, now), "5m");
+  assert.equal(relativeRecency(isoOffset, now), "5m");
+});
+
+// ---------------------------------------------------------------------------
+// ageGroup — recency bucketing for the rail (Today / This week / Earlier)
+// ---------------------------------------------------------------------------
+
+test("ageGroup: under 24h is today", () => {
+  const now = 1_000_000_000_000;
+  assert.equal(ageGroup(new Date(now - 30_000).toISOString(), now), "today");
+  assert.equal(ageGroup(new Date(now - 23 * 3_600_000).toISOString(), now), "today");
+});
+
+test("ageGroup: 24h to 7d is week", () => {
+  const now = 1_000_000_000_000;
+  assert.equal(ageGroup(new Date(now - 25 * 3_600_000).toISOString(), now), "week");
+  assert.equal(ageGroup(new Date(now - 6 * 24 * 3_600_000).toISOString(), now), "week");
+});
+
+test("ageGroup: beyond 7d is earlier", () => {
+  const now = 1_000_000_000_000;
+  assert.equal(ageGroup(new Date(now - 8 * 24 * 3_600_000).toISOString(), now), "earlier");
+  assert.equal(ageGroup(new Date(now - 90 * 24 * 3_600_000).toISOString(), now), "earlier");
+});
+
+test("ageGroup: unparseable recency falls into earlier", () => {
+  const now = 1_000_000_000_000;
+  assert.equal(ageGroup("not-a-date", now), "earlier");
+  assert.equal(ageGroup("", now), "earlier");
+});
+
+// ---------------------------------------------------------------------------
+// inkFor — deterministic per-session ink hue assignment
+// ---------------------------------------------------------------------------
+
+test("inkFor: deterministic for the same key", () => {
+  assert.equal(inkFor("abc-123"), inkFor("abc-123"));
+});
+
+test("inkFor: always returns a known ink key", () => {
+  for (const key of ["a", "uuid-1", "/home/u/projects/eigen", "", "42"]) {
+    assert.ok((INK_KEYS as readonly string[]).includes(inkFor(key)));
+  }
+});
+
+test("inkFor: distinct keys spread across more than one hue", () => {
+  const hues = new Set(
+    ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"].map(inkFor),
+  );
+  assert.ok(hues.size > 1, `expected spread, got ${[...hues].join(",")}`);
 });
 
 // ---------------------------------------------------------------------------

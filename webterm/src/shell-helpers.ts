@@ -13,14 +13,14 @@ import type { PtyInfo } from "./types.ts";
 // ---------------------------------------------------------------------------
 
 /**
- * Human-readable relative time from an ISO-8601 string.
+ * Compact relative time from an ISO-8601 string (rail/tab recency column).
  * Handles both "Z" and "+00:00" backend forms via Date.parse.
  *
  * Tiers:
  *   < 60s    → "just now"
- *   1–59m    → "Nm ago"
- *   1–23h    → "Nh ago"
- *   ≥ 24h    → "Nd ago"
+ *   1–59m    → "Nm"
+ *   1–23h    → "Nh"
+ *   ≥ 24h    → "Nd"
  */
 export function relativeRecency(iso: string, now: number): string {
   const ts = new Date(iso).getTime();
@@ -29,11 +29,55 @@ export function relativeRecency(iso: string, now: number): string {
   const s = Math.floor(diff / 1000);
   if (s < 60) return "just now";
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return `${h}h`;
   const d = Math.floor(h / 24);
-  return `${d}d ago`;
+  return `${d}d`;
+}
+
+// ---------------------------------------------------------------------------
+// ageGroup
+// ---------------------------------------------------------------------------
+
+export type AgeGroup = "today" | "week" | "earlier";
+
+/**
+ * Bucket a recency timestamp for the rail's group headers.
+ * Duration thresholds (not calendar boundaries — keeps this timezone-free):
+ *   < 24h → "today", < 7d → "week", else (or unparseable) → "earlier".
+ */
+export function ageGroup(iso: string, now: number): AgeGroup {
+  const ts = new Date(iso).getTime();
+  if (isNaN(ts)) return "earlier";
+  const diff = Math.max(0, now - ts);
+  const h = diff / 3_600_000;
+  if (h < 24) return "today";
+  if (h < 24 * 7) return "week";
+  return "earlier";
+}
+
+// ---------------------------------------------------------------------------
+// inkFor
+// ---------------------------------------------------------------------------
+
+/** Per-session ink hues — each key has a matching CSS var --ink-<key>. */
+export const INK_KEYS = ["clay", "ochre", "olive", "teal", "slate", "plum"] as const;
+
+export type InkKey = (typeof INK_KEYS)[number];
+
+/**
+ * Deterministic per-session ink hue: a stable key (session uuid, else ptyId,
+ * else cwd) hashes to one of INK_KEYS. FNV-1a keeps nearby keys from clumping
+ * the way a char-code sum would.
+ */
+export function inkFor(key: string): InkKey {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return INK_KEYS[(h >>> 0) % INK_KEYS.length]!;
 }
 
 // ---------------------------------------------------------------------------
