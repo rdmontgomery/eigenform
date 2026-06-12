@@ -106,6 +106,8 @@ export interface TurnGroup {
  *   - `toolIndex` is the 0-based index within `group.toolExchanges`.
  *     Tool insertion order within a group is append-only (the daemon doesn't
  *     reorder past exchanges), so this is stable across SSE re-renders.
+ *     A hypothetical mid-group insertion would silently shift expansion state
+ *     for subsequent tools (currently impossible — the daemon is append-only).
  *
  * The combination is globally unique: two groups cannot share a turnNumber, and
  * two tools within the same group cannot share an index.

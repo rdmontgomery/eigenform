@@ -514,3 +514,68 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .drawer-tool-ln--rem  { color: #5f8bb0; }   /* cold/blue */
 .drawer-tool-ln--cool { color: #4ec9b0; }   /* same as add */
 .drawer-tool-ln--dim  { color: var(--text-muted); }
+
+/* ── Per-turn fork button (Task 4.4) ───────────────────────────────────────── */
+.drawer-fork-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: auto;  /* push to the right of the summary */
+}
+.drawer-fork-btn:hover:not(:disabled) { color: var(--state-working); }
+.drawer-fork-btn--disabled { opacity: 0.25; cursor: default; }
+
+/* Edit-in-place fork widget — replaces the summary span on click */
+.drawer-fork-edit {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.drawer-fork-textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  resize: vertical;
+  outline: none;
+  border-radius: 2px;
+}
+.drawer-fork-textarea:focus { border-color: var(--state-working); }
+
+.drawer-fork-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawer-fork-confirm,
+.drawer-fork-cancel {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 2px;
+}
+.drawer-fork-confirm:hover:not(:disabled) { color: var(--state-working); border-color: var(--state-working); }
+.drawer-fork-cancel:hover  { color: var(--text); }
+.drawer-fork-confirm:disabled { opacity: 0.4; cursor: default; }
+
+.drawer-fork-error {
+  font-size: 11px;
+  color: #c0392b;
+  flex: 1;
+}

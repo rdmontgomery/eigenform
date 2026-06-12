@@ -180,8 +180,16 @@ export function mountShell(appEl: HTMLElement): void {
       entry.drawerHandle = null;
       entry.drawerOpen = false;
     } else {
-      // Open — mount on the termHost so it overlays the terminal absolutely
-      entry.drawerHandle = mountDrawer(termHost, uuid);
+      // Open — mount on the termHost so it overlays the terminal absolutely.
+      // onFork: open the forked session as a new tab + refresh the roster so
+      // the sidebar shows it immediately (copy-on-fork — source tab stays open).
+      entry.drawerHandle = mountDrawer(termHost, uuid, (newUuid) => {
+        openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
+          uuid: newUuid,
+          label: "fork",
+        });
+        void refreshRoster();
+      });
       entry.drawerOpen = true;
     }
     renderTabStrip();

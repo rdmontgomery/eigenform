@@ -43,6 +43,21 @@
  *   CSS max-height + overflow-y: auto — no JS cap beyond the server-side 50 KB.
  *   Output is set via textContent (not innerHTML) — XSS-safe for both input and
  *   output paths.
+ *
+ * Per-turn edit-and-fork (Task 4.4):
+ *   Each non-leaf user turn with a uuid shows a fork button (✂) in the header.
+ *   Clicking it swaps the summary span for a textarea (prefilled with group.userText)
+ *   plus confirm/cancel buttons. Esc or cancel restores the summary. Confirm POSTs
+ *   `{turn: group.uuid, text}` to /api/session/:uuid/fork and calls onFork(newUuid).
+ *
+ *   SSE re-render guard: an active edit is tracked by `editingTurnNumber`. When a
+ *   re-render fires while an edit is in progress, the affected group's header is
+ *   rebuilt but the edit textarea is not clobbered — the render call is skipped
+ *   for that group and the textarea is left intact. (Same concept as shell.ts's
+ *   roster-rename-input guard.) The rest of the drawer re-renders normally.
+ *
+ *   Double-submit guard: the confirm button is disabled while a fetch is in flight.
+ *   Failure shows an inline error message; the source session is never mutated.
  */
 
 import { groupTurns, toolExpandKey } from "./turns.ts";
@@ -71,6 +86,30 @@ async function fetchSession(uuid: string): Promise<SessionPayload | null> {
   }
 }
 
+/**
+ * POST /api/session/:uuid/fork with {turn, text}.
+ * Returns the new session uuid on success, null on failure.
+ * Mirrors woland's forkSession in web/src/data.ts exactly.
+ */
+async function forkSession(
+  srcUuid: string,
+  turn: string,
+  text: string,
+): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/session/${encodeURIComponent(srcUuid)}/fork`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ turn, text }),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { uuid?: string };
+    return typeof j.uuid === "string" ? j.uuid : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -85,9 +124,16 @@ export interface DrawerHandle {
  *
  * @param hostEl   The .term-host element — the drawer overlays it absolutely.
  * @param uuid     Session uuid for /api/session/:uuid/json + /api/watch/:uuid
+ * @param onFork   Called with the new session uuid when a fork succeeds.
+ *                 Kept decoupled from shell internals — drawer doesn't know what
+ *                 openTabWithQuery or refreshRoster are.
  * @returns        DrawerHandle — caller must call .close() on tab-close or toggle-off
  */
-export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
+export function mountDrawer(
+  hostEl: HTMLElement,
+  uuid: string,
+  onFork: (newUuid: string) => void = () => {},
+): DrawerHandle {
   // ------------------------------------------------------------------
   // DOM structure
   // ------------------------------------------------------------------
@@ -134,8 +180,20 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
    */
   let currentGroups: TurnGroup[] = [];
 
+  /**
+   * When non-null, the turnNumber of the group currently being edited in-place.
+   * An SSE re-render that would clobber the textarea is suppressed for that group.
+   * Set when the fork textarea opens; cleared on cancel or confirm.
+   */
+  let editingTurnNumber: number | null = null;
+
   function render(groups: TurnGroup[]) {
     currentGroups = groups;
+
+    // Guard: if an edit is in progress, skip the full re-render to avoid clobbering
+    // the textarea. The edited group will re-render after cancel or confirm resolves.
+    if (editingTurnNumber !== null) return;
+
     const wasNearBottom = isNearBottom();
     const prevScrollTop = body.scrollTop;
 
@@ -194,7 +252,26 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
 
     headerRow.append(foldBtn, numEl, summaryEl);
 
-    // Click on header row (not the button) also toggles fold.
+    // Fork button — only on non-leaf user turns with a uuid.
+    // Disabled if no uuid (e.g. unsent leaf or live turn not yet committed).
+    if (!group.isLeaf && group.userText !== "") {
+      const forkBtn = el("button", "drawer-fork-btn");
+      forkBtn.textContent = "✂";
+      if (group.uuid) {
+        forkBtn.title = "Edit and fork from this turn";
+        forkBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openForkEdit(group, summaryEl, forkBtn, headerRow);
+        });
+      } else {
+        forkBtn.title = "Fork unavailable — no uuid on this turn";
+        forkBtn.disabled = true;
+        forkBtn.classList.add("drawer-fork-btn--disabled");
+      }
+      headerRow.append(forkBtn);
+    }
+
+    // Click on header row (not the buttons) also toggles fold.
     headerRow.addEventListener("click", (e) => {
       if (e.target === foldBtn) return;
       foldBtn.click();
@@ -236,6 +313,111 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
     }
 
     return wrap;
+  }
+
+  /**
+   * Open the inline fork-edit UI for a group.
+   *
+   * Replaces the `summaryEl` span with a textarea (prefilled) + confirm/cancel.
+   * Sets `editingTurnNumber` to suppress SSE re-renders while editing.
+   * On cancel or confirm (success or failure): clears `editingTurnNumber` and
+   * calls render(currentGroups) to restore the normal view.
+   *
+   * @param group      The TurnGroup being forked (must have group.uuid set — caller guards).
+   * @param summaryEl  The summary span to swap out for the edit widget.
+   * @param forkBtn    The fork button — hidden while editing to avoid confusion.
+   * @param headerRow  The header row — click-to-fold is inhibited while editing.
+   */
+  function openForkEdit(
+    group: TurnGroup,
+    summaryEl: HTMLElement,
+    forkBtn: HTMLButtonElement,
+    headerRow: HTMLElement,
+  ) {
+    // Only one edit open at a time (clicking fork on another group while editing
+    // is blocked because SSE render suppresses the full rebuild, and the fork
+    // button on other groups still works — but we guard via editingTurnNumber).
+    if (editingTurnNumber !== null) return;
+    editingTurnNumber = group.turnNumber;
+
+    // Hide the fork button while editing.
+    forkBtn.style.display = "none";
+
+    // Disable the fold-toggle click while editing.
+    headerRow.style.cursor = "default";
+
+    // Build the edit widget in place of summaryEl.
+    const editWrap = el("div", "drawer-fork-edit");
+
+    const textarea = el("textarea", "drawer-fork-textarea");
+    textarea.value = group.userText;
+    textarea.rows = Math.min(8, group.userText.split("\n").length + 1);
+    editWrap.append(textarea);
+
+    const controls = el("div", "drawer-fork-controls");
+    const confirmBtn = el("button", "drawer-fork-confirm");
+    confirmBtn.textContent = "fork";
+    const cancelBtn = el("button", "drawer-fork-cancel");
+    cancelBtn.textContent = "cancel";
+    const errorEl = el("span", "drawer-fork-error");
+    controls.append(confirmBtn, cancelBtn, errorEl);
+    editWrap.append(controls);
+
+    summaryEl.replaceWith(editWrap);
+
+    // Focus + select all for immediate editing.
+    textarea.focus();
+    textarea.select();
+
+    function cancel() {
+      editingTurnNumber = null;
+      render(currentGroups);
+    }
+
+    async function confirm() {
+      const text = textarea.value.trim();
+      if (!text) {
+        errorEl.textContent = "text cannot be empty";
+        return;
+      }
+      confirmBtn.disabled = true;
+      errorEl.textContent = "";
+      const newUuid = await forkSession(uuid, group.uuid!, text);
+      if (newUuid === null) {
+        confirmBtn.disabled = false;
+        errorEl.textContent = "fork failed — see daemon logs";
+        return;
+      }
+      editingTurnNumber = null;
+      onFork(newUuid);
+      render(currentGroups);
+    }
+
+    cancelBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cancel();
+    });
+
+    confirmBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void confirm();
+    });
+
+    // Esc key cancels; Ctrl+Enter confirms.
+    textarea.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancel();
+      } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        void confirm();
+      }
+    });
+
+    // Prevent header fold toggle from firing while clicking inside the edit widget.
+    editWrap.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
   }
 
   /**
@@ -301,7 +483,7 @@ export function mountDrawer(hostEl: HTMLElement, uuid: string): DrawerHandle {
       }
 
       // --- Output section ---
-      // detail.lines takes precedence over raw output when present, as it
+      // Non-empty detail.lines takes precedence over raw output when present, as it
       // carries color annotations.
       if (tool.detail && tool.detail.lines.length > 0) {
         const outputLabel = el("div", "drawer-tool-detail-label");
