@@ -23,6 +23,16 @@ const PATHS: Record<string, string> = {
   copy: '<path d="M9 9h10v10H9zM5 15V5h10"/>',
   fork: '<path d="M6 4v8M18 4v3a4 4 0 0 1-4 4H6"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="4" r="2"/><circle cx="6" cy="4" r="2"/>',
   stop: '<path d="M7 7h10v10H7z"/>',
+  // tool-call type icons + outliner chevrons (design pass 2026-06-12)
+  terminal: '<path d="M5 7l5 5-5 5M13 17h6"/>',
+  doc: '<path d="M7 3h7l4 4v14H7zM14 3v4h4"/>',
+  pencil: '<path d="M4 20l4-1L18 7l-3-3L5 15l-1 5zM14 6l3 3"/>',
+  globe: '<path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3.5 12h17M12 3c2.6 2.6 2.6 15.4 0 18M12 3c-2.6 2.6-2.6 15.4 0 18"/>',
+  check: '<path d="M5 13l4 4L19 7"/>',
+  list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
+  skill: '<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z"/>',
+  bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
+  chevrons: '<path d="M6 5l6 6 6-6M6 12l6 6 6-6"/>',
 };
 
 /** Build an <svg> element for a named icon. Unknown names render empty. */

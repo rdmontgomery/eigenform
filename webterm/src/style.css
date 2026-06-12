@@ -854,46 +854,213 @@ button { font: inherit; color: inherit; }
   margin-top: 6px;
 }
 
-/* ── Tool rows with drill-down ──────────────────────────────────────────── */
-.drawer-tool-wrap { margin: 4px 0 0; }
-
-.drawer-tool-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 0;
-  font-size: 11px;
-}
-
-.drawer-tool-chevron {
-  color: var(--tx-faint);
-  flex-shrink: 0;
-  font-size: 9px;
-  width: 10px;
-}
-
-.drawer-tool-kind {
-  font-family: var(--font-mono);
-  color: var(--st-success);
-  background: color-mix(in oklch, var(--st-success) 12%, transparent);
-  border: 1px solid color-mix(in oklch, var(--st-success) 28%, transparent);
-  border-radius: 5px;
-  padding: 2px 6px;
-  flex-shrink: 0;
-  font-size: 9.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.drawer-tool-arg {
-  font-family: var(--font-mono);
-  color: var(--tx-3);
+/* ── Tool-call rows (per-type, design pass 2026-06-12) ──────────────────── */
+/* Row: [tinted type icon] Verb · headline … [accessory] [⌄⌄ below] [▸]
+   Expands to clean per-type I/O — no raw JSON, no horizontal scroll
+   (unknown kinds keep the honest raw input/output fallback below). */
+.tool-call {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: transparent;
+}
+.tool-call--open { background: var(--surface); }
+.tool-call + .tool-call { margin-top: 5px; }
+
+.tool-row {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px;
+  cursor: pointer;
+  transition: background 0.12s;
   min-width: 0;
 }
+.tool-call:not(.tool-call--open) .tool-row:hover { background: var(--raised); }
 
+.tool-ico {
+  display: inline-flex;
+  width: 20px; height: 20px;
+  border-radius: 5px;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklch, var(--tool-tint, var(--tx-3)) 15%, transparent);
+  color: var(--tool-tint, var(--tx-3));
+  flex-shrink: 0;
+}
+
+.tool-main {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.tool-verb {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tx);
+  flex-shrink: 0;
+}
+.tool-headline {
+  font-size: 11.5px;
+  color: var(--tx-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tool-headline--mono { font-family: var(--font-mono); }
+
+.tool-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.tool-acc { font-family: var(--font-mono); font-size: 10px; }
+.tool-acc-add { color: var(--st-success); }
+.tool-acc-del { color: var(--st-error); }
+.tool-acc--count { color: var(--ink-ochre); }
+
+.tool-chevron { color: var(--tx-faint); display: inline-flex; }
+.tool-chevron svg { transition: transform 0.15s; }
+.tool-call--open .tool-chevron svg { transform: rotate(90deg); }
+
+/* "expand/collapse this + below" — double chevron, hover-revealed */
+.below-btn {
+  width: 18px; height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--tx-faint);
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+  flex-shrink: 0;
+}
+.tool-row:hover .below-btn,
+.turn-card:hover .below-btn { opacity: 1; }
+.below-btn:hover { color: var(--accent); }
+.below-btn svg { transition: transform 0.15s; }
+.below-btn--open svg { transform: rotate(180deg); }
+
+.tool-body { padding: 0 10px 10px; }
+
+/* labeled inset box (bash command/output, skill, url) */
+.tool-inset { margin-top: 7px; }
+.tool-inset-label {
+  font-size: 9px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--tx-faint);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.tool-inset-label--error { color: var(--st-error); }
+.tool-inset-box {
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--tx-2);
+  max-height: 168px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-inset-box .cmd-prompt { color: var(--accent-2); }
+
+/* mini-diff (edit/write) */
+.tool-diff {
+  margin-top: 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.tool-diff-ln { display: flex; padding: 0 8px; color: var(--tx-3); }
+.tool-diff-ln--add {
+  background: color-mix(in oklch, var(--st-success) 12%, transparent);
+  color: var(--st-success);
+}
+.tool-diff-ln--rem {
+  background: color-mix(in oklch, var(--st-error) 12%, transparent);
+  color: var(--st-error);
+}
+.tool-diff-sign { width: 12px; flex-shrink: 0; opacity: 0.7; }
+.tool-diff-text { white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.tool-diff-more {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-faint);
+  padding: 2px 8px 3px;
+}
+
+/* read info line */
+.tool-readinfo {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tx-3);
+}
+.tool-readinfo b { color: var(--accent-2); font-weight: 400; }
+
+/* grep matches */
+.tool-match-file { color: var(--accent-2); }
+.tool-match-line { color: var(--tx-faint); }
+.tool-match-text { color: var(--tx-3); }
+
+/* todo checklist */
+.tool-todos { margin-top: 7px; display: flex; flex-direction: column; gap: 5px; }
+.tool-todo { display: flex; align-items: center; gap: 9px; }
+.tool-todo-ring {
+  width: 9px; height: 9px;
+  border-radius: 99px;
+  border: 1.5px solid var(--tx-faint);
+  flex-shrink: 0;
+}
+.tool-todo--doing .tool-todo-ring {
+  border: 2px solid var(--st-running);
+  animation: eigen-pulse 1.3s infinite;
+}
+.tool-todo-text { font-size: 12px; color: var(--tx-2); }
+.tool-todo--done .tool-todo-text { text-decoration: line-through; color: var(--tx-faint); }
+.tool-todo--doing .tool-todo-text { color: var(--tx); }
+
+/* header expand/collapse-all control ("⌄⌄ N turns") */
+.drawer-expandall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px 0 7px;
+  border-radius: 7px;
+  cursor: pointer;
+  border: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--tx-2);
+  margin-left: auto;
+}
+.drawer-expandall:hover { background: var(--raised-2); }
+.drawer-expandall svg { transition: transform 0.15s; }
+.drawer-expandall--open svg { transform: rotate(180deg); }
+.drawer-expandall-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-faint);
+}
+
+/* ── Raw fallback drill-down (unknown tool kinds) ───────────────────────── */
 .drawer-tool-detail {
   padding: 4px 0 6px 10px;
   border-left: 1px solid var(--line);
@@ -914,8 +1081,9 @@ button { font: inherit; color: inherit; }
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--tx-2);
-  white-space: pre;
-  overflow-x: auto;
+  white-space: pre-wrap;     /* wrap, never horizontal-scroll (design rule) */
+  word-break: break-word;
+  overflow-x: hidden;
   overflow-y: auto;
   max-height: 220px;
   background: var(--bg);
