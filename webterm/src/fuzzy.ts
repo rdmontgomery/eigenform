@@ -71,9 +71,13 @@ function scoreMatch(query: string, lowerPath: string): MatchScore | null {
   }
 
   // --- Subsequence scan using a greedy left-to-right approach.
-  // We want the match that maximises the longest contiguous run, so we use a
-  // simple greedy scan (take the leftmost match for each query char). This is
-  // standard and produces stable results.
+  // Greedy left-to-right is stable and standard but does NOT always maximise
+  // longestRun. For example, query "ac" against "/xaac": greedy matches
+  // positions [2,4] (run=1) rather than [3,4] (run=2). This is acceptable for
+  // path ranking — the difference is rarely meaningful and the stability of a
+  // single, deterministic algorithm outweighs the occasional suboptimal run
+  // score. A future swap to a max-run algorithm would surface via the pinned
+  // test in fuzzy.test.ts ("greedy limitation pin: 'ac' in '/xaac' vs '/xac'").
   const positions: number[] = [];
   let qi = 0;
   for (let ti = 0; ti < lowerPath.length && qi < query.length; ti++) {

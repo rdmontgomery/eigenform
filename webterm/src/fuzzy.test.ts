@@ -246,3 +246,32 @@ test("single character query matches correctly", () => {
   assert.equal(result.length, 1);
   assert.equal(result[0]!.path, "/home/r/projects/eigen");
 });
+
+// ---------------------------------------------------------------------------
+// Greedy-limitation pin: "ac" in "/xaac" vs "/xac"
+//
+// This test pins the ACTUAL (greedy) ranking outcome, not the theoretically
+// optimal one. Greedy left-to-right assigns "ac" in "/xaac" positions [2,4]
+// (run=1 — skips the better [3,4] pair that would give run=2). "/xac" gets
+// positions [2,3] (run=2). So "/xac" scores HIGHER than "/xaac" under greedy.
+//
+// A max-run algorithm would find [3,4] in "/xaac" (run=2), tying "/xac" and
+// making input order the tiebreaker — changing the ranking outcome. This test
+// pins the current greedy behavior so a future algorithm swap is visible.
+// ---------------------------------------------------------------------------
+
+test("greedy limitation pin: 'ac' in '/xaac' vs '/xac' — greedy gives /xaac run=1 vs /xac run=2", () => {
+  // greedy on "/xaac": picks 'a' at index 2, 'c' at index 4 → positions [2,4] → run=1
+  // greedy on "/xac":  picks 'a' at index 2, 'c' at index 3 → positions [2,3] → run=2
+  // both have basenameHit=1 (basename contains "ac" as subseq) and same wordBoundaryStarts
+  // "/xac" wins on longestRun (2 > 1) and comes first despite being input-order second.
+  // A max-run algorithm would give "/xaac" run=2 also → tie → input order → "/xaac" first.
+  // This test fails if the algorithm is changed to max-run, surfacing the behavior change.
+  const first = c("/xaac");
+  const second = c("/xac");
+  const result = rankCandidates("ac", [first, second]);
+  assert.equal(result.length, 2, "both paths match 'ac'");
+  // "/xac" ranks FIRST because greedy gives it run=2 vs "/xaac" run=1.
+  assert.equal(result[0]!.path, "/xac", "greedy: /xac ranks first (run=2)");
+  assert.equal(result[1]!.path, "/xaac", "greedy: /xaac ranks second (run=1, not the optimal run=2)");
+});
