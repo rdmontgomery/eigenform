@@ -581,8 +581,13 @@ fn daemon(
         candidate.join("dist/main.js").is_file().then_some(candidate)
     });
 
-    // woland (legacy, paused): explicit --web, else ./web if built. Served at /woland.
+    // woland (legacy, paused): explicit --web always; otherwise only in dev, where ./web
+    // (if built) is mounted at /woland. The normal launch path never surfaces it — running
+    // `eigenform` from this repo shouldn't auto-mount or advertise the paused workbench.
     let web_dir = web.or_else(|| {
+        if !dev {
+            return None;
+        }
         let candidate = cwd.join("web");
         candidate.join("dist/main.js").is_file().then_some(candidate)
     });

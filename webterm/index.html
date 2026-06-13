@@ -3,7 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>eigenform · term</title>
+    <title>eigenform</title>
+    <!-- Inline SVG favicon: nested Spencer-Brown marks (re-entry → eigenform) in
+         furnace amber on ink. A data URI works on both the dev (ServeDir) and the
+         embedded (cargo install) paths with no extra served file or RustEmbed entry. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c1814'/><g fill='none' stroke='%23e09a3e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9H24V21'/><path d='M11 13.5H19.5V18.5'/></g></svg>"
+    />
     <!-- Chrome/terminal fonts (eigenform design system). Loaded here, not via CSS
          @import — esbuild bundles xterm.css before style.css, so an @import
          there would land mid-bundle and be ignored. Falls back to the system
