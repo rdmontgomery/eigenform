@@ -80,6 +80,20 @@ test("typed absolute path, empty candidates → known=false", () => {
 });
 
 // ---------------------------------------------------------------------------
+// typed home path (~ / ~/…) — passed through; the daemon expands ~
+// ---------------------------------------------------------------------------
+
+test("typed ~/path not in candidates → known=false, path kept as-is", () => {
+  const result = resolvePick("~/src/myproject", null, [c("/root/a", false)]);
+  assert.deepEqual(result, { path: "~/src/myproject", known: false });
+});
+
+test("bare ~ → known=false, path kept as-is", () => {
+  const result = resolvePick("~", null, [c("/root/a", false)]);
+  assert.deepEqual(result, { path: "~", known: false });
+});
+
+// ---------------------------------------------------------------------------
 // typed bare name (no "/") — resolved via workspace_root proxy
 // ---------------------------------------------------------------------------
 

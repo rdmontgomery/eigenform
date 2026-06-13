@@ -90,13 +90,14 @@ export function resolvePick(
   const text = typed.trim();
   if (text.length === 0) return null;
 
-  // 2. Absolute path (starts with "/"). Known iff it matches a candidate exactly.
-  if (text.startsWith("/")) {
+  // 2. Absolute path ("/…") or a home path ("~" / "~/…"; the daemon expands ~).
+  //    Known iff it matches a candidate exactly.
+  if (text.startsWith("/") || text === "~" || text.startsWith("~/")) {
     const known = candidates.some((c) => c.path === text);
     return { path: text, known };
   }
 
-  // 3. Relative path: contains "/" but doesn't start with "/" — unsupported.
+  // 3. Relative path: contains "/" but doesn't start with "/" or "~/" — unsupported.
   if (text.includes("/")) {
     return null;
   }

@@ -538,7 +538,7 @@ struct PathProbeQuery {
 async fn path_probe_route(
     axum::extract::Query(query): axum::extract::Query<PathProbeQuery>,
 ) -> Response {
-    let p = normalize_path(&PathBuf::from(&query.path));
+    let p = normalize_path(&expand_tilde(&query.path));
     let meta = std::fs::metadata(&p);
     let exists = meta.is_ok();
     let is_dir = meta.map(|m| m.is_dir()).unwrap_or(false);
@@ -703,7 +703,7 @@ async fn pty_ws(
     //   - existing dir        → spawn as-is, no mkdir, regardless of the create flag.
     // Resolved here (before on_upgrade) so a rejection closes the socket with a clear reason.
     if let Some(cwd_str) = query.new.as_deref() {
-        let dir = normalize_path(&PathBuf::from(cwd_str));
+        let dir = normalize_path(&expand_tilde(cwd_str));
         let exists = dir.is_dir();
         if !exists {
             if query.create != 0 {
@@ -826,11 +826,15 @@ async fn pty_delete_route(
 /// - neither → the configured default (a shell in dev, a dummy in tests).
 fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
     if let (Some(cwd), Some(projects)) = (&query.new, &cfg.projects_dir) {
+        // Expand ~ first: the browser sends the path literally (no shell), and both the
+        // spawn cwd and the JSONL-watch project name must reflect the real directory.
+        let expanded = expand_tilde(cwd);
+        let escaped = escaped_cwd(&expanded.to_string_lossy());
         return PtyCommand {
             program: "claude".to_string(),
             args: vec![],
-            cwd: Some(PathBuf::from(cwd)),
-            watch: Some((projects.clone(), escaped_cwd(cwd))),
+            cwd: Some(expanded),
+            watch: Some((projects.clone(), escaped)),
         };
     }
     if let (Some(uuid), Some(dir)) = (&query.session, &cfg.projects_dir) {
@@ -854,6 +858,22 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
 /// Claude Code's project dir name for a cwd: `/` → `-` (e.g. `/home/me/p` → `-home-me-p`).
 fn escaped_cwd(cwd: &str) -> String {
     cwd.replace('/', "-")
+}
+
+/// Expand a leading `~` or `~/…` to `$HOME` — the launcher input comes from a browser,
+/// so there's no shell to do it. Non-tilde paths (and a missing `$HOME`) pass through
+/// unchanged. Only a leading `~` is special; `~user` is not expanded.
+fn expand_tilde(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home);
+        }
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
 }
 
 /// Normalize a path by resolving `.` and `..` components without touching the filesystem
@@ -1191,6 +1211,20 @@ mod tests {
         assert_eq!(normalize_path(Path::new("/a/./b")), PathBuf::from("/a/b"));
         // `..` at root is a no-op (no component to pop).
         assert_eq!(normalize_path(Path::new("/../x")), PathBuf::from("/x"));
+    }
+
+    #[test]
+    fn expand_tilde_uses_home_for_leading_tilde_only() {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        // Absolute and relative non-tilde paths pass through untouched.
+        assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
+        assert_eq!(expand_tilde("relative/x"), PathBuf::from("relative/x"));
+        // `~user` is NOT expanded (only a bare ~ or ~/).
+        assert_eq!(expand_tilde("~bob/x"), PathBuf::from("~bob/x"));
+        if let Some(home) = home {
+            assert_eq!(expand_tilde("~"), home);
+            assert_eq!(expand_tilde("~/src/proj"), home.join("src/proj"));
+        }
     }
 
     #[test]
