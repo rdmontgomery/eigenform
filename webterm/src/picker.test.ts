@@ -3,13 +3,16 @@
  *
  * Run: `node --test` (native TS via --experimental-strip-types in Node 22+).
  *
- * ## resolvePick contract:
- *   - highlighted candidate chosen → path from candidate, create=false
- *   - typed absolute path, matches a candidate → create=false
- *   - typed absolute path, not in candidates → create=true
- *   - typed bare name (no "/"), workspace_root proxy known → resolve to root/name, create=true
+ * ## resolvePick contract (returns {path, known} | null):
+ *   - highlighted candidate chosen → path from candidate, known=true (it exists)
+ *   - typed absolute path, matches a candidate → known=true
+ *   - typed absolute path, not in candidates → known=false (caller probes existence)
+ *   - typed bare name (no "/"), workspace_root proxy known → resolve to root/name, known=false
  *   - typed bare name, no workspace_root proxy → return null (can't resolve)
  *   - typed empty, no highlight → return null (no-op)
+ *
+ * `known` reflects only "did this match a known candidate?" — not on-disk existence,
+ * which the picker (not this pure fn) checks via GET /api/path before opening/creating.
  *
  * ## workspace_root proxy:
  *   The frontend doesn't know workspace_root directly. We derive it from the
@@ -37,54 +40,54 @@ function c(path: string, recent = false): Candidate {
 // highlighted candidate wins over typed text
 // ---------------------------------------------------------------------------
 
-test("highlighted candidate → use its path, create=false", () => {
+test("highlighted candidate → use its path, known=true", () => {
   const result = resolvePick(
     "eigenform",                           // typed
     c("/home/user/projects/eigen"),    // highlighted
     [c("/home/user/projects/eigen"), c("/home/user/projects/foo", false)],
   );
-  assert.deepEqual(result, { path: "/home/user/projects/eigen", create: false });
+  assert.deepEqual(result, { path: "/home/user/projects/eigen", known: true });
 });
 
-test("highlighted recent candidate → use its path, create=false", () => {
+test("highlighted recent candidate → use its path, known=true", () => {
   const result = resolvePick(
     "",
     c("/home/user/projects/eigen", true),
     [c("/home/user/projects/eigen", true)],
   );
-  assert.deepEqual(result, { path: "/home/user/projects/eigen", create: false });
+  assert.deepEqual(result, { path: "/home/user/projects/eigen", known: true });
 });
 
 // ---------------------------------------------------------------------------
 // typed absolute path
 // ---------------------------------------------------------------------------
 
-test("typed absolute path matching a candidate → create=false", () => {
+test("typed absolute path matching a candidate → known=true", () => {
   const candidates = [c("/root/alpha"), c("/root/beta")];
   const result = resolvePick("/root/alpha", null, candidates);
-  assert.deepEqual(result, { path: "/root/alpha", create: false });
+  assert.deepEqual(result, { path: "/root/alpha", known: true });
 });
 
-test("typed absolute path not in candidates → create=true", () => {
+test("typed absolute path not in candidates → known=false", () => {
   const candidates = [c("/root/alpha"), c("/root/beta")];
   const result = resolvePick("/root/gamma", null, candidates);
-  assert.deepEqual(result, { path: "/root/gamma", create: true });
+  assert.deepEqual(result, { path: "/root/gamma", known: false });
 });
 
-test("typed absolute path, empty candidates → create=true", () => {
+test("typed absolute path, empty candidates → known=false", () => {
   const result = resolvePick("/root/newproject", null, []);
-  assert.deepEqual(result, { path: "/root/newproject", create: true });
+  assert.deepEqual(result, { path: "/root/newproject", known: false });
 });
 
 // ---------------------------------------------------------------------------
 // typed bare name (no "/") — resolved via workspace_root proxy
 // ---------------------------------------------------------------------------
 
-test("typed bare name, non-recent candidates present → resolved against root, create=true", () => {
+test("typed bare name, non-recent candidates present → resolved against root, known=false", () => {
   // /workspace/alpha and /workspace/beta are non-recent subdirs → root = /workspace
   const candidates = [c("/workspace/alpha", false), c("/workspace/beta", false)];
   const result = resolvePick("newdir", null, candidates);
-  assert.deepEqual(result, { path: "/workspace/newdir", create: true });
+  assert.deepEqual(result, { path: "/workspace/newdir", known: false });
 });
 
 test("typed bare name, first non-recent candidate used as root proxy", () => {
@@ -96,7 +99,7 @@ test("typed bare name, first non-recent candidate used as root proxy", () => {
   ];
   const result = resolvePick("mynewdir", null, candidates);
   // root proxy = parent of /root/subdir-a = /root
-  assert.deepEqual(result, { path: "/root/mynewdir", create: true });
+  assert.deepEqual(result, { path: "/root/mynewdir", known: false });
 });
 
 test("typed bare name, no non-recent candidates → null (can't resolve)", () => {
@@ -122,7 +125,7 @@ test("empty typed, no highlight → null (no-op)", () => {
 
 test("empty typed, highlighted candidate → use highlighted", () => {
   const result = resolvePick("", c("/root/a"), [c("/root/a")]);
-  assert.deepEqual(result, { path: "/root/a", create: false });
+  assert.deepEqual(result, { path: "/root/a", known: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -135,7 +138,7 @@ test("highlighted takes priority over typed absolute path", () => {
     c("/root/highlighted"),
     [c("/root/highlighted"), c("/root/typed-path")],
   );
-  assert.deepEqual(result, { path: "/root/highlighted", create: false });
+  assert.deepEqual(result, { path: "/root/highlighted", known: true });
 });
 
 // ---------------------------------------------------------------------------

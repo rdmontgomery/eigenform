@@ -112,6 +112,7 @@ pub fn app(config: Config) -> Router {
         .route("/api/projects", get(projects_route))
         .route("/api/recent", get(recent_route))
         .route("/api/candidates", get(candidates_route))
+        .route("/api/path", get(path_probe_route))
         .route("/api/watch/:uuid", get(watch_route));
 
     // Legacy woland, paused: mounts at /woland only when a build dir is given.
@@ -524,6 +525,26 @@ async fn candidates_route(State(state): State<AppState>) -> Response {
     axum::Json(items).into_response()
 }
 
+#[derive(serde::Deserialize)]
+struct PathProbeQuery {
+    path: String,
+}
+
+/// `GET /api/path?path=<abs>` — does this path exist, and is it a directory?
+/// Response: `{"exists": bool, "isDir": bool}`. The launcher uses this to decide
+/// whether opening a typed path means "attach to an existing dir" (no prompt) or
+/// "make a new one" (confirm first). Stat-only, no traversal; the daemon is
+/// localhost-bound, so this leaks nothing a local shell couldn't already see.
+async fn path_probe_route(
+    axum::extract::Query(query): axum::extract::Query<PathProbeQuery>,
+) -> Response {
+    let p = normalize_path(&PathBuf::from(&query.path));
+    let meta = std::fs::metadata(&p);
+    let exists = meta.is_ok();
+    let is_dir = meta.map(|m| m.is_dir()).unwrap_or(false);
+    axum::Json(serde_json::json!({ "exists": exists, "isDir": is_dir })).into_response()
+}
+
 /// `GET /api/watch/:uuid` — Server-Sent Events: a `change` event each time the session's
 /// JSONL is written (the live-follow signal for the right pane).
 async fn watch_route(
@@ -675,45 +696,26 @@ async fn pty_ws(
     // Otherwise spawn-and-register through the host (uniform model: even bare `/pty`
     // registers a pty that outlives this socket).
 
-    // `create=1` with `new=<cwd>`: create the directory if it is under workspace_root.
-    // Do the check (and mkdir) before upgrading if possible — but axum's on_upgrade pattern
-    // requires the check to happen inside the async block. We resolve early whether to allow
-    // or reject, then either proceed or close with POLICY.
-    let should_create = query.create != 0;
-    if should_create {
-        // Resolve: is `new` set and within workspace_root?
-        let create_result: Result<PathBuf, &'static str> = (|| {
-            let cwd_str = query.new.as_deref().ok_or("no cwd")?;
-            let new_path = PathBuf::from(cwd_str);
-            let root = state.config.workspace_root.as_ref().ok_or("create outside workspace root")?;
-
-            // Canonicalize the root (it must exist). Normalize the new path without
-            // canonicalizing it (it may not exist yet) by resolving `..` components manually:
-            // collect path components, skipping `.` and popping on `..`.
-            let canon_root = root.canonicalize().map_err(|_| "workspace root not accessible")?;
-            let normalized = normalize_path(&new_path);
-
-            if !normalized.starts_with(&canon_root) {
-                return Err("create outside workspace root");
-            }
-            if normalized == canon_root {
-                return Err("create target is the workspace root");
-            }
-            Ok(normalized)
-        })();
-
-        match create_result {
-            Err(reason) => {
-                return ws.on_upgrade(move |socket| async move {
-                    let _ = close_with_reason(socket, reason).await;
-                });
-            }
-            Ok(dir) => {
-                if let Err(_) = std::fs::create_dir_all(&dir) {
+    // `new=<cwd>` directory policy (full-freedom + confirm; the launcher gates `create=1`
+    // behind a user "Create <path>?" prompt, and `origin_is_local` above is the CSRF guard).
+    //   - create=1 + missing → mkdir_all it (anywhere), then spawn.
+    //   - create=0 + missing → refuse: don't spawn claude in a cwd that isn't there.
+    //   - existing dir        → spawn as-is, no mkdir, regardless of the create flag.
+    // Resolved here (before on_upgrade) so a rejection closes the socket with a clear reason.
+    if let Some(cwd_str) = query.new.as_deref() {
+        let dir = normalize_path(&PathBuf::from(cwd_str));
+        let exists = dir.is_dir();
+        if !exists {
+            if query.create != 0 {
+                if std::fs::create_dir_all(&dir).is_err() {
                     return ws.on_upgrade(move |socket| async move {
                         let _ = close_with_reason(socket, "failed to create directory").await;
                     });
                 }
+            } else {
+                return ws.on_upgrade(move |socket| async move {
+                    let _ = close_with_reason(socket, "no such directory").await;
+                });
             }
         }
     }

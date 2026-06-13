@@ -582,7 +582,7 @@ export function mountShell(appEl: HTMLElement): void {
           void refreshRoster();
         } else if (reason) {
           // Policy close or other close with a reason: mark dead and annotate label
-          // so the user can see WHY the tab died (e.g. "create outside workspace root").
+          // so the user can see WHY the tab died (e.g. "no such directory").
           entry.dead = true;
           entry.descriptor = { ...entry.descriptor, label: `✗ ${reason}` };
           renderTabStrip();

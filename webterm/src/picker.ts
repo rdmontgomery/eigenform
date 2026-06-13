@@ -29,11 +29,12 @@
  *
  * ## mkdir flow
  *
- * resolvePick returns `create: true` when the path is not in the known candidates
- * (i.e. it will be a new directory). The caller then opens the tab with `&create=1`.
- * The daemon enforces workspace_root containment; the picker does not pre-validate
- * (server is the authority). A rejection surfaces as a POLICY close → tab shows dead
- * with a reason string.
+ * resolvePick decides only the target path and whether it's a *known* candidate
+ * (`known: true` → it exists for sure, open it). For anything typed (`known:
+ * false`) the picker can't tell from the browser whether the dir exists, so it
+ * asks the daemon (`GET /api/path`) and then either opens it (exists) or shows a
+ * "Create <path>?" confirmation before opening with `&create=1`. The daemon
+ * allows creation anywhere; the confirmation is the only gate.
  */
 
 import type { Candidate } from "./types.ts";
@@ -48,48 +49,61 @@ export interface PickResult {
   path: string;
   /**
    * Whether the daemon should create the directory before spawning.
-   * true  → send `&create=1`; the daemon will mkdir_all (subject to root check).
-   * false → path already exists (known candidate); no mkdir needed.
+   * true  → send `&create=1`; the daemon mkdir_all's it (allowed anywhere).
+   * false → the directory already exists; no mkdir needed.
    */
   create: boolean;
 }
 
+export interface PickDecision {
+  /** The absolute path to open. */
+  path: string;
+  /**
+   * True when `path` matched a known candidate — it exists, so open it directly
+   * with no existence probe and no create prompt. False for any typed/derived
+   * path, whose existence the caller must check via `GET /api/path` before
+   * deciding to open (exists) or confirm-then-create (missing).
+   */
+  known: boolean;
+}
+
 /**
- * Decide what to open given the current picker state.
+ * Decide the target path given the current picker state.
  *
  * @param typed       The raw text in the input field (may be empty or whitespace).
  * @param highlighted The currently highlighted candidate (null if none).
  * @param candidates  The full candidate list (for root-proxy derivation + match check).
- * @returns A `PickResult` or `null` if the state represents no valid action (e.g. empty input
- *          with no highlight, or a bare name with no non-recent candidates to derive root from).
+ * @returns A `PickDecision`, or `null` if the state represents no valid action (e.g. empty
+ *          input with no highlight, or a bare name with no non-recent candidate to derive
+ *          the workspace root from).
  */
 export function resolvePick(
   typed: string,
   highlighted: Candidate | null,
   candidates: Candidate[],
-): PickResult | null {
-  // 1. Highlighted candidate takes absolute priority.
+): PickDecision | null {
+  // 1. Highlighted candidate takes absolute priority — it exists.
   if (highlighted !== null) {
-    return { path: highlighted.path, create: false };
+    return { path: highlighted.path, known: true };
   }
 
   const text = typed.trim();
   if (text.length === 0) return null;
 
-  // 2. Absolute path (starts with "/").
+  // 2. Absolute path (starts with "/"). Known iff it matches a candidate exactly.
   if (text.startsWith("/")) {
     const known = candidates.some((c) => c.path === text);
-    return { path: text, create: !known };
+    return { path: text, known };
   }
 
   // 3. Relative path: contains "/" but doesn't start with "/" — unsupported.
-  //    Relative paths unsupported — absolute path or plain name.
   if (text.includes("/")) {
     return null;
   }
 
   // 4. Bare name (no "/" anywhere). Resolve against workspace_root proxy.
-  //    Proxy = parent of the first non-recent candidate.
+  //    Proxy = parent of the first non-recent candidate. Existence is unknown
+  //    (the dir may or may not already be there) → known: false.
   const firstNonRecent = candidates.find((c) => !c.recent);
   if (!firstNonRecent) {
     // No workspace_root proxy available — cannot resolve bare name.
@@ -100,7 +114,7 @@ export function resolvePick(
     ? firstNonRecent.path.slice(0, lastSlash)
     : "/";
   const resolved = `${workspaceRoot}/${text}`;
-  return { path: resolved, create: true };
+  return { path: resolved, known: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +147,9 @@ export function mountPicker(
   let candidates: Candidate[] = [];
   let filtered: Candidate[] = [];
   let highlightIdx: number = -1;
+  // When set, the picker is showing a "Create <path>?" confirmation; Enter creates,
+  // Esc returns to picking, and typing cancels back to the list.
+  let pendingCreate: string | null = null;
 
   // ------------------------------------------------------------------
   // DOM structure
@@ -229,13 +246,79 @@ export function mountPicker(
     highlightIdx = idx;
   }
 
+  function finish(result: PickResult) {
+    callbacks.onPick(result);
+    teardown();
+  }
+
   function confirmCurrent() {
-    const highlighted = highlightIdx >= 0 ? (filtered[highlightIdx] ?? null) : null;
-    const result = resolvePick(input.value, highlighted, candidates);
-    if (result) {
-      callbacks.onPick(result);
-      teardown();
+    // In confirmation mode, confirming means "yes, create it".
+    if (pendingCreate !== null) {
+      finish({ path: pendingCreate, create: true });
+      return;
     }
+    const highlighted = highlightIdx >= 0 ? (filtered[highlightIdx] ?? null) : null;
+    const decision = resolvePick(input.value, highlighted, candidates);
+    if (!decision) return;
+    if (decision.known) {
+      // A known candidate exists — open it directly.
+      finish({ path: decision.path, create: false });
+      return;
+    }
+    // Typed/derived path: existence unknown. Ask the daemon, then open or confirm.
+    void probeAndAct(decision.path);
+  }
+
+  /** Stat the path via the daemon, then open it (exists) or offer to create it (missing). */
+  async function probeAndAct(path: string) {
+    const info = await probePath(path);
+    if (info && info.isDir) {
+      finish({ path, create: false });
+    } else if (info && info.exists) {
+      showMessage(`${path} is a file, not a directory`);
+    } else {
+      // Missing — or the probe failed; either way, confirm before creating.
+      showConfirm(path);
+    }
+  }
+
+  async function probePath(path: string): Promise<{ exists: boolean; isDir: boolean } | null> {
+    try {
+      const r = await fetch(`/api/path?path=${encodeURIComponent(path)}`);
+      if (!r.ok) return null;
+      return (await r.json()) as { exists: boolean; isDir: boolean };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Swap the list for a "Create <path>?" confirmation panel (Enter creates, Esc cancels). */
+  function showConfirm(path: string) {
+    pendingCreate = path;
+    highlightIdx = -1;
+    list.innerHTML = "";
+    const panel = document.createElement("div");
+    panel.className = "picker-confirm";
+    const q = document.createElement("div");
+    q.className = "picker-confirm-q";
+    q.textContent = `Create ${path}?`;
+    const hint = document.createElement("div");
+    hint.className = "picker-confirm-hint";
+    hint.textContent = "⏎ create · esc cancel";
+    panel.append(q, hint);
+    panel.addEventListener("click", () => confirmCurrent());
+    list.append(panel);
+  }
+
+  /** Show a transient message (e.g. "is a file") in place of the list; stays in pick mode. */
+  function showMessage(msg: string) {
+    pendingCreate = null;
+    highlightIdx = -1;
+    list.innerHTML = "";
+    const m = document.createElement("div");
+    m.className = "picker-message";
+    m.textContent = msg;
+    list.append(m);
   }
 
   // ------------------------------------------------------------------
@@ -243,8 +326,23 @@ export function mountPicker(
   // ------------------------------------------------------------------
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") {
+      if (pendingCreate !== null) {
+        // Cancel the create confirmation — back to picking, don't dismiss.
+        e.preventDefault();
+        pendingCreate = null;
+        renderList();
+        return;
+      }
       callbacks.onDismiss();
       teardown();
+      return;
+    }
+    if (pendingCreate !== null) {
+      // While confirming, Enter creates; swallow nav keys.
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirmCurrent();
+      }
       return;
     }
     if (e.key === "ArrowDown") {
@@ -267,6 +365,8 @@ export function mountPicker(
   }
 
   function onInput() {
+    // Typing abandons any in-progress create confirmation.
+    pendingCreate = null;
     renderList();
   }
 

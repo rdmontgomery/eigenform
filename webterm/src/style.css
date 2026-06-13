@@ -660,6 +660,31 @@ button { font: inherit; color: inherit; }
   flex-shrink: 0;
 }
 
+/* Create-confirmation panel: shown in place of the list when a typed path is
+ * missing on disk. Enter creates it; Esc returns to picking. */
+.picker-confirm {
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.picker-confirm-q {
+  color: var(--tx);
+  font-size: 13px;
+  word-break: break-all;
+}
+.picker-confirm-hint {
+  margin-top: 4px;
+  color: var(--tx-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+/* Transient note (e.g. "is a file, not a directory"). */
+.picker-message {
+  padding: 10px 12px;
+  color: var(--tx-3);
+  font-size: 12px;
+  word-break: break-all;
+}
+
 /* ── Transcript drawer ──────────────────────────────────────────────────── */
 /*
  * Absolute overlay on .term-host — the terminal is NOT reflowed (no pty

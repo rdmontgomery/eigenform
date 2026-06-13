@@ -1,16 +1,12 @@
-//! /pty?new=<cwd>&create=1 — mkdir-under-workspace gate tests.
+//! /pty?new=<cwd>&create=1 — directory policy for fresh-session spawns.
 //!
-//! The `create=1` flag tells the daemon to `fs::create_dir_all` the requested
-//! cwd BEFORE spawning the pty. This is only allowed when the new path is under
-//! the configured `workspace_root`; anything outside is rejected via the POLICY
-//! close-frame pattern (same as attach-miss). Traversal via `..` is also rejected.
+//! Policy (full-freedom + confirm; the launcher gates `create=1` behind a user
+//! "Create <path>?" prompt, and the local-origin check is the CSRF guard):
+//!   - create=1 + missing dir → `fs::create_dir_all` it (ANYWHERE), then spawn.
+//!   - create=0 + missing dir → refuse: close the socket, do NOT create or spawn.
+//!   - existing dir           → spawn as-is, no mkdir, regardless of the flag.
 //!
 //! Wire format: `&create=1` (non-zero integer = true, absent or `0` = false).
-//!
-//! Three pinned cases:
-//!   (a) ?new=<root>/fresh&create=1 → dir created, pty spawns.
-//!   (b) ?new=<outside>&create=1    → socket closes (POLICY), dir NOT created.
-//!   (c) ?new=<missing>             → current no-create behavior pinned (dir stays missing).
 //!
 //! Tests use program: "sh" so a spawned pty runs a real shell. Never claude.
 
@@ -25,6 +21,7 @@ use tokio_tungstenite::tungstenite::Message;
 use eigenform_daemon::{app, Config};
 
 /// Spawn the daemon with `program: "sh"` and a configured `workspace_root`.
+/// (workspace_root still feeds `/api/candidates`; it no longer cages creation.)
 /// Returns `(base_url, workspace_root TempDir)`.
 async fn start_with_workspace() -> (String, tempfile::TempDir) {
     let workspace = tempfile::tempdir().unwrap();
@@ -74,8 +71,24 @@ async fn first_text_or_close(
     None
 }
 
+/// Drain until a Close frame; return its reason string (empty if none/text-first).
+async fn close_reason(
+    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+) -> Option<String> {
+    for _ in 0..20 {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+            Ok(Some(Ok(Message::Close(Some(frame))))) => return Some(frame.reason.to_string()),
+            Ok(Some(Ok(Message::Close(None)))) | Ok(None) => return Some(String::new()),
+            Ok(Some(Ok(Message::Text(_)))) => return None, // pty hello = spawned, not closed
+            Ok(Some(Ok(_))) => continue,
+            _ => return None,
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
-// Case (a): ?new=<root>/fresh&create=1 → dir created and pty spawns
+// Case (a): create=1 + missing under workspace → dir created and pty spawns
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -83,7 +96,6 @@ async fn create_flag_creates_dir_and_spawns_pty() {
     let (base, workspace) = start_with_workspace().await;
 
     let new_path = workspace.path().join("fresh-project");
-    // The directory must NOT exist before the call.
     assert!(!new_path.exists(), "pre: dir must not exist");
 
     let new_str = new_path.to_str().unwrap();
@@ -94,16 +106,12 @@ async fn create_flag_creates_dir_and_spawns_pty() {
     .await
     .expect("ws upgrade ok");
 
-    // Expect the pty hello frame — the spawn succeeded.
     let hello = first_text_or_close(&mut ws).await;
     assert!(
         hello.is_some(),
         "daemon must send a pty hello frame (directory created + spawn succeeded)"
     );
-    let hello = hello.unwrap();
-    assert_eq!(hello["type"], "pty", "hello frame type must be 'pty'");
-
-    // The directory must now exist.
+    assert_eq!(hello.unwrap()["type"], "pty", "hello frame type must be 'pty'");
     assert!(
         new_path.exists(),
         "daemon must have created the directory before spawning"
@@ -113,130 +121,85 @@ async fn create_flag_creates_dir_and_spawns_pty() {
 }
 
 // ---------------------------------------------------------------------------
-// Case (b): ?new=<outside>&create=1 → POLICY close, dir NOT created
+// Case (b): create=1 + missing OUTSIDE workspace → now ALLOWED (full freedom).
+// The cage is gone: creation is permitted anywhere, gated only by create=1.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn create_flag_outside_workspace_root_is_rejected() {
+async fn create_flag_outside_workspace_root_is_allowed() {
     let (base, _workspace) = start_with_workspace().await;
 
-    // Use a path that cannot be under the workspace tempdir.
-    let outside = "/tmp/evil-eigen-test-dir";
-    // Clean up any pre-existing path from a prior run.
-    let _ = std::fs::remove_dir_all(outside);
+    // A path outside the workspace tempdir, in its own throwaway tempdir.
+    let outside_root = tempfile::tempdir().unwrap();
+    let outside = outside_root.path().join("made-outside-workspace");
+    assert!(!outside.exists(), "pre: dir must not exist");
 
+    let outside_str = outside.to_str().unwrap();
     let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
         &base,
-        &format!("new={outside}&create=1"),
-    ))
-    .await
-    .expect("ws upgrade ok even for an outside path");
-
-    // Expect the socket to close with a POLICY reason — not a pty hello.
-    let mut got_policy_close = false;
-    for _ in 0..20 {
-        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
-            Ok(Some(Ok(Message::Close(Some(frame))))) => {
-                got_policy_close = frame.reason.contains("workspace root");
-                break;
-            }
-            Ok(Some(Ok(Message::Close(None)))) | Ok(None) => {
-                // Plain close without a reason frame: also a rejection.
-                got_policy_close = true;
-                break;
-            }
-            Ok(Some(Ok(Message::Text(_)))) => {
-                // If we got a pty hello, the spawn happened — fail the test.
-                break;
-            }
-            Ok(Some(Ok(_))) => continue,
-            _ => break,
-        }
-    }
-    assert!(
-        got_policy_close,
-        "create outside workspace_root must close the socket with a POLICY reason"
-    );
-
-    // The directory must NOT have been created.
-    assert!(
-        !std::path::Path::new(outside).exists(),
-        "daemon must NOT create a directory outside workspace_root"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Case (b2): `..` traversal — ?new=<root>/../evil&create=1 → rejected
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn create_flag_dotdot_traversal_is_rejected() {
-    let (base, workspace) = start_with_workspace().await;
-
-    // Build a path that uses `..` to escape the workspace root.
-    // e.g. if workspace is /tmp/abc123, this is /tmp/abc123/../evil-traverse.
-    let traversal = workspace
-        .path()
-        .join("..")
-        .join("eigen-evil-traverse-test");
-    let traversal_str = traversal.to_str().unwrap();
-    let _ = std::fs::remove_dir_all(traversal_str);
-
-    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
-        &base,
-        &format!("new={traversal_str}&create=1"),
+        &format!("new={outside_str}&create=1"),
     ))
     .await
     .expect("ws upgrade ok");
 
-    let mut got_close = false;
-    for _ in 0..20 {
-        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
-            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
-                got_close = true;
-                break;
-            }
-            Ok(Some(Ok(Message::Text(_)))) => {
-                // Got pty hello — traversal was allowed. Test fails.
-                break;
-            }
-            Ok(Some(Ok(_))) => continue,
-            _ => break,
-        }
-    }
+    let hello = first_text_or_close(&mut ws).await;
     assert!(
-        got_close,
-        "create with .. traversal must close the socket (rejected)"
+        hello.is_some(),
+        "create=1 outside the workspace must now succeed (full-freedom policy)"
+    );
+    assert!(
+        outside.is_dir(),
+        "daemon must create the directory outside workspace_root"
     );
 
-    // The traversal target must NOT have been created.
-    // The `..` resolves: workspace.parent() / "eigen-evil-traverse-test".
-    let parent = workspace.path().parent().unwrap();
-    let actual = parent.join("eigen-evil-traverse-test");
-    assert!(
-        !actual.exists(),
-        "daemon must NOT create a directory via .. traversal: {actual:?}"
-    );
+    ws.close(None).await.ok();
 }
 
 // ---------------------------------------------------------------------------
-// Case (c): no create flag + missing dir → current behavior pinned
-//
-// When `create` is absent and the cwd doesn't exist, the spawn may fail
-// (portable-pty returns an error) or succeed depending on the OS. Either
-// way the directory must NOT have been created by the daemon.
-// We only pin that the directory stays missing — not the spawn outcome.
+// Case (b2): `..` in the path is normalized (not a cage to escape) and created.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn no_create_flag_missing_dir_stays_missing() {
+async fn create_flag_normalizes_dotdot_and_creates() {
+    let (base, _workspace) = start_with_workspace().await;
+
+    // <tmp>/a/../b normalizes to <tmp>/b.
+    let root = tempfile::tempdir().unwrap();
+    let dotted = root.path().join("a").join("..").join("eigen-normalized");
+    let resolved = root.path().join("eigen-normalized");
+    assert!(!resolved.exists(), "pre: normalized target must not exist");
+
+    let dotted_str = dotted.to_str().unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
+        &base,
+        &format!("new={dotted_str}&create=1"),
+    ))
+    .await
+    .expect("ws upgrade ok");
+
+    let hello = first_text_or_close(&mut ws).await;
+    assert!(hello.is_some(), "normalized `..` path must spawn");
+    assert!(
+        resolved.is_dir(),
+        "daemon must create the normalized directory: {resolved:?}"
+    );
+
+    ws.close(None).await.ok();
+}
+
+// ---------------------------------------------------------------------------
+// Case (c): create=0 + missing dir → socket closes "no such directory",
+// dir stays missing (we won't spawn claude in a cwd that isn't there).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn no_create_flag_missing_dir_is_refused() {
     let (base, workspace) = start_with_workspace().await;
 
     let new_path = workspace.path().join("nonexistent-no-create");
     assert!(!new_path.exists(), "pre: dir must not exist");
 
     let new_str = new_path.to_str().unwrap();
-    // Connect WITHOUT &create=1; consume any frame (pty hello or close).
     let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
         &base,
         &format!("new={new_str}"),
@@ -244,31 +207,26 @@ async fn no_create_flag_missing_dir_stays_missing() {
     .await
     .expect("ws upgrade ok");
 
-    // Drain a few frames (whatever the daemon sends — we don't prescribe outcome).
-    for _ in 0..5 {
-        match tokio::time::timeout(Duration::from_millis(500), ws.next()).await {
-            Ok(Some(Ok(_))) => continue,
-            _ => break,
-        }
-    }
-    ws.close(None).await.ok();
-
-    // The directory must remain missing — no create without the flag.
+    let reason = close_reason(&mut ws).await;
+    assert!(
+        matches!(&reason, Some(r) if r.contains("no such directory")),
+        "create=0 + missing dir must close with 'no such directory', got {reason:?}"
+    );
     assert!(
         !new_path.exists(),
-        "directory must NOT be created when create flag is absent"
+        "directory must NOT be created when the create flag is absent"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Case (d): ?new=<workspace_root>&create=1 → rejected (root itself is the target)
+// Case (d): create=1 + EXISTING dir → spawns as-is (create_dir_all is idempotent),
+// the dir is untouched. Using the workspace root itself as the (existing) target.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn create_flag_with_workspace_root_as_target_is_rejected() {
+async fn create_flag_with_existing_dir_spawns() {
     let (base, workspace) = start_with_workspace().await;
 
-    // new= is the workspace root itself — within containment, but equal to root.
     let root_str = workspace.path().to_str().unwrap();
     let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
         &base,
@@ -277,28 +235,12 @@ async fn create_flag_with_workspace_root_as_target_is_rejected() {
     .await
     .expect("ws upgrade ok");
 
-    // Expect a POLICY close — not a pty hello.
-    let mut got_policy_close = false;
-    for _ in 0..20 {
-        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
-            Ok(Some(Ok(Message::Close(Some(frame))))) => {
-                got_policy_close = frame.reason.contains("workspace root");
-                break;
-            }
-            Ok(Some(Ok(Message::Close(None)))) | Ok(None) => {
-                got_policy_close = true;
-                break;
-            }
-            Ok(Some(Ok(Message::Text(_)))) => {
-                // pty hello received — spawn happened. Test fails.
-                break;
-            }
-            Ok(Some(Ok(_))) => continue,
-            _ => break,
-        }
-    }
+    let hello = first_text_or_close(&mut ws).await;
     assert!(
-        got_policy_close,
-        "create with new=<workspace_root> must close the socket with a POLICY reason"
+        hello.is_some(),
+        "create=1 on an existing dir must spawn (idempotent mkdir)"
     );
+    assert!(workspace.path().is_dir(), "the existing dir must remain");
+
+    ws.close(None).await.ok();
 }
