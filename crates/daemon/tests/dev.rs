@@ -1,14 +1,15 @@
-//! Dev mode: `GET /` injects a live-reload hook; prod serves the static index untouched.
+//! Dev mode: `GET /` injects a live-reload hook into the eigenform (webterm) index;
+//! prod serves the static index untouched. The dev target is the root app (`term_dir`).
 
 use eigenform_daemon::{app, Config};
 
-fn cfg(web_dir: std::path::PathBuf, dev: bool) -> Config {
+fn cfg(term_dir: std::path::PathBuf, dev: bool) -> Config {
     Config {
         program: "cat".into(),
         args: vec![],
         cwd: None,
-        web_dir: Some(web_dir),
-        term_dir: None,
+        web_dir: None,
+        term_dir: Some(term_dir),
         projects_dir: None,
         sessions_dir: None,
         state_dir: None,

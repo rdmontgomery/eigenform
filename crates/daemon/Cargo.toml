@@ -4,8 +4,16 @@ version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+# Bake the built webterm/dist into the binary for a self-contained `eigenform`.
+# Off by default so `cargo build`/`cargo test` need no built frontend; release and
+# `cargo install` turn it on (after `just build`). See `mod embedded` in lib.rs.
+embed-assets = ["dep:rust-embed", "dep:mime_guess"]
+
 [dependencies]
 anyhow       = { workspace = true }
+rust-embed   = { version = "8", optional = true, features = ["include-exclude"] }
+mime_guess   = { version = "2", optional = true }
 thiserror    = { workspace = true }
 portable-pty = { workspace = true }
 vt100        = { workspace = true }

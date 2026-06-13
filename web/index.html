@@ -10,11 +10,12 @@
       href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,200;0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <!-- esbuild bundles woland.css + xterm.css into /dist/main.css -->
-    <link rel="stylesheet" href="/dist/main.css" />
+    <!-- woland is now mounted at /woland (paused, dev-only). Asset URLs are
+         /woland/-prefixed so bare /woland (browser base at /) resolves them. -->
+    <link rel="stylesheet" href="/woland/dist/main.css" />
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/dist/main.js"></script>
+    <script type="module" src="/woland/dist/main.js"></script>
   </body>
 </html>

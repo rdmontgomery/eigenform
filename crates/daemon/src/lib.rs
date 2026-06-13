@@ -22,6 +22,40 @@ use serde::Deserialize;
 
 pub mod host;
 
+/// Webterm assets baked into the binary so an installed `eigenform` is self-contained
+/// (no Node, no build, no `--term` flag). Only compiled with `--features embed-assets`,
+/// which release/`cargo install` builds turn on after `webterm/dist` is built; a plain
+/// `cargo build`/`cargo test` leaves it off, so the daemon needs no built frontend to
+/// compile. rust-embed bakes the bytes in release and reads them from disk in debug.
+#[cfg(feature = "embed-assets")]
+mod embedded {
+    use axum::http::{header, StatusCode, Uri};
+    use axum::response::{Html, IntoResponse, Response};
+    use rust_embed::RustEmbed;
+
+    #[derive(RustEmbed)]
+    #[folder = "../../webterm"]
+    #[include = "index.html"]
+    #[include = "dist/**"]
+    struct Assets;
+
+    /// Root fallback: serve an embedded asset by its URL path, else the index (SPA
+    /// fallback). API/pty routes are registered before this fallback, so they always win.
+    pub async fn serve(uri: Uri) -> Response {
+        let rel = uri.path().trim_start_matches('/');
+        if !rel.is_empty() {
+            if let Some(file) = Assets::get(rel) {
+                let mime = mime_guess::from_path(rel).first_or_octet_stream();
+                return ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response();
+            }
+        }
+        match Assets::get("index.html") {
+            Some(f) => Html(String::from_utf8_lossy(&f.data).into_owned()).into_response(),
+            None => (StatusCode::NOT_FOUND, "no embedded index").into_response(),
+        }
+    }
+}
+
 /// What the daemon runs when a terminal connects. For slice 1 this is a fixed command
 /// (a shell for the demo, a dummy in tests) — NOT arbitrary exec from the request.
 #[derive(Clone, Debug)]
@@ -29,9 +63,11 @@ pub struct Config {
     pub program: String,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
-    /// Directory of static frontend assets to serve at `/`. None = API only.
+    /// Directory of the legacy woland workbench, served (paused, dev-only) at `/woland`.
+    /// None = not mounted.
     pub web_dir: Option<PathBuf>,
-    /// Directory of the webterm (terminal-centerpiece) app to serve at `/term`. None = not mounted.
+    /// Directory of the eigenform terminal app served at `/` (the front door).
+    /// None = serve the embedded build (feature `embed-assets`) or API only.
     pub term_dir: Option<PathBuf>,
     /// `~/.claude/projects` (or a test dir) for session resolution. None = no transcript.
     pub projects_dir: Option<PathBuf>,
@@ -57,9 +93,10 @@ pub struct AppState {
     pub host: Arc<host::SessionHost>,
 }
 
-/// Build the woland HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a pty;
-/// `term_dir`, if set, is served at `/term` (mounted before the woland fallback);
-/// `web_dir`, if set, is served as static files at `/`.
+/// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
+/// pty. The eigenform terminal app is the root (`/`): served from `term_dir` when given,
+/// otherwise from the embedded build (feature `embed-assets`). The legacy woland
+/// workbench, when `web_dir` is set, mounts at `/woland` (paused, dev-only).
 pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty_ws))
@@ -76,27 +113,38 @@ pub fn app(config: Config) -> Router {
         .route("/api/recent", get(recent_route))
         .route("/api/candidates", get(candidates_route))
         .route("/api/watch/:uuid", get(watch_route));
-    if let Some(term_dir) = &config.term_dir {
-        let index = term_dir.join("index.html");
-        router = router.nest_service(
-            "/term",
-            tower_http::services::ServeDir::new(term_dir)
-                .fallback(tower_http::services::ServeFile::new(index)),
-        );
-    }
+
+    // Legacy woland, paused: mounts at /woland only when a build dir is given.
     if let Some(web_dir) = &config.web_dir {
-        // Dev routes take precedence over the static fallback.
-        if config.dev {
-            router = router
-                .route("/", get(dev_index))
-                .route("/api/dev/reload", get(dev_reload));
-        }
         let index = web_dir.join("index.html");
-        router = router.fallback_service(
+        router = router.nest_service(
+            "/woland",
             tower_http::services::ServeDir::new(web_dir)
                 .fallback(tower_http::services::ServeFile::new(index)),
         );
     }
+
+    // eigenform (the terminal app) is the front door at `/`.
+    // Dev routes take precedence over the static fallback so the reload hook injects.
+    if config.dev && config.term_dir.is_some() {
+        router = router
+            .route("/", get(dev_index))
+            .route("/api/dev/reload", get(dev_reload));
+    }
+    if let Some(term_dir) = &config.term_dir {
+        let index = term_dir.join("index.html");
+        router = router.fallback_service(
+            tower_http::services::ServeDir::new(term_dir)
+                .fallback(tower_http::services::ServeFile::new(index)),
+        );
+    } else {
+        // No on-disk build: serve the assets baked into the binary, if present.
+        #[cfg(feature = "embed-assets")]
+        {
+            router = router.fallback(embedded::serve);
+        }
+    }
+
     let state = AppState {
         config: Arc::new(config),
         host: Arc::new(host::SessionHost::default()),
@@ -495,13 +543,13 @@ async fn watch_route(
     watch_sse(watch_dir, target)
 }
 
-/// `GET /` in dev mode: the static index with a live-reload hook injected.
+/// `GET /` in dev mode: the eigenform index with a live-reload hook injected.
 async fn dev_index(State(state): State<AppState>) -> Response {
     let cfg = &state.config;
-    let Some(web_dir) = &cfg.web_dir else {
-        return (StatusCode::NOT_FOUND, "no web dir").into_response();
+    let Some(term_dir) = &cfg.term_dir else {
+        return (StatusCode::NOT_FOUND, "no term dir").into_response();
     };
-    let Ok(html) = std::fs::read_to_string(web_dir.join("index.html")) else {
+    let Ok(html) = std::fs::read_to_string(term_dir.join("index.html")) else {
         return (StatusCode::NOT_FOUND, "no index.html").into_response();
     };
     let injected = html.replacen(
@@ -515,10 +563,10 @@ async fn dev_index(State(state): State<AppState>) -> Response {
 /// `GET /api/dev/reload` — SSE that fires whenever the built frontend bundle changes.
 async fn dev_reload(State(state): State<AppState>) -> Response {
     let cfg = &state.config;
-    let Some(web_dir) = &cfg.web_dir else {
-        return (StatusCode::NOT_FOUND, "no web dir").into_response();
+    let Some(term_dir) = &cfg.term_dir else {
+        return (StatusCode::NOT_FOUND, "no term dir").into_response();
     };
-    watch_sse(web_dir.join("dist"), None)
+    watch_sse(term_dir.join("dist"), None)
 }
 
 /// SSE that emits a `change` event when files in `watch_dir` are written. If `target` is

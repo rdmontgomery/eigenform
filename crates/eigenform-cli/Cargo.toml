@@ -8,6 +8,11 @@ rust-version.workspace = true
 name = "eigenform"
 path = "src/main.rs"
 
+[features]
+# Forward to the daemon: bake the webterm build into the binary. Turn on for
+# release / `cargo install` (after `just build`) to get a self-contained `eigenform`.
+embed-assets = ["eigenform-daemon/embed-assets"]
+
 [dependencies]
 anyhow         = { workspace = true }
 clap           = { workspace = true }

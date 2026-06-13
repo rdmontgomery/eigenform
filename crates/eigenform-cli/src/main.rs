@@ -10,8 +10,9 @@ const DEFAULT_PORT: u16 = 4317;
 #[derive(Parser, Debug)]
 #[command(name = "eigenform", version, about = "control surface over Claude Code sessions")]
 struct Cli {
+    /// With no subcommand, `eigenform` starts the daemon and opens the browser.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -56,7 +57,7 @@ enum Cmd {
         #[arg(long)]
         workspace: Option<PathBuf>,
     },
-    /// run woland: the browser workbench (serves a pty terminal at localhost)
+    /// run the eigenform daemon (serves the browser app + pty terminal at localhost)
     Daemon {
         /// port to bind on localhost
         #[arg(long, default_value_t = DEFAULT_PORT)]
@@ -64,10 +65,11 @@ enum Cmd {
         /// command to run in the pty (default: $SHELL, else bash). NOT claude unless you ask.
         #[arg(long)]
         cmd: Option<String>,
-        /// directory of built frontend assets (default: ./web)
+        /// directory of the legacy woland build to serve at /woland (default: ./web if built)
         #[arg(long)]
         web: Option<PathBuf>,
-        /// directory of the webterm (terminal-centerpiece) app assets to serve at /term
+        /// directory of the eigenform (webterm) build to serve at / (default: ./webterm if
+        /// built, else the build baked into the binary)
         #[arg(long)]
         term: Option<PathBuf>,
         /// code root for the new-session launcher (default: ~/projects)
@@ -76,6 +78,9 @@ enum Cmd {
         /// dev mode: inject the live-reload hook and serve /api/dev/reload
         #[arg(long)]
         dev: bool,
+        /// open the app in a browser once the daemon is up
+        #[arg(long)]
+        open: bool,
     },
 }
 
@@ -209,7 +214,12 @@ enum SkillsAction {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.cmd {
+    let Some(cmd) = cli.cmd else {
+        // Zero-arg `eigenform`: the one-command launch. Start the daemon with
+        // auto-detected assets and open the browser.
+        return daemon(DEFAULT_PORT, None, None, None, None, false, true);
+    };
+    match cmd {
         Cmd::Skills { action } => match action {
             SkillsAction::Tree { cwd } => skills_tree(cwd),
             SkillsAction::List { all_projects } => skills_list(all_projects),
@@ -221,7 +231,7 @@ fn main() -> Result<()> {
         Cmd::Surgery { action } => surgery(action),
         Cmd::Ptys { port } => ptys_list(port),
         Cmd::Candidates { workspace } => candidates_list(workspace),
-        Cmd::Daemon { port, cmd, web, term, workspace, dev } => daemon(port, cmd, web, term, workspace, dev),
+        Cmd::Daemon { port, cmd, web, term, workspace, dev, open } => daemon(port, cmd, web, term, workspace, dev, open),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
             SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
@@ -540,7 +550,15 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     Ok(())
 }
 
-fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<PathBuf>, workspace: Option<PathBuf>, dev: bool) -> Result<()> {
+fn daemon(
+    port: u16,
+    cmd: Option<String>,
+    web: Option<PathBuf>,
+    term: Option<PathBuf>,
+    workspace: Option<PathBuf>,
+    dev: bool,
+    open: bool,
+) -> Result<()> {
     let cwd = env::current_dir().context("could not read current dir")?;
 
     // The pty command: explicit --cmd, else the user's shell, else bash. Not claude
@@ -555,16 +573,19 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
     let term = term.map(|p| absolutize(&cwd, p));
     let workspace = workspace.map(|p| absolutize(&cwd, p));
 
-    // Frontend assets: explicit --web, else ./web if it has a built bundle.
+    // eigenform (the root app): explicit --term, else ./webterm if built. When neither
+    // exists, term_dir stays None and the daemon serves the build baked into the binary
+    // (feature `embed-assets`); a dev binary built without that feature serves API only.
+    let term_dir = term.or_else(|| {
+        let candidate = cwd.join("webterm");
+        candidate.join("dist/main.js").is_file().then_some(candidate)
+    });
+
+    // woland (legacy, paused): explicit --web, else ./web if built. Served at /woland.
     let web_dir = web.or_else(|| {
         let candidate = cwd.join("web");
         candidate.join("dist/main.js").is_file().then_some(candidate)
     });
-    if web_dir.is_none() {
-        eprintln!(
-            "note: no built frontend found (run `just build-web`); serving the /pty API only"
-        );
-    }
 
     // Workspace root: explicit --workspace, else ~/projects if it exists, else None.
     let workspace_root = workspace.or_else(|| {
@@ -573,23 +594,21 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
             .filter(|p| p.is_dir())
     });
 
-    // Warn early if --term points at a directory without an index.html so the
-    // user sees a clear diagnosis instead of silent 404s.
-    if let Some(ref t) = term {
-        if !t.join("index.html").is_file() {
-            eprintln!(
-                "warning: --term dir {} has no index.html; /term will serve 404s",
-                t.display()
-            );
-        }
+    if term_dir.is_none() && cfg!(not(feature = "embed-assets")) {
+        // Only meaningful for dev binaries; an installed (embedded) binary always has the app.
+        eprintln!(
+            "note: no eigenform build found (run `just build`); serving the API only"
+        );
     }
+
+    let serving_embedded = term_dir.is_none();
 
     let config = eigenform_daemon::Config {
         program,
         args: Vec::new(),
         cwd: Some(cwd),
         web_dir,
-        term_dir: term,
+        term_dir,
         projects_dir: Some(projects_dir()?),
         sessions_dir: Some(sessions_dir()?),
         state_dir: Some(state_dir()?),
@@ -597,14 +616,44 @@ fn daemon(port: u16, cmd: Option<String>, web: Option<PathBuf>, term: Option<Pat
         dev,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    println!("woland → http://{addr}{}", if dev { "  (dev: live-reload on)" } else { "" });
-    if config.term_dir.is_some() {
-        println!("term   → http://{addr}/term");
+    let url = format!("http://{addr}");
+    println!(
+        "eigenform → {url}{}{}",
+        if dev { "  (dev: live-reload on)" } else { "" },
+        if serving_embedded { "  (embedded build)" } else { "" },
+    );
+    if config.web_dir.is_some() {
+        println!("woland (paused) → {url}/woland");
+    }
+
+    if open {
+        open_browser(&url);
     }
 
     let rt = tokio::runtime::Runtime::new().context("starting tokio runtime")?;
     rt.block_on(eigenform_daemon::serve(addr, config))
         .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Best-effort: open `url` in the user's browser. The URL is always printed, so a
+/// failure here is silent — common on headless hosts and bare WSL without wslu.
+fn open_browser(url: &str) {
+    let candidates: &[(&str, &[&str])] = if cfg!(target_os = "macos") {
+        &[("open", &[])]
+    } else if cfg!(target_os = "windows") {
+        &[("cmd", &["/c", "start", ""])]
+    } else {
+        // Linux/WSL: wslview (wslu) hands off to the Windows browser; xdg-open otherwise.
+        &[("wslview", &[]), ("xdg-open", &[])]
+    };
+    for (bin, prefix) in candidates {
+        let mut c = std::process::Command::new(bin);
+        c.args(prefix.iter().copied()).arg(url);
+        c.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        if c.spawn().is_ok() {
+            return;
+        }
+    }
 }
 
 fn sessions_diff(a: String, b: String, render: RenderFormat) -> Result<()> {
