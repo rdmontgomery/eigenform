@@ -19,6 +19,17 @@ eigenform           # starts the daemon and opens the app in your browser
 
 Requires a Rust toolchain (and Node only at build time). `cargo install` builds a release binary with `--features embed-assets`, which is what makes it self-contained.
 
+### Alias `ef`
+
+The binary is `eigenform`; most people alias it to `ef`. Add it to your shell rc:
+
+```sh
+echo 'alias ef=eigenform' >> ~/.zshrc   # or ~/.bashrc
+source ~/.zshrc
+```
+
+Then `ef` launches the app and `ef daemon`, `ef sessions`, `ef surgery …` all work.
+
 ## Develop
 
 ```sh
@@ -31,7 +42,7 @@ In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so 
 
 ## Status
 
-Pre-implementation. The design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md). Spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
+Early but running. The browser app — a full-fidelity terminal centerpiece with a session host, launcher, and transcript drawer — is implemented and self-contained via `just install`. The context-surgery, forest, render, skills, and memory crates are built and tested; the eigenform graph is still ahead. The original design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md), and spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
 
 ## What this is
 
