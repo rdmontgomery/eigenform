@@ -830,20 +830,31 @@ export function mountShell(appEl: HTMLElement): void {
       lastRows = buildRoster(ptys, forest, overrides);
       renderRail();
 
-      // Update tab state badges + cwd from live pty data.
+      // Update tab state badges + cwd + uuid from live pty data.
       for (const t of tabs) {
         if (!t.descriptor.ptyId || t.dead) continue;
         const live = ptys.find((p) => p.id === t.descriptor.ptyId);
         if (live) {
           t.state = live.state;
+          let changed = false;
           if (live.cwd && !t.descriptor.cwd) {
             t.descriptor = { ...t.descriptor, cwd: live.cwd };
-            saveTabs();
+            changed = true;
           }
+          // A fresh session's uuid is resolved late (the JSONL/pid watcher); adopt it
+          // here so the transcript drawer can mount — without this the drawer stays on
+          // its "waiting for a session uuid" placeholder forever.
+          if (live.uuid && !t.descriptor.uuid) {
+            t.descriptor = { ...t.descriptor, uuid: live.uuid };
+            changed = true;
+          }
+          if (changed) saveTabs();
         }
       }
       renderTabStrip();
       renderTermHeader();
+      // A newly-adopted uuid on the active tab means the drawer can now mount.
+      syncDrawer();
     } catch {
       // Daemon not reachable — keep stale rail.
     }
