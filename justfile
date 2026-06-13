@@ -40,23 +40,29 @@ spike-04:
 
 # --- woland (browser workbench) ------------------------------------------
 
-# Build the TypeScript + xterm.js frontend bundle (web/dist).
-build-web:
+# --- eigenform (browser app) ---------------------------------------------
+
+# Build the eigenform (webterm) bundle → webterm/dist (served at /, baked in by install).
+build:
+    cd webterm && npm install && npm run build
+
+# Build the legacy woland workbench bundle → web/dist (paused; served at /woland).
+build-woland:
     cd web && npm install && npm run build
 
-# Run woland: a live pty (your shell) rendered in the browser. Open the URL it prints.
-# Spawns your $SHELL, NOT claude — wiring claude --resume is a later, user-initiated slice.
-woland port="4317": build-web
-    cargo run -q -p eigenform-cli -- daemon --port {{port}}
+# Build the app, start the daemon, open the browser at / (pty spawns $SHELL, never claude).
+run port="4317": build
+    cargo run -q -p eigenform-cli -- daemon --port {{port}} --open
 
-# Hot-reload dev loop: esbuild --watch rebuilds the bundle; cargo-watch rebuilds+restarts
-# the daemon on Rust changes; the browser live-reloads on frontend changes (dev mode).
-# Edit .ts → browser refreshes; edit .rs → daemon restarts. claude never auto-respawns.
-# Requires: cargo install cargo-watch
+# Install a self-contained `eigenform` (assets baked in) onto your PATH — run it from anywhere.
+install: build
+    cargo install --path crates/eigenform-cli --features embed-assets --locked
+
+# Hot-reload dev loop (needs `cargo install cargo-watch`): .ts → browser refresh, .rs → daemon restart.
 dev port="4317":
     #!/usr/bin/env bash
     set -euo pipefail
-    cd web && npm install >/dev/null 2>&1
+    cd webterm && npm install >/dev/null 2>&1
     npx esbuild src/main.ts --bundle --outdir=dist --format=esm --watch &
     ESBUILD=$!
     trap "kill $ESBUILD 2>/dev/null || true" EXIT
