@@ -15,7 +15,15 @@ just install        # builds the frontend, then `cargo install` with assets embe
 eigenform           # starts the daemon and opens the app in your browser
 ```
 
-`eigenform` with no arguments picks a port (4317), serves the app at `http://127.0.0.1:4317/`, and opens it. For scripting, `eigenform daemon` is the explicit form (`--port`, `--open`, `--cmd`, `--workspace`). The pty spawns your `$SHELL`; **`claude` is only ever launched from inside the app**, never by the daemon.
+`eigenform` with no arguments is the one-command launch: if a daemon is already running it just opens the browser; otherwise it starts the daemon **in the background** (port 4317), opens the app, and returns your terminal. The daemon outlives the launching shell on purpose — it hosts your Claude sessions, so closing the terminal must not kill them. Run it again any time to reopen the app; it won't start a second daemon.
+
+```sh
+eigenform           # launch (or reopen) the app — backgrounds the daemon
+eigenform status    # is a daemon running? (pid + version)
+eigenform stop      # shut the daemon down (ends the sessions it hosts)
+```
+
+For a foreground daemon (dev, debugging, scripting) use the explicit `eigenform daemon` (`--port`, `--open`, `--cmd`, `--workspace`, `--dev`); there `Ctrl-C` stops it. Background logs go to `~/.eigenform/state/daemon.log`. The pty spawns your `$SHELL`; **`claude` is only ever launched from inside the app**, never by the daemon.
 
 ### Prerequisites
 

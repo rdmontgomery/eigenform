@@ -113,6 +113,7 @@ pub fn app(config: Config) -> Router {
         .route("/api/recent", get(recent_route))
         .route("/api/candidates", get(candidates_route))
         .route("/api/path", get(path_probe_route))
+        .route("/api/health", get(health_route))
         .route("/api/watch/:uuid", get(watch_route));
 
     // Legacy woland, paused: mounts at /woland only when a build dir is given.
@@ -523,6 +524,18 @@ async fn candidates_route(State(state): State<AppState>) -> Response {
         })
         .collect();
     axum::Json(items).into_response()
+}
+
+/// `GET /api/health` — liveness + identity marker. The `eigenform` launcher probes this
+/// to decide whether a daemon is already up (reuse it) vs. the port being held by some
+/// other process, and `eigenform stop` reads `pid` to terminate the running daemon.
+async fn health_route() -> Response {
+    axum::Json(serde_json::json!({
+        "app": "eigenform",
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+    }))
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]

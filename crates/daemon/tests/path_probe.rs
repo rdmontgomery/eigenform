@@ -31,6 +31,16 @@ async fn start(cfg: Config) -> String {
 }
 
 #[tokio::test]
+async fn health_route_identifies_eigenform_with_pid() {
+    let base = start(cfg()).await;
+    let body = helpers::http_get(&base, "/api/health").await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["app"], "eigenform", "marker the launcher keys reuse on");
+    assert_eq!(v["pid"], std::process::id(), "pid the `stop` command terminates");
+    assert!(v["version"].is_string(), "version string present");
+}
+
+#[tokio::test]
 async fn existing_directory_reports_exists_and_isdir() {
     let dir = tempfile::tempdir().unwrap();
     let base = start(cfg()).await;

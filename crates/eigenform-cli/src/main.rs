@@ -82,6 +82,18 @@ enum Cmd {
         #[arg(long)]
         open: bool,
     },
+    /// stop the running background daemon (and the sessions it hosts)
+    Stop {
+        /// daemon port to stop
+        #[arg(long, default_value_t = DEFAULT_PORT)]
+        port: u16,
+    },
+    /// report whether a background daemon is running
+    Status {
+        /// daemon port to check
+        #[arg(long, default_value_t = DEFAULT_PORT)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -215,9 +227,10 @@ enum SkillsAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let Some(cmd) = cli.cmd else {
-        // Zero-arg `eigenform`: the one-command launch. Start the daemon with
-        // auto-detected assets and open the browser.
-        return daemon(DEFAULT_PORT, None, None, None, None, false, true);
+        // Zero-arg `eigenform`: the one-command launch. Reuse a running daemon if one
+        // is up, else start it detached so the terminal is freed and the hosted
+        // sessions survive closing it. `eigenform daemon` is still the foreground form.
+        return launch(DEFAULT_PORT);
     };
     match cmd {
         Cmd::Skills { action } => match action {
@@ -232,6 +245,8 @@ fn main() -> Result<()> {
         Cmd::Ptys { port } => ptys_list(port),
         Cmd::Candidates { workspace } => candidates_list(workspace),
         Cmd::Daemon { port, cmd, web, term, workspace, dev, open } => daemon(port, cmd, web, term, workspace, dev, open),
+        Cmd::Stop { port } => stop(port),
+        Cmd::Status { port } => status(port),
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
             SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
@@ -638,6 +653,155 @@ fn daemon(
     let rt = tokio::runtime::Runtime::new().context("starting tokio runtime")?;
     rt.block_on(eigenform_daemon::serve(addr, config))
         .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Health/identity of a running daemon, from `GET /api/health`.
+struct DaemonHealth {
+    pid: u32,
+    version: String,
+}
+
+/// Probe `/api/health`; `Some` iff an *eigenform* daemon answers on `port` (a different
+/// app on the port, or nothing, yields `None`).
+fn health_probe(port: u16) -> Option<DaemonHealth> {
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let resp = ureq::get(&url)
+        .timeout(std::time::Duration::from_millis(500))
+        .call()
+        .ok()?;
+    let v: serde_json::Value = resp.into_json().ok()?;
+    if v.get("app").and_then(|a| a.as_str()) != Some("eigenform") {
+        return None; // something else is on this port
+    }
+    Some(DaemonHealth {
+        pid: v.get("pid").and_then(|p| p.as_u64())? as u32,
+        version: v
+            .get("version")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+/// Zero-arg `eigenform`: reuse a running daemon, else start one detached and open the app.
+fn launch(port: u16) -> Result<()> {
+    let url = format!("http://127.0.0.1:{port}");
+    if health_probe(port).is_some() {
+        println!("eigenform → {url}  (already running) — opening browser");
+        open_browser(&url);
+        return Ok(());
+    }
+
+    // Nothing of ours is answering. Confirm the port is actually free — if another
+    // process holds it, say so rather than spawn a daemon that can't bind.
+    match std::net::TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => drop(listener), // free; release it for the child to claim
+        Err(_) => anyhow::bail!(
+            "port {port} is in use by another process — try `eigenform daemon --port <other>`"
+        ),
+    }
+
+    spawn_detached_daemon(port)?;
+
+    // Wait for the child to bind + answer (an embedded binary boots fast; allow ~6s).
+    let healthy = (0..30).find_map(|_| {
+        if let Some(h) = health_probe(port) {
+            return Some(h);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        None
+    });
+    match healthy {
+        Some(h) => {
+            println!("eigenform → {url}  (daemon started, pid {})", h.pid);
+            open_browser(&url);
+            Ok(())
+        }
+        None => anyhow::bail!(
+            "started the daemon but it never became healthy on {url} — see {}",
+            daemon_log_path()?.display()
+        ),
+    }
+}
+
+/// Spawn `eigenform daemon --port <port>` fully detached: its own process group, stdio
+/// redirected to a log file, no controlling terminal. The parent returns at once and the
+/// daemon (plus the sessions it hosts) outlives the launching shell.
+fn spawn_detached_daemon(port: u16) -> Result<()> {
+    let exe = std::env::current_exe().context("could not find the eigenform binary")?;
+    let log_path = daemon_log_path()?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("could not open daemon log {}", log_path.display()))?;
+    let log_err = log.try_clone().context("could not duplicate the log handle")?;
+
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("daemon").arg("--port").arg(port.to_string());
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::from(log));
+    cmd.stderr(std::process::Stdio::from(log_err));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // New process group → not a job of the launching shell, so closing the terminal
+        // (SIGHUP to the shell's foreground group) doesn't reach the daemon.
+        cmd.process_group(0);
+    }
+    cmd.spawn().context("could not start the background daemon")?;
+    Ok(())
+}
+
+fn daemon_log_path() -> Result<PathBuf> {
+    Ok(state_dir()?.join("daemon.log"))
+}
+
+/// `eigenform stop` — terminate the running daemon. Its child ptys get SIGHUP as the pty
+/// masters close, so the hosted claude sessions exit with it.
+fn stop(port: u16) -> Result<()> {
+    let Some(h) = health_probe(port) else {
+        println!("eigenform → not running on port {port}");
+        return Ok(());
+    };
+    send_term(h.pid)?;
+    for _ in 0..25 {
+        if health_probe(port).is_none() {
+            println!("eigenform → stopped (pid {})", h.pid);
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    anyhow::bail!("sent SIGTERM to pid {} but it's still answering on port {port}", h.pid)
+}
+
+/// `eigenform status` — one line on whether a daemon is up.
+fn status(port: u16) -> Result<()> {
+    match health_probe(port) {
+        Some(h) => println!(
+            "eigenform → running on http://127.0.0.1:{port}  (pid {}, v{})",
+            h.pid, h.version
+        ),
+        None => println!("eigenform → not running on port {port}"),
+    }
+    Ok(())
+}
+
+/// Send SIGTERM to `pid` via the POSIX `kill` utility (avoids a libc dependency;
+/// eigenform targets unix — macOS / Linux / WSL).
+fn send_term(pid: u32) -> Result<()> {
+    let status = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status()
+        .context("could not invoke `kill`")?;
+    if !status.success() {
+        anyhow::bail!("`kill -TERM {pid}` failed");
+    }
+    Ok(())
 }
 
 /// Best-effort: open `url` in the user's browser. The URL is always printed, so a
