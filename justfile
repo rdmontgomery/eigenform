@@ -57,6 +57,12 @@ run port="4317": build
 # Install a self-contained `eigenform` (assets baked in) onto your PATH — run it from anywhere.
 install: build
     cargo install --path crates/eigenform-cli --features embed-assets --locked
+    @echo
+    @echo "  installed 'eigenform'. add the short 'ef' alias to your shell:"
+    @echo
+    @echo "      echo 'alias ef=eigenform' >> ~/.zshrc && source ~/.zshrc"
+    @echo
+    @echo "  (use ~/.bashrc for bash) — then just run:  ef"
 
 # Hot-reload dev loop (needs `cargo install cargo-watch`): .ts → browser refresh, .rs → daemon restart.
 dev port="4317":
