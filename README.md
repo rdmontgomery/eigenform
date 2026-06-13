@@ -17,7 +17,25 @@ eigenform           # starts the daemon and opens the app in your browser
 
 `eigenform` with no arguments picks a port (4317), serves the app at `http://127.0.0.1:4317/`, and opens it. For scripting, `eigenform daemon` is the explicit form (`--port`, `--open`, `--cmd`, `--workspace`). The pty spawns your `$SHELL`; **`claude` is only ever launched from inside the app**, never by the daemon.
 
-Requires a Rust toolchain (and Node only at build time). `cargo install` builds a release binary with `--features embed-assets`, which is what makes it self-contained.
+### Prerequisites
+
+- **[Rust](https://rustup.rs)** toolchain (`cargo`) — builds the binary.
+- **[Node](https://nodejs.org)** — only at build time, to bundle the frontend.
+- **[`just`](https://github.com/casey/just)** — a command runner. If you know `make`, `just` is the same idea: the [`justfile`](justfile) holds named recipes (`install`, `run`, `dev`, `test`) and `just <recipe>` runs one. It's simpler than `make` — recipes are plain shell, no tabs-vs-spaces, no build-graph. Install it with:
+
+  ```sh
+  cargo install just          # any platform (you already have cargo)
+  # or: brew install just · apt install just · scoop install just
+  ```
+
+  Then `just --list` shows every recipe. `cargo install` builds a release binary with `--features embed-assets`, which is what makes it self-contained.
+
+Prefer not to install `just`? The recipes are thin — run the underlying commands yourself:
+
+```sh
+cd webterm && npm install && npm run build && cd ..        # = just build
+cargo install --path crates/eigenform-cli --features embed-assets --locked   # = just install
+```
 
 ### Alias `ef`
 
