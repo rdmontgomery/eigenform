@@ -46,6 +46,8 @@ import {
 import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
+import { mountReachMap } from "./reachmap.ts";
+import type { ReachHandle } from "./reachmap.ts";
 import { icon } from "./icons.ts";
 
 // Re-export so callers can reach pure helpers via either module.
@@ -60,6 +62,7 @@ const LS_KEY = "eigenform:term:tabs:v1";
 const LS_OVERRIDES = "eigenform:term:overrides:v1";
 const LS_THEME = "eigenform:term:theme:v1";
 const LS_DRAWER = "eigenform:term:drawer:v1";
+const LS_REACH = "eigenform:term:reach:v1";
 const LS_RAIL = "eigenform:term:rail:v1";
 const LS_FONT = "eigenform:term:font:v1";
 
@@ -352,6 +355,7 @@ export function mountShell(appEl: HTMLElement): void {
     renderTabStrip();
     renderTermHeader();
     syncDrawer();
+    syncReach();
     renderRail();
   }
 
@@ -381,6 +385,7 @@ export function mountShell(appEl: HTMLElement): void {
     renderTabStrip();
     renderTermHeader();
     syncDrawer();
+    syncReach();
     renderRail();
   }
 
@@ -477,7 +482,47 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
-  // Top bar: global controls (theme · drawer)
+  // Reach map — GLOBAL toggle, follows the active tab. A full-host overlay
+  // (above the drawer) showing the time-evolution spiderweb of tool reach.
+  // ------------------------------------------------------------------
+
+  let reachOpen = localStorage.getItem(LS_REACH) === "1";
+  /** Mounted reach overlay (uuid-bound), or null. */
+  let reachCurrent: { uuid: string; handle: ReachHandle } | null = null;
+
+  function setReachOpen(open: boolean) {
+    reachOpen = open;
+    localStorage.setItem(LS_REACH, open ? "1" : "0");
+    syncReach();
+  }
+
+  /** Reconcile the mounted reach overlay against (reachOpen, active tab). */
+  function syncReach() {
+    const tab = activeTab();
+    const uuid = reachOpen ? (tab?.descriptor.uuid ?? null) : null;
+
+    if (!reachOpen || tabs.length === 0 || !uuid) {
+      reachCurrent?.handle.close();
+      reachCurrent = null;
+      renderControls();
+      return;
+    }
+
+    if (reachCurrent?.uuid !== uuid) {
+      reachCurrent?.handle.close();
+      reachCurrent = {
+        uuid,
+        handle: mountReachMap(termHost, uuid, {
+          root: tab?.descriptor.cwd ?? undefined,
+          onClose: () => setReachOpen(false),
+        }),
+      };
+    }
+    renderControls();
+  }
+
+  // ------------------------------------------------------------------
+  // Top bar: global controls (theme · reach · drawer)
   // ------------------------------------------------------------------
 
   function renderControls() {
@@ -500,12 +545,17 @@ export function mountShell(appEl: HTMLElement): void {
 
     const sep = el("div", "topbar-sep");
 
+    const reachBtn = el("button", `icon-btn${reachOpen ? " icon-btn--active" : ""}`);
+    reachBtn.title = reachOpen ? "Hide reach map" : "Show reach map";
+    reachBtn.append(icon("reach", 16));
+    reachBtn.addEventListener("click", () => setReachOpen(!reachOpen));
+
     const drawerBtn = el("button", `icon-btn${drawerOpen ? " icon-btn--active" : ""}`);
     drawerBtn.title = drawerOpen ? "Hide transcript" : "Show transcript";
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, fontBtn, sep, drawerBtn);
+    controls.append(themeBtn, fontBtn, sep, reachBtn, drawerBtn);
   }
 
   // ------------------------------------------------------------------
@@ -742,7 +792,10 @@ export function mountShell(appEl: HTMLElement): void {
         saveTabs();
         renderTabStrip();
         // The active tab just gained a transcript — swap the placeholder out.
-        if (entry.id === activeTabId) syncDrawer();
+        if (entry.id === activeTabId) {
+          syncDrawer();
+          syncReach();
+        }
       },
       onExit() {
         entry.state = "exited";
@@ -1028,8 +1081,9 @@ export function mountShell(appEl: HTMLElement): void {
       }
       renderTabStrip();
       renderTermHeader();
-      // A newly-adopted uuid on the active tab means the drawer can now mount.
+      // A newly-adopted uuid on the active tab means the drawer + reach map can now mount.
       syncDrawer();
+      syncReach();
     } catch {
       // Daemon not reachable — keep stale rail.
     }
@@ -1074,6 +1128,7 @@ export function mountShell(appEl: HTMLElement): void {
     renderTabStrip();
     renderTermHeader();
     syncDrawer();
+    syncReach();
   }
 
   void boot();
