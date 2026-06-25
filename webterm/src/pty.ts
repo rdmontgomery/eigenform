@@ -24,20 +24,57 @@ const TERM_THEME = {
 };
 
 /**
+ * User-tunable terminal typography. xterm measures one glyph cell at open time
+ * and lays the whole grid out from it, so these must be settled BEFORE the first
+ * `term.open()` — see ensureTermFontsReady() in main.ts. The shell persists the
+ * live values (eigenform:term:font:v1) and re-applies them via applyFont().
+ */
+export interface FontSettings {
+  /** A CSS font-family stack — first installed/loaded family wins. */
+  family: string;
+  /** Cell font size in px. */
+  size: number;
+  /** Multiplier on the font size (xterm `lineHeight`). */
+  lineHeight: number;
+  /** Inter-cell tracking in px (xterm `letterSpacing`); may be negative. */
+  letterSpacing: number;
+}
+
+export const DEFAULT_FONT: FontSettings = {
+  family: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
+  size: 12.75,
+  lineHeight: 1.2,
+  letterSpacing: 0,
+};
+
+/**
  * Create a pre-configured Terminal + FitAddon pair.
  * The caller is responsible for `term.open(element)` and the initial `fit.fit()`.
  */
-export function newTerminal(): TermHandle {
+export function newTerminal(font: FontSettings = DEFAULT_FONT): TermHandle {
   const term = new Terminal({
-    fontFamily: '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace',
-    fontSize: 12.75,
-    lineHeight: 1.2,
+    fontFamily: font.family,
+    fontSize: font.size,
+    lineHeight: font.lineHeight,
+    letterSpacing: font.letterSpacing,
     cursorBlink: true,
     theme: TERM_THEME,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   return { term, fit };
+}
+
+/**
+ * Re-apply typography to a live terminal. Setting these options makes xterm
+ * re-measure the cell synchronously; the caller should `fit.fit()` afterwards so
+ * the grid (and the daemon, via the resulting resize) follows the new metrics.
+ */
+export function applyFont(term: Terminal, font: FontSettings): void {
+  term.options.fontFamily = font.family;
+  term.options.fontSize = font.size;
+  term.options.lineHeight = font.lineHeight;
+  term.options.letterSpacing = font.letterSpacing;
 }
 
 // ── Socket wiring ────────────────────────────────────────────────────────────

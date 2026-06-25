@@ -33,6 +33,7 @@ const PATHS: Record<string, string> = {
   skill: '<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z"/>',
   bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
   chevrons: '<path d="M6 5l6 6 6-6M6 12l6 6 6-6"/>',
+  type: '<path d="M5 7V5h14v2M12 5v14M9 19h6"/>',
 };
 
 /** Build an <svg> element for a named icon. Unknown names render empty. */
