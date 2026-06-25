@@ -734,6 +734,17 @@ async fn pty_ws(
     }
 
     let command = pty_command(&state.config, &query);
+
+    // Resume guard, mirroring the `new=` "no such directory" policy above: a session
+    // records the cwd it was born in. If the user renamed/moved/deleted that project, the
+    // recorded cwd is gone — spawning `claude` there silently lands in `$HOME` and
+    // `--resume` then can't find the session. Refuse up front with a clear reason instead.
+    if query.session.is_some() && resume_cwd_missing(&command) {
+        return ws.on_upgrade(move |socket| async move {
+            let _ = close_with_reason(socket, "session's project directory no longer exists").await;
+        });
+    }
+
     let host = Arc::clone(&state.host);
     ws.on_upgrade(move |socket| async move {
         let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
@@ -866,6 +877,15 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
         cwd: cfg.cwd.clone(),
         watch: None,
     }
+}
+
+/// True when a resolved resume command points at a cwd that no longer exists on disk.
+/// A session records the cwd it was created in; if that project dir was renamed, moved,
+/// or deleted, spawning `claude` there chdir-fails into `$HOME` and `--resume` then can't
+/// find the session — so the caller refuses with a clear reason instead of spawning.
+/// Symlinks count as present (`is_dir` follows them), so a remapped project still resumes.
+fn resume_cwd_missing(command: &PtyCommand) -> bool {
+    command.cwd.as_deref().is_some_and(|c| !c.is_dir())
 }
 
 /// Claude Code's project dir name for a cwd: `/` → `-` (e.g. `/home/me/p` → `-home-me-p`).
@@ -1317,6 +1337,78 @@ mod tests {
         assert!(fresh.args.is_empty());
         assert_eq!(fresh.cwd.as_deref(), Some(std::path::Path::new("/home/me/fresh")));
         assert_eq!(fresh.watch.as_ref().map(|(_, d)| d.as_str()), Some("-home-me-fresh"));
+    }
+
+    #[test]
+    fn resume_into_a_vanished_project_dir_is_refused_not_spawned_in_home() {
+        // A session records the cwd it was created in. If the user renames/moves/deletes
+        // that project, the recorded cwd is gone — but pty_command still happily resolves
+        // the resume to it. Spawning there chdir-fails into $HOME and `--resume` then can't
+        // find the session (the baffling bug). The guard must flag the vanished cwd so the
+        // caller refuses instead of spawning.
+        let dir = tempfile::tempdir().unwrap();
+        let pdir = dir.path().join("-home-me-gone");
+        std::fs::create_dir_all(&pdir).unwrap();
+        let gone = "abcdef00-0000-4000-8000-000000000000";
+        std::fs::write(
+            pdir.join(format!("{gone}.jsonl")),
+            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/gone-forever","sessionId":"{gone}"}}"#) + "\n",
+        )
+        .unwrap();
+
+        // A second session whose recorded cwd DOES still exist (a real dir we create).
+        let live_cwd = dir.path().join("still-here");
+        std::fs::create_dir_all(&live_cwd).unwrap();
+        let pdir2 = dir.path().join("-still-here");
+        std::fs::create_dir_all(&pdir2).unwrap();
+        let live = "abcdef01-0000-4000-8000-000000000000";
+        std::fs::write(
+            pdir2.join(format!("{live}.jsonl")),
+            format!(
+                r#"{{"type":"user","uuid":"u1","cwd":"{}","sessionId":"{live}"}}"#,
+                live_cwd.display()
+            ) + "\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            program: "bash".into(),
+            args: vec![],
+            cwd: None,
+            web_dir: None,
+            term_dir: None,
+            projects_dir: Some(dir.path().to_path_buf()),
+            sessions_dir: None,
+            state_dir: None,
+            workspace_root: None,
+            dev: false,
+        };
+
+        // The vanished-cwd resume still resolves to claude --resume in the recorded cwd...
+        let vanished = pty_command(
+            &cfg,
+            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, create: 0 },
+        );
+        assert_eq!(
+            vanished.cwd.as_deref(),
+            Some(std::path::Path::new("/home/me/gone-forever"))
+        );
+        // ...but the guard flags it, so pty_ws refuses rather than spawning in $HOME.
+        assert!(
+            resume_cwd_missing(&vanished),
+            "a resume whose recorded cwd no longer exists must be flagged"
+        );
+
+        // A resume whose cwd is still present is NOT flagged — it spawns normally.
+        let present = pty_command(
+            &cfg,
+            &PtyQuery { attach: None, session: Some("abcdef01".into()), new: None, create: 0 },
+        );
+        assert_eq!(present.cwd.as_deref(), Some(live_cwd.as_path()));
+        assert!(
+            !resume_cwd_missing(&present),
+            "a resume whose cwd still exists must not be flagged"
+        );
     }
 
     #[test]
