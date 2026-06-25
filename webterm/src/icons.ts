@@ -34,6 +34,7 @@ const PATHS: Record<string, string> = {
   bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
   chevrons: '<path d="M6 5l6 6 6-6M6 12l6 6 6-6"/>',
   type: '<path d="M5 7V5h14v2M12 5v14M9 19h6"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1 0 1.7-.8 1.7-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.1 0-.9.8-1.7 1.7-1.7H17a4 4 0 0 0 4-4c0-4.4-4-8.3-9-8.3z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16.5" cy="10.5" r="1"/>',
 };
 
 /** Build an <svg> element for a named icon. Unknown names render empty. */
