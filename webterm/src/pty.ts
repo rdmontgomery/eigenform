@@ -1,4 +1,5 @@
 import { Terminal } from "@xterm/xterm";
+import type { ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 
 // ── Terminal factory ─────────────────────────────────────────────────────────
@@ -9,13 +10,11 @@ export interface TermHandle {
 }
 
 /**
- * Warm-ink xterm theme (eigenform design system). xterm paints to canvas, which
- * needs concrete colors — these are sRGB conversions of the CSS oklch tokens:
- *   background = --term-bg oklch(0.155 0.013 56), foreground = cream
- *   oklch(0.91 0.018 75), cursor/selection = --accent oklch(0.70 0.13 47).
- * The terminal stays this dark ink slab in BOTH themes (see .term-scope).
+ * Fallback xterm theme — the Warm Ink scheme's core colors. The shell normally
+ * passes a full scheme theme (see src/themes/schemes.ts); this default only
+ * applies if newTerminal() is called bare.
  */
-const TERM_THEME = {
+const TERM_THEME: ITheme = {
   background: "#110b07",
   foreground: "#e9e0d4",
   cursor: "#df8353",
@@ -51,18 +50,26 @@ export const DEFAULT_FONT: FontSettings = {
  * Create a pre-configured Terminal + FitAddon pair.
  * The caller is responsible for `term.open(element)` and the initial `fit.fit()`.
  */
-export function newTerminal(font: FontSettings = DEFAULT_FONT): TermHandle {
+export function newTerminal(
+  font: FontSettings = DEFAULT_FONT,
+  theme: ITheme = TERM_THEME,
+): TermHandle {
   const term = new Terminal({
     fontFamily: font.family,
     fontSize: font.size,
     lineHeight: font.lineHeight,
     letterSpacing: font.letterSpacing,
     cursorBlink: true,
-    theme: TERM_THEME,
+    theme,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   return { term, fit };
+}
+
+/** Swap a live terminal's color theme (no re-measure — colors only). */
+export function applyTermTheme(term: Terminal, theme: ITheme): void {
+  term.options.theme = theme;
 }
 
 /**

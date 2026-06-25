@@ -17,8 +17,10 @@
  * persists across reloads (LS_DRAWER). When the active tab has no session
  * uuid yet, the open drawer shows a placeholder instead of a transcript.
  *
- * THEME: dark (default) / light, toggled from the top bar, persisted
- * (LS_THEME). The terminal pane stays dark ink in both — see .term-scope.
+ * THEME: a color scheme (src/themes/schemes.ts) picked from the top bar drives
+ * the WHOLE surface — deriveChrome() generates every chrome token from it and
+ * the same scheme colors the terminal. Persisted as a scheme id (LS_SCHEME);
+ * the legacy light/dark toggle (LS_THEME) migrates to Warm Ink light/dark.
  *
  * LOCALSTORAGE SCHEMA (key "eigenform:term:tabs:v1"):
  *   JSON array of TabDescriptor. Versioned key — bump suffix if schema changes.
@@ -27,8 +29,11 @@
  * Interval is cleared on visibilitychange → hidden to avoid background fan-out.
  */
 
-import { newTerminal, connectPty, applyFont, DEFAULT_FONT } from "./pty.ts";
+import { newTerminal, connectPty, applyFont, applyTermTheme, DEFAULT_FONT } from "./pty.ts";
 import type { FontSettings } from "./pty.ts";
+import { SCHEMES, DEFAULT_SCHEME_ID, schemeById } from "./themes/schemes.ts";
+import type { Scheme } from "./themes/schemes.ts";
+import { deriveChrome } from "./themes/derive.ts";
 import { buildRoster } from "./roster.ts";
 import type { RosterRow } from "./roster.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
@@ -58,7 +63,18 @@ export type { TabDescriptor, TabReconcileAction };
 
 const LS_KEY = "eigenform:term:tabs:v1";
 const LS_OVERRIDES = "eigenform:term:overrides:v1";
-const LS_THEME = "eigenform:term:theme:v1";
+const LS_THEME = "eigenform:term:theme:v1"; // legacy light/dark — migrated to v2
+const LS_SCHEME = "eigenform:term:theme:v2"; // scheme id
+
+/** Resolve the active scheme: stored v2 id → migrated v1 light/dark → default. */
+function loadSchemeId(): string {
+  const v2 = localStorage.getItem(LS_SCHEME);
+  if (v2 && schemeById(v2)) return v2;
+  const v1 = localStorage.getItem(LS_THEME);
+  if (v1 === "light") return "warm-ink-light";
+  if (v1 === "dark") return "warm-ink-dark";
+  return DEFAULT_SCHEME_ID;
+}
 const LS_DRAWER = "eigenform:term:drawer:v1";
 const LS_RAIL = "eigenform:term:rail:v1";
 const LS_FONT = "eigenform:term:font:v1";
@@ -156,11 +172,26 @@ export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
   // Theme (applied before any layout so first paint is correct)
   // ------------------------------------------------------------------
-  let theme = localStorage.getItem(LS_THEME) === "light" ? "light" : "dark";
-  applyTheme(theme);
+  let scheme: Scheme = schemeById(loadSchemeId()) ?? SCHEMES[0]!;
+  applyChrome(scheme);
 
-  function applyTheme(t: string) {
-    document.documentElement.classList.toggle("theme-light", t === "light");
+  /** Paint the whole surface from a scheme: chrome tokens on :root + every
+   *  open terminal's colors. Persisted so it survives reload. */
+  function applyScheme(next: Scheme) {
+    scheme = next;
+    localStorage.setItem(LS_SCHEME, next.id);
+    applyChrome(next);
+    for (const t of tabs) applyTermTheme(t.handle.term, next.theme);
+    renderControls();
+    if (themePopover) renderThemePopover();
+  }
+
+  function applyChrome(s: Scheme) {
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(deriveChrome(s.theme))) {
+      root.style.setProperty(k, v);
+    }
+    root.style.colorScheme = s.dark ? "dark" : "light";
   }
 
   // ------------------------------------------------------------------
@@ -237,7 +268,7 @@ export function mountShell(appEl: HTMLElement): void {
   const controls = el("div", "topbar-controls");
   topbar.append(railBtn, tabStrip, controls);
 
-  const termArea = el("div", "term-area term-scope");
+  const termArea = el("div", "term-area");
   const termHeader = el("div", "term-header");
   const termHost = el("div", "term-host");
   termArea.append(termHeader, termHost);
@@ -483,15 +514,10 @@ export function mountShell(appEl: HTMLElement): void {
   function renderControls() {
     controls.innerHTML = "";
 
-    const themeBtn = el("button", "icon-btn");
-    themeBtn.title = theme === "dark" ? "Light mode" : "Dark mode";
-    themeBtn.append(icon(theme === "dark" ? "sun" : "moon", 16));
-    themeBtn.addEventListener("click", () => {
-      theme = theme === "dark" ? "light" : "dark";
-      localStorage.setItem(LS_THEME, theme);
-      applyTheme(theme);
-      renderControls();
-    });
+    const themeBtn = el("button", `icon-btn theme-btn${themePopover ? " icon-btn--active" : ""}`);
+    themeBtn.title = `Theme — ${scheme.name}`;
+    themeBtn.append(icon("palette", 16));
+    themeBtn.addEventListener("click", () => toggleThemePopover(themeBtn));
 
     const fontBtn = el("button", `icon-btn font-btn${fontPopover ? " icon-btn--active" : ""}`);
     fontBtn.title = "Terminal font";
@@ -606,6 +632,75 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
+  // Theme popover — pick a scheme by sight (live swatch strips)
+  // ------------------------------------------------------------------
+
+  let themePopover: HTMLElement | null = null;
+
+  function toggleThemePopover(anchor: HTMLElement) {
+    if (themePopover) { closeThemePopover(); return; }
+    const pop = el("div", "theme-pop");
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = `${Math.round(r.bottom + 6)}px`;
+    pop.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+    themePopover = pop;
+    renderThemePopover();
+    renderControls();
+    document.addEventListener("pointerdown", onThemeOutside, true);
+    document.addEventListener("keydown", onThemeKey, true);
+  }
+
+  function closeThemePopover() {
+    themePopover?.remove();
+    themePopover = null;
+    document.removeEventListener("pointerdown", onThemeOutside, true);
+    document.removeEventListener("keydown", onThemeKey, true);
+    renderControls();
+  }
+
+  function onThemeOutside(e: PointerEvent) {
+    const t = e.target as HTMLElement;
+    if (themePopover && !themePopover.contains(t) && !t.closest(".theme-btn")) {
+      closeThemePopover();
+    }
+  }
+
+  function onThemeKey(e: KeyboardEvent) {
+    if (e.key === "Escape") { e.preventDefault(); closeThemePopover(); }
+  }
+
+  // The 6 ANSI hues shown in a swatch strip — a quick read of a scheme's palette.
+  const SWATCH_KEYS = ["red", "yellow", "green", "cyan", "blue", "magenta"] as const;
+
+  function renderThemePopover() {
+    const pop = themePopover;
+    if (!pop) return;
+    pop.innerHTML = "";
+    for (const s of SCHEMES) {
+      const row = el("button", `theme-row${s.id === scheme.id ? " theme-row--on" : ""}`);
+
+      const swatch = el("div", "theme-swatch");
+      swatch.style.background = s.theme.background;
+      for (const k of SWATCH_KEYS) {
+        const dot = el("span", "theme-dot");
+        dot.style.background = s.theme[k];
+        swatch.append(dot);
+      }
+      const fg = el("span", "theme-dot theme-dot--fg");
+      fg.style.background = s.theme.foreground;
+      swatch.append(fg);
+
+      const name = el("span", "theme-row-name");
+      name.textContent = s.name;
+
+      row.append(swatch, name);
+      row.addEventListener("click", () => applyScheme(s));
+      pop.append(row);
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Tab strip
   // ------------------------------------------------------------------
 
@@ -711,7 +806,7 @@ export function mountShell(appEl: HTMLElement): void {
     const termEl = el("div", "term-pane");
     termHost.append(termEl);
 
-    const handle = newTerminal(font);
+    const handle = newTerminal(font, scheme.theme);
     handle.term.open(termEl);
 
     const entry: TabEntry = {
