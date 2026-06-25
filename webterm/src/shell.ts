@@ -27,7 +27,8 @@
  * Interval is cleared on visibilitychange → hidden to avoid background fan-out.
  */
 
-import { newTerminal, connectPty } from "./pty.ts";
+import { newTerminal, connectPty, applyFont, DEFAULT_FONT } from "./pty.ts";
+import type { FontSettings } from "./pty.ts";
 import { buildRoster } from "./roster.ts";
 import type { RosterRow } from "./roster.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
@@ -60,6 +61,47 @@ const LS_OVERRIDES = "eigenform:term:overrides:v1";
 const LS_THEME = "eigenform:term:theme:v1";
 const LS_DRAWER = "eigenform:term:drawer:v1";
 const LS_RAIL = "eigenform:term:rail:v1";
+const LS_FONT = "eigenform:term:font:v1";
+
+/** Terminal typefaces offered in the font popover. macOS-first: "System Mono"
+ *  resolves to SF Mono / Menlo with no webfont round-trip. */
+const TERM_FACES: { label: string; stack: string }[] = [
+  { label: "Plex Mono", stack: DEFAULT_FONT.family },
+  {
+    label: "System Mono",
+    stack: 'ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace',
+  },
+];
+
+/** Bounds for the font controls (and ⌘ +/− zoom). */
+const FONT_BOUNDS = {
+  size: { min: 9, max: 24, step: 0.5 },
+  lineHeight: { min: 1.0, max: 2.0, step: 0.05 },
+  letterSpacing: { min: -2, max: 4, step: 0.5 },
+};
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/** Validate one persisted numeric field, falling back to a default. */
+function numField(v: unknown, fallback: number, lo: number, hi: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? clamp(v, lo, hi) : fallback;
+}
+
+function loadFont(): FontSettings {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_FONT) ?? "{}") as Partial<FontSettings>;
+    return {
+      family: typeof raw.family === "string" && raw.family ? raw.family : DEFAULT_FONT.family,
+      size: numField(raw.size, DEFAULT_FONT.size, FONT_BOUNDS.size.min, FONT_BOUNDS.size.max),
+      lineHeight: numField(raw.lineHeight, DEFAULT_FONT.lineHeight, FONT_BOUNDS.lineHeight.min, FONT_BOUNDS.lineHeight.max),
+      letterSpacing: numField(raw.letterSpacing, DEFAULT_FONT.letterSpacing, FONT_BOUNDS.letterSpacing.min, FONT_BOUNDS.letterSpacing.max),
+    };
+  } catch {
+    return { ...DEFAULT_FONT };
+  }
+}
 
 const KNOWN_STATES = new Set(["working", "waiting", "idle", "exited"]);
 
@@ -120,6 +162,37 @@ export function mountShell(appEl: HTMLElement): void {
   function applyTheme(t: string) {
     document.documentElement.classList.toggle("theme-light", t === "light");
   }
+
+  // ------------------------------------------------------------------
+  // Terminal typography (persisted; applied live to every open terminal)
+  // ------------------------------------------------------------------
+  let font = loadFont();
+
+  /** Merge a patch into the live font settings, persist, and re-lay every grid. */
+  function setFont(patch: Partial<FontSettings>) {
+    font = { ...font, ...patch };
+    localStorage.setItem(LS_FONT, JSON.stringify(font));
+    for (const t of tabs) {
+      applyFont(t.handle.term, font);
+      // Re-measured cell → recompute cols/rows; onResize relays it to the daemon.
+      try { t.handle.fit.fit(); } catch { /* zero-size element — ok */ }
+    }
+  }
+
+  function bumpFontSize(delta: number) {
+    const b = FONT_BOUNDS.size;
+    setFont({ size: clamp(Math.round((font.size + delta) * 4) / 4, b.min, b.max) });
+    if (fontPopover) renderFontPopover();
+  }
+
+  // ⌘/Ctrl +/−/0 — terminal zoom (overrides browser page zoom, which is the
+  // wrong granularity for a grid we own).
+  window.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    if (e.key === "=" || e.key === "+") { e.preventDefault(); bumpFontSize(0.5); }
+    else if (e.key === "-" || e.key === "_") { e.preventDefault(); bumpFontSize(-0.5); }
+    else if (e.key === "0") { e.preventDefault(); setFont({ size: DEFAULT_FONT.size }); if (fontPopover) renderFontPopover(); }
+  });
 
   // ------------------------------------------------------------------
   // Skeleton DOM
@@ -420,6 +493,11 @@ export function mountShell(appEl: HTMLElement): void {
       renderControls();
     });
 
+    const fontBtn = el("button", `icon-btn font-btn${fontPopover ? " icon-btn--active" : ""}`);
+    fontBtn.title = "Terminal font";
+    fontBtn.append(icon("type", 16));
+    fontBtn.addEventListener("click", () => toggleFontPopover(fontBtn));
+
     const sep = el("div", "topbar-sep");
 
     const drawerBtn = el("button", `icon-btn${drawerOpen ? " icon-btn--active" : ""}`);
@@ -427,7 +505,104 @@ export function mountShell(appEl: HTMLElement): void {
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, sep, drawerBtn);
+    controls.append(themeBtn, fontBtn, sep, drawerBtn);
+  }
+
+  // ------------------------------------------------------------------
+  // Font popover — typeface + size + line-height + letter-spacing
+  // ------------------------------------------------------------------
+
+  let fontPopover: HTMLElement | null = null;
+
+  function toggleFontPopover(anchor: HTMLElement) {
+    if (fontPopover) { closeFontPopover(); return; }
+    const pop = el("div", "font-pop");
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = `${Math.round(r.bottom + 6)}px`;
+    pop.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+    fontPopover = pop;
+    renderFontPopover();
+    renderControls();
+    // Capture-phase so a click on a tab/terminal closes us before it acts.
+    document.addEventListener("pointerdown", onFontOutside, true);
+    document.addEventListener("keydown", onFontKey, true);
+  }
+
+  function closeFontPopover() {
+    fontPopover?.remove();
+    fontPopover = null;
+    document.removeEventListener("pointerdown", onFontOutside, true);
+    document.removeEventListener("keydown", onFontKey, true);
+    renderControls();
+  }
+
+  function onFontOutside(e: PointerEvent) {
+    const t = e.target as HTMLElement;
+    if (fontPopover && !fontPopover.contains(t) && !t.closest(".font-btn")) {
+      closeFontPopover();
+    }
+  }
+
+  function onFontKey(e: KeyboardEvent) {
+    if (e.key === "Escape") { e.preventDefault(); closeFontPopover(); }
+  }
+
+  /** Rebuild the popover body from current `font` (cheap; values are few). */
+  function renderFontPopover() {
+    const pop = fontPopover;
+    if (!pop) return;
+    pop.innerHTML = "";
+
+    // Typeface — a row of pills; the active stack is highlighted.
+    const faceRow = el("div", "font-faces");
+    for (const f of TERM_FACES) {
+      const pill = el("button", `font-face${font.family === f.stack ? " font-face--on" : ""}`);
+      pill.textContent = f.label;
+      pill.style.fontFamily = f.stack;
+      pill.addEventListener("click", () => { setFont({ family: f.stack }); renderFontPopover(); });
+      faceRow.append(pill);
+    }
+    pop.append(faceRow);
+
+    const stepper = (
+      label: string,
+      value: number,
+      fmt: (n: number) => string,
+      key: keyof FontSettings,
+      bounds: { min: number; max: number; step: number },
+    ) => {
+      const row = el("div", "font-pop-row");
+      const name = el("span", "font-pop-label");
+      name.textContent = label;
+      const ctl = el("div", "font-step");
+      const dec = el("button");
+      dec.textContent = "−";
+      const val = el("span", "font-step-val");
+      val.textContent = fmt(value);
+      const inc = el("button");
+      inc.textContent = "+";
+      const set = (n: number) => {
+        setFont({ [key]: clamp(Math.round(n / bounds.step) * bounds.step, bounds.min, bounds.max) } as Partial<FontSettings>);
+        renderFontPopover();
+      };
+      dec.addEventListener("click", () => set(value - bounds.step));
+      inc.addEventListener("click", () => set(value + bounds.step));
+      ctl.append(dec, val, inc);
+      row.append(name, ctl);
+      return row;
+    };
+
+    pop.append(
+      stepper("Size", font.size, (n) => `${n}px`, "size", FONT_BOUNDS.size),
+      stepper("Line height", font.lineHeight, (n) => n.toFixed(2), "lineHeight", FONT_BOUNDS.lineHeight),
+      stepper("Tracking", font.letterSpacing, (n) => `${n}px`, "letterSpacing", FONT_BOUNDS.letterSpacing),
+    );
+
+    const reset = el("button", "font-pop-reset");
+    reset.textContent = "Reset to defaults";
+    reset.addEventListener("click", () => { setFont({ ...DEFAULT_FONT }); renderFontPopover(); });
+    pop.append(reset);
   }
 
   // ------------------------------------------------------------------
@@ -536,7 +711,7 @@ export function mountShell(appEl: HTMLElement): void {
     const termEl = el("div", "term-pane");
     termHost.append(termEl);
 
-    const handle = newTerminal();
+    const handle = newTerminal(font);
     handle.term.open(termEl);
 
     const entry: TabEntry = {
