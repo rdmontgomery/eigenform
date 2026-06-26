@@ -840,6 +840,7 @@ export function mountDrawer(
   // ------------------------------------------------------------------
 
   let es: EventSource | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
 
   async function load() {
@@ -856,6 +857,16 @@ export function mountDrawer(
   // Static mode (live === false): one fetch, no subscription. Used by the forest
   // preview float, which re-fetches on focus instead of tailing the file.
   if (actions.live !== false) {
+    connect();
+  }
+
+  // EventSource only auto-reconnects after an *established* (2xx) stream drops.
+  // A non-2xx response — notably the 404 the daemon returns for a session whose
+  // JSONL hasn't been flushed to disk yet (brand-new session) — is a hard
+  // failure: the browser fires onerror, sets readyState=CLOSED, and never
+  // retries. So we reconnect manually until the file lands.
+  function connect() {
+    if (closed) return;
     es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
     // The daemon sends unnamed SSE events; onmessage handles them.
     // The named "change" listener is a safety net in case the daemon is updated
@@ -863,7 +874,15 @@ export function mountDrawer(
     es.onmessage = () => void load();
     es.addEventListener("change", () => void load());
     es.onerror = () => {
-      // EventSource will auto-reconnect; no action needed here.
+      if (closed) return;
+      es?.close();
+      es = null;
+      if (reconnectTimer === null) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, 1500);
+      }
     };
   }
 
@@ -875,6 +894,7 @@ export function mountDrawer(
     close() {
       if (closed) return;
       closed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       es?.close();
       es = null;
       panel.remove();
