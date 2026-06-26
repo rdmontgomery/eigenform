@@ -672,7 +672,7 @@ button { font: inherit; color: inherit; }
 .term-pane {
   position: absolute;
   inset: 0;
-  padding: 6px 0 0 8px;   /* breathe: the page has a margin */
+  padding: 6px 8px 0 8px;   /* breathe: page margin; right gutter clears the bar */
 }
 
 /* ── Inspect dock — reach map (top) + transcript (bottom), docked right ───── */
@@ -737,6 +737,26 @@ button { font: inherit; color: inherit; }
 /* xterm.css is imported in main.ts (xterm 5.x does not inject it); this only
    ensures the terminal fills the pane. */
 .xterm { height: 100%; }
+
+/* Force a real, non-overlay scrollbar on the terminal viewport. Overlay
+   scrollbars (which the browser reports as zero-width) paint on top of the
+   last column, hiding text under the bar; a styled scrollbar has a measurable
+   width that the FitAddon reserves, so glyphs sit beside it. Also on-theme. */
+.xterm .xterm-viewport {
+  scrollbar-width: thin;                 /* Firefox */
+  scrollbar-color: var(--line) transparent;
+}
+/* width = the gap the FitAddon reserves between the last column and the bar;
+   the thumb's transparent border keeps the visible thumb thin inside it. */
+.xterm .xterm-viewport::-webkit-scrollbar { width: 14px; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 99px;
+  border: 4px solid transparent;
+  background-clip: padding-box;
+}
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--tx-faint); }
+.xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 
 /* ── Fuzzy launcher picker overlay ──────────────────────────────────────── */
 .picker-overlay {
