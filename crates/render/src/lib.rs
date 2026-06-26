@@ -150,6 +150,7 @@ pub fn session_json(session: &Session) -> String {
         "total": total,
         "branches": 0,
         "windowStart": 1,
+        "model": session_model(session),
         "exchanges": out,
     }))
     .expect("session json serializes")
@@ -177,6 +178,23 @@ fn tool_use_blocks(turn: &Turn) -> Vec<(String, String, serde_json::Value)> {
             Some((id, name, input))
         })
         .collect()
+}
+
+/// The model id the session ran on, read from assistant turns' `message.model`.
+/// Returns the most recent one seen (a resumed session can change models), or
+/// `None` if no assistant turn carries a model.
+fn session_model(session: &Session) -> Option<String> {
+    let mut model = None;
+    for turn in session.turns() {
+        if turn.role != Role::Assistant {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
+        if let Some(m) = value["message"]["model"].as_str() {
+            model = Some(m.to_string());
+        }
+    }
+    model
 }
 
 /// Find the tool_result output for a given `tool_use_id` by scanning all session turns
@@ -747,6 +765,36 @@ mod session_json_tests {
         assert_eq!(doc["total"], 1);
         assert_eq!(doc["exchanges"].as_array().unwrap().len(), 1);
         assert_eq!(doc["exchanges"][0]["leaf"], true);
+    }
+
+    #[test]
+    fn emits_model_from_assistant_turn() {
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"hi"}}"#,
+            r#"{"type":"assistant","uuid":"a1","sessionId":"abc12345-0000","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"yo"}]}}"#,
+        ]);
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        assert_eq!(doc["model"], "claude-opus-4-8");
+    }
+
+    #[test]
+    fn model_is_null_when_no_assistant_turn_carries_one() {
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"hi"}}"#,
+        ]);
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        assert!(doc["model"].is_null());
+    }
+
+    #[test]
+    fn model_takes_the_most_recent_assistant_turn() {
+        let session = parse(&[
+            r#"{"type":"assistant","uuid":"a1","sessionId":"abc12345-0000","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"a"}]}}"#,
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"more"}}"#,
+            r#"{"type":"assistant","uuid":"a2","sessionId":"abc12345-0000","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"b"}]}}"#,
+        ]);
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        assert_eq!(doc["model"], "claude-opus-4-8");
     }
 
     // ── tool input/output tests ──────────────────────────────────────────────
