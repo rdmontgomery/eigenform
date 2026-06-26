@@ -603,12 +603,22 @@ async fn dev_reload(State(state): State<AppState>) -> Response {
     watch_sse(term_dir.join("dist"), None)
 }
 
-/// SSE that emits a `change` event when files in `watch_dir` are written. If `target` is
-/// set, only that filename triggers; otherwise any change in the dir does. A dedicated
-/// thread owns the watcher and lives until the SSE receiver is dropped.
-fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response {
+/// Spawn a filesystem watcher on `watch_dir`, returning a receiver that yields `()` each time a
+/// file (matching `target`, if set) is written, plus the watcher thread's handle.
+///
+/// The thread exits promptly when the receiver is dropped: it polls with a 1s timeout and checks
+/// whether the consumer is gone (`tx.is_closed()`) on every tick. This matters because the old
+/// implementation only noticed a disconnected client *after the next filesystem event* — so an
+/// EventSource that reconnected while the session's directory was quiet stranded its thread +
+/// inotify instance indefinitely. Those leaked watchers accumulated toward the per-user inotify
+/// cap (e.g. 128); once near it, `recommended_watcher()` starts failing and new SSE subscriptions
+/// stream nothing forever, silently freezing the reach map and transcript.
+fn watch_channel(
+    watch_dir: PathBuf,
+    target: Option<std::ffi::OsString>,
+) -> (tokio::sync::mpsc::Receiver<()>, std::thread::JoinHandle<()>) {
     let (tx, rx) = tokio::sync::mpsc::channel::<()>(8);
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let (raw_tx, raw_rx) = std::sync::mpsc::channel();
         let mut watcher = match notify::recommended_watcher(move |res| {
             let _ = raw_tx.send(res);
@@ -621,18 +631,42 @@ fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response
         {
             return;
         }
-        for event in raw_rx {
-            let Ok(event) = event else { continue };
-            let touches = match &target {
-                Some(name) => event.paths.iter().any(|p| p.file_name() == Some(name.as_os_str())),
-                None => true,
-            };
-            if touches && tx.blocking_send(()).is_err() {
-                break; // SSE connection gone; drop the watcher
+        loop {
+            match raw_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                Ok(Ok(event)) => {
+                    let touches = match &target {
+                        Some(name) => {
+                            event.paths.iter().any(|p| p.file_name() == Some(name.as_os_str()))
+                        }
+                        None => true,
+                    };
+                    if touches && tx.blocking_send(()).is_err() {
+                        break; // SSE connection gone; drop the watcher
+                    }
+                }
+                // A watcher-level error: ignore this one and keep watching.
+                Ok(Err(_)) => {}
+                // No fs events this tick — still check whether the client left, so a
+                // disconnected consumer is reaped within ~1s instead of leaking until the
+                // next (possibly never) filesystem event.
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if tx.is_closed() {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
     });
+    (rx, handle)
+}
 
+/// SSE that emits a `change` event when files in `watch_dir` are written. If `target` is
+/// set, only that filename triggers; otherwise any change in the dir does. Backed by
+/// [`watch_channel`], whose thread self-terminates when this stream (and thus the receiver)
+/// is dropped — including when the client disconnects while the directory is quiet.
+fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response {
+    let (rx, _handle) = watch_channel(watch_dir, target);
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
         .map(|_| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data("change")));
     axum::response::sse::Sse::new(stream).into_response()
@@ -1252,6 +1286,90 @@ impl Pty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::time::{Duration, Instant};
+
+    /// Poll `rx` for up to `dur`, returning true if a signal arrives.
+    fn recv_within(rx: &mut tokio::sync::mpsc::Receiver<()>, dur: Duration) -> bool {
+        let deadline = Instant::now() + dur;
+        loop {
+            match rx.try_recv() {
+                Ok(()) => return true,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
+            }
+        }
+    }
+
+    /// Join `handle`, returning true if it finishes within `dur` (false = still running/hung).
+    fn join_within(handle: std::thread::JoinHandle<()>, dur: Duration) -> bool {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = handle.join();
+            let _ = done_tx.send(());
+        });
+        done_rx.recv_timeout(dur).is_ok()
+    }
+
+    #[test]
+    fn watch_channel_emits_on_matching_file_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, b"start\n").unwrap();
+        let (mut rx, _h) =
+            watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
+        // Let the watcher arm (the SSE response returns before watch() completes).
+        std::thread::sleep(Duration::from_millis(300));
+
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        f.write_all(b"more\n").unwrap();
+        f.flush().unwrap();
+
+        assert!(
+            recv_within(&mut rx, Duration::from_secs(2)),
+            "appending to the watched file should signal a change",
+        );
+    }
+
+    #[test]
+    fn watch_channel_ignores_non_target_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut rx, _h) =
+            watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
+        std::thread::sleep(Duration::from_millis(300));
+
+        std::fs::write(dir.path().join("other.txt"), b"noise\n").unwrap();
+
+        assert!(
+            !recv_within(&mut rx, Duration::from_millis(800)),
+            "writes to non-target files must not signal",
+        );
+    }
+
+    #[test]
+    fn watch_thread_exits_when_consumer_drops_even_if_dir_is_quiet() {
+        // Regression test for the inotify/thread leak: when an SSE client disconnects, the
+        // watcher must clean up promptly WITHOUT waiting for a filesystem event. The old
+        // implementation blocked on the event channel and only noticed the dead client after
+        // the next write, stranding the thread + inotify instance for quiet sessions.
+        let dir = tempfile::tempdir().unwrap();
+        let (rx, handle) =
+            watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
+        std::thread::sleep(Duration::from_millis(200)); // let it arm
+
+        drop(rx); // client gone; directory stays quiet (no writes follow)
+
+        assert!(
+            join_within(handle, Duration::from_secs(3)),
+            "watcher thread must exit within ~1s of the consumer dropping, with no fs events",
+        );
+    }
 
     #[test]
     fn normalize_path_resolves_dotdot() {
