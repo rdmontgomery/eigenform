@@ -46,6 +46,10 @@ import {
   inkFor,
   railFromPointer,
   RAIL_DEFAULT,
+  drawerWidthFromPointer,
+  DRAWER_DEFAULT_W,
+  splitHeightFromPointer,
+  REACH_DEFAULT_H,
   type AgeGroup,
   type TabDescriptor,
   type TabReconcileAction,
@@ -80,7 +84,8 @@ function loadSchemeId(): string {
   return DEFAULT_SCHEME_ID;
 }
 const LS_DRAWER = "eigenform:term:drawer:v1";
-const LS_REACH = "eigenform:term:reach:v1";
+const LS_DOCK_W = "eigenform:term:drawer-w:v1";
+const LS_REACH_H = "eigenform:term:reach-h:v1";
 const LS_RAIL = "eigenform:term:rail:v1";
 const LS_FONT = "eigenform:term:font:v1";
 
@@ -284,6 +289,18 @@ export function mountShell(appEl: HTMLElement): void {
   const termArea = el("div", "term-area");
   const termHeader = el("div", "term-header");
   const termHost = el("div", "term-host");
+  // termStack holds the stacked term panes; the dock sits beside it (flex row)
+  // and pushes it narrower when open, rather than floating over it.
+  const termStack = el("div", "term-stack");
+  const dockResizer = el("div", "drawer-resizer");
+  dockResizer.title = "drag to resize the inspect panel";
+  const drawerDock = el("div", "drawer-dock");
+  const reachRegion = el("div", "reach-region");
+  const dockVsplit = el("div", "dock-vsplit");
+  dockVsplit.title = "drag to resize the reach map / transcript split";
+  const transcriptRegion = el("div", "transcript-region");
+  drawerDock.append(reachRegion, dockVsplit, transcriptRegion);
+  termHost.append(termStack, dockResizer, drawerDock);
   termArea.append(termHeader, termHost);
 
   main.append(topbar, termArea);
@@ -395,8 +412,7 @@ export function mountShell(appEl: HTMLElement): void {
     }
     renderTabStrip();
     renderTermHeader();
-    syncDrawer();
-    syncReach();
+    syncDock();
     renderRail();
   }
 
@@ -430,8 +446,7 @@ export function mountShell(appEl: HTMLElement): void {
     }
     renderTabStrip();
     renderTermHeader();
-    syncDrawer();
-    syncReach();
+    syncDock();
     renderRail();
   }
 
@@ -454,41 +469,85 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
-  // Drawer — GLOBAL toggle (persistent control top-right), follows the
-  // active tab. Replaces the old per-tab hamburger, which could open the
-  // drawer but never close it.
+  // Inspect dock — GLOBAL toggle (persistent control top-right), follows the
+  // active tab. A right-docked panel that pushes the terminal narrower (not a
+  // floating overlay): reach map on top, transcript below, split by a draggable
+  // divider. Both halves follow the active tab's session uuid.
   // ------------------------------------------------------------------
 
   let drawerOpen = localStorage.getItem(LS_DRAWER) === "1";
   /** Mounted transcript drawer (uuid-bound), or null. */
   let drawerCurrent: { uuid: string; handle: DrawerHandle } | null = null;
-  /** Placeholder panel shown when the drawer is open but the active tab has
-   *  no session uuid yet. */
-  let drawerPlaceholder: HTMLElement | null = null;
+  /** Mounted reach map (uuid-bound), or null. */
+  let reachCurrent: { uuid: string; handle: ReachHandle } | null = null;
+  /** Placeholder shown when the dock is open but the active tab has no uuid. */
+  let dockPlaceholder: HTMLElement | null = null;
+
+  function readNum(key: string, fallback: number): number {
+    const v = Number(localStorage.getItem(key));
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+  }
+
+  // Persisted dock geometry: dock width + reach-region height. Re-clamped on
+  // read so a stale/garbage value can't wedge the layout.
+  let dockW = drawerWidthFromPointer(0, readNum(LS_DOCK_W, DRAWER_DEFAULT_W));
+  let reachH = readNum(LS_REACH_H, REACH_DEFAULT_H);
+
+  function applyDockGeometry() {
+    document.documentElement.style.setProperty("--drawer-w", `${dockW}px`);
+    document.documentElement.style.setProperty("--reach-h", `${reachH}px`);
+  }
+  applyDockGeometry();
+
+  function saveDockGeometry() {
+    localStorage.setItem(LS_DOCK_W, String(dockW));
+    localStorage.setItem(LS_REACH_H, String(reachH));
+  }
 
   function setDrawerOpen(open: boolean) {
     drawerOpen = open;
     localStorage.setItem(LS_DRAWER, open ? "1" : "0");
-    syncDrawer();
+    syncDock();
+    // The dock's width changed → the terminal column resized; re-fit once.
+    fitActive();
   }
 
-  /** Reconcile the mounted drawer against (drawerOpen, active tab). */
-  function syncDrawer() {
-    const uuid = drawerOpen ? (activeTab()?.descriptor.uuid ?? null) : null;
+  /** Reconcile the mounted dock (reach + transcript) against (drawerOpen, tab). */
+  function syncDock() {
+    const open = drawerOpen && tabs.length > 0;
+    drawerDock.style.display = open ? "flex" : "none";
+    dockResizer.style.display = open ? "" : "none";
 
-    if (drawerPlaceholder) {
-      drawerPlaceholder.remove();
-      drawerPlaceholder = null;
-    }
-
-    if (!drawerOpen || tabs.length === 0) {
+    if (!open) {
+      reachCurrent?.handle.close();
+      reachCurrent = null;
       drawerCurrent?.handle.close();
       drawerCurrent = null;
       renderControls();
       return;
     }
 
+    const uuid = activeTab()?.descriptor.uuid ?? null;
+
     if (uuid) {
+      if (dockPlaceholder) {
+        dockPlaceholder.remove();
+        dockPlaceholder = null;
+      }
+      reachRegion.style.display = "";
+      dockVsplit.style.display = "";
+
+      if (reachCurrent?.uuid !== uuid) {
+        reachCurrent?.handle.close();
+        // No onClose → the reach map renders without a close button and won't
+        // grab Esc; it lives in the dock for as long as the dock is open.
+        reachCurrent = {
+          uuid,
+          handle: mountReachMap(reachRegion, uuid, {
+            root: activeTab()?.descriptor.cwd ?? undefined,
+          }),
+        };
+      }
       if (drawerCurrent?.uuid !== uuid) {
         drawerCurrent?.handle.close();
         // onFork: open the forked session as a new tab + refresh the roster so
@@ -496,7 +555,7 @@ export function mountShell(appEl: HTMLElement): void {
         drawerCurrent = {
           uuid,
           handle: mountDrawer(
-            termHost,
+            transcriptRegion,
             uuid,
             (newUuid) => {
               openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
@@ -505,100 +564,94 @@ export function mountShell(appEl: HTMLElement): void {
               });
               void refreshRoster();
             },
-            // interrupt routes ^C to the ACTIVE tab's socket — the drawer is
-            // only ever mounted for the active tab's uuid (syncDrawer invariant).
+            // interrupt routes ^C to the ACTIVE tab's socket — the dock is only
+            // ever mounted for the active tab's uuid (syncDock invariant).
             { interrupt: () => activeTab()?.ptyHandle?.sendInput("\x03") },
           ),
         };
       }
     } else {
+      // No transcript yet — collapse the split to a single placeholder.
+      reachCurrent?.handle.close();
+      reachCurrent = null;
       drawerCurrent?.handle.close();
       drawerCurrent = null;
-      drawerPlaceholder = el("div", "drawer");
-      const head = el("div", "drawer-header");
-      const title = el("span", "drawer-title");
-      title.textContent = "Transcript";
-      head.append(title);
-      const empty = el("div", "drawer-empty");
-      empty.textContent = "no transcript yet — waiting for a session uuid";
-      drawerPlaceholder.append(head, empty);
-      termHost.append(drawerPlaceholder);
-    }
-    renderControls();
-  }
-
-  // ------------------------------------------------------------------
-  // Reach map — GLOBAL toggle, follows the active tab. A full-host overlay
-  // (above the drawer) showing the time-evolution spiderweb of tool reach.
-  // ------------------------------------------------------------------
-
-  let reachOpen = localStorage.getItem(LS_REACH) === "1";
-  /** Mounted reach overlay (uuid-bound), or null. */
-  let reachCurrent: { uuid: string; handle: ReachHandle } | null = null;
-  /** Placeholder overlay shown when reach is open but the tab has no uuid yet. */
-  let reachPlaceholder: HTMLElement | null = null;
-
-  function setReachOpen(open: boolean) {
-    reachOpen = open;
-    localStorage.setItem(LS_REACH, open ? "1" : "0");
-    syncReach();
-  }
-
-  /** Reconcile the mounted reach overlay against (reachOpen, active tab). */
-  function syncReach() {
-    const tab = activeTab();
-    const uuid = reachOpen ? (tab?.descriptor.uuid ?? null) : null;
-
-    if (reachPlaceholder) {
-      reachPlaceholder.remove();
-      reachPlaceholder = null;
-    }
-
-    if (!reachOpen || tabs.length === 0) {
-      reachCurrent?.handle.close();
-      reachCurrent = null;
-      renderControls();
-      return;
-    }
-
-    if (uuid) {
-      if (reachCurrent?.uuid !== uuid) {
-        reachCurrent?.handle.close();
-        reachCurrent = {
-          uuid,
-          handle: mountReachMap(termHost, uuid, {
-            root: tab?.descriptor.cwd ?? undefined,
-            onClose: () => setReachOpen(false),
-          }),
-        };
+      reachRegion.style.display = "none";
+      dockVsplit.style.display = "none";
+      if (!dockPlaceholder) {
+        dockPlaceholder = el("div", "drawer");
+        const head = el("div", "drawer-header");
+        const title = el("span", "drawer-title");
+        title.textContent = "Transcript";
+        head.append(title);
+        const empty = el("div", "drawer-empty");
+        empty.textContent = "no transcript yet — waiting for a session uuid";
+        dockPlaceholder.append(head, empty);
+        transcriptRegion.append(dockPlaceholder);
       }
-    } else {
-      // No transcript yet — show a dismissible placeholder so the toggle always
-      // does something visible (mirrors the drawer's placeholder).
-      reachCurrent?.handle.close();
-      reachCurrent = null;
-      reachPlaceholder = el("div", "reachmap");
-      const head = el("div", "reachmap-head");
-      const titleWrap = el("div", "reachmap-titlewrap");
-      const title = el("span", "reachmap-title");
-      title.textContent = "Reach";
-      titleWrap.append(title);
-      const closeBtn = el("button", "reachmap-close");
-      closeBtn.title = "Close (Esc)";
-      closeBtn.append(icon("x", 15));
-      closeBtn.addEventListener("click", () => setReachOpen(false));
-      head.append(titleWrap, closeBtn);
-      const empty = el("div", "reachmap-empty");
-      empty.textContent = "no transcript yet — start or resume a Claude session to map its reach";
-      reachPlaceholder.append(head, empty);
-      // The empty element is absolutely positioned to fill the host; give it a
-      // relative scene to anchor to.
-      empty.style.position = "static";
-      empty.style.flex = "1";
-      termHost.append(reachPlaceholder);
     }
     renderControls();
   }
+
+  // ── Dock splitters ─────────────────────────────────────────────────────────
+  // Width (the dock's left edge) and the reach/transcript vertical split. Both
+  // mirror the rail resizer: drag updates the CSS var live; state persists on
+  // mouseup. The width drag re-fits the terminal once at the end — a per-pixel
+  // resize would SIGWINCH the pty on every move (spike 09's repaint handles one).
+  function makeDragHandle(
+    handle: HTMLElement,
+    cls: string,
+    cursor: string,
+    onMove: (e: MouseEvent) => void,
+    onEnd: () => void,
+  ) {
+    let dragging = false;
+    handle.addEventListener("mousedown", (e) => {
+      dragging = true;
+      e.preventDefault();
+      handle.classList.add(cls);
+      document.body.style.cursor = cursor;
+      document.body.style.userSelect = "none";
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      onMove(e);
+    });
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove(cls);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      onEnd();
+    });
+  }
+
+  makeDragHandle(
+    dockResizer,
+    "drawer-resizer--dragging",
+    "col-resize",
+    (e) => {
+      dockW = drawerWidthFromPointer(e.clientX, termHost.getBoundingClientRect().right);
+      applyDockGeometry();
+    },
+    () => {
+      saveDockGeometry();
+      fitActive();
+    },
+  );
+
+  makeDragHandle(
+    dockVsplit,
+    "dock-vsplit--dragging",
+    "row-resize",
+    (e) => {
+      const r = drawerDock.getBoundingClientRect();
+      reachH = splitHeightFromPointer(e.clientY, r.top, r.height);
+      applyDockGeometry();
+    },
+    saveDockGeometry,
+  );
 
   // ------------------------------------------------------------------
   // Top bar: global controls (theme · reach · drawer)
@@ -619,17 +672,13 @@ export function mountShell(appEl: HTMLElement): void {
 
     const sep = el("div", "topbar-sep");
 
-    const reachBtn = el("button", `icon-btn${reachOpen ? " icon-btn--active" : ""}`);
-    reachBtn.title = reachOpen ? "Hide reach map" : "Show reach map";
-    reachBtn.append(icon("reach", 16));
-    reachBtn.addEventListener("click", () => setReachOpen(!reachOpen));
-
+    // Single "inspect" toggle — opens the docked panel (reach map + transcript).
     const drawerBtn = el("button", `icon-btn${drawerOpen ? " icon-btn--active" : ""}`);
-    drawerBtn.title = drawerOpen ? "Hide transcript" : "Show transcript";
+    drawerBtn.title = drawerOpen ? "Hide inspect panel" : "Show inspect panel";
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, fontBtn, sep, reachBtn, drawerBtn);
+    controls.append(themeBtn, fontBtn, sep, drawerBtn);
   }
 
   // ------------------------------------------------------------------
@@ -902,7 +951,7 @@ export function mountShell(appEl: HTMLElement): void {
     }
 
     const termEl = el("div", "term-pane");
-    termHost.append(termEl);
+    termStack.append(termEl);
 
     const handle = newTerminal(font, scheme.theme);
     handle.term.open(termEl);
@@ -965,8 +1014,7 @@ export function mountShell(appEl: HTMLElement): void {
         renderTabStrip();
         // The active tab just gained a transcript — swap the placeholder out.
         if (entry.id === activeTabId) {
-          syncDrawer();
-          syncReach();
+          syncDock();
         }
       },
       onExit() {
@@ -1326,9 +1374,8 @@ export function mountShell(appEl: HTMLElement): void {
       }
       renderTabStrip();
       renderTermHeader();
-      // A newly-adopted uuid on the active tab means the drawer + reach map can now mount.
-      syncDrawer();
-      syncReach();
+      // A newly-adopted uuid on the active tab means the dock can now mount.
+      syncDock();
     } catch {
       // Daemon not reachable — keep stale rail.
     }
@@ -1372,8 +1419,7 @@ export function mountShell(appEl: HTMLElement): void {
 
     renderTabStrip();
     renderTermHeader();
-    syncDrawer();
-    syncReach();
+    syncDock();
   }
 
   void boot();

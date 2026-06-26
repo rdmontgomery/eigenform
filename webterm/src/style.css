@@ -653,17 +653,85 @@ button { font: inherit; color: inherit; }
 }
 
 .term-host {
-  position: relative;
+  display: flex;
   flex: 1;
   min-height: 0;
   overflow: hidden;
   background: var(--term-bg);
 }
 
+/* The terminal column — holds the stacked .term-pane(s) and shrinks when the
+   inspect dock is open so the docked panel sits beside it (not over it). */
+.term-stack {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .term-pane {
   position: absolute;
   inset: 0;
   padding: 6px 0 0 8px;   /* breathe: the page has a margin */
+}
+
+/* ── Inspect dock — reach map (top) + transcript (bottom), docked right ───── */
+.drawer-dock {
+  display: flex;
+  flex-direction: column;
+  width: var(--drawer-w, 460px);
+  flex-shrink: 0;
+  min-width: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.reach-region {
+  position: relative;
+  height: var(--reach-h, 260px);
+  /* Cap so the transcript always keeps a usable strip, even if a restored
+     --reach-h is taller than the current dock (140px ≈ TRANSCRIPT_MIN_H). */
+  max-height: calc(100% - 140px);
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.transcript-region {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Horizontal splitter between reach map and transcript. */
+.dock-vsplit {
+  height: 7px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  transition: background 0.1s;
+}
+.dock-vsplit:hover,
+.dock-vsplit--dragging {
+  background: color-mix(in oklch, var(--accent) 45%, transparent);
+}
+
+/* Vertical splitter on the dock's left edge (mirrors .rail-resizer). */
+.drawer-resizer {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.1s;
+}
+.drawer-resizer:hover,
+.drawer-resizer--dragging {
+  background: color-mix(in oklch, var(--accent) 45%, transparent);
 }
 
 /* xterm.css is imported in main.ts (xterm 5.x does not inject it); this only
@@ -770,17 +838,16 @@ button { font: inherit; color: inherit; }
  * cap 720px) — a fixed 360px ellipsized tool args too aggressively.
  * The drawer is chrome, not page: it follows the theme (paper in light mode).
  */
+/* Transcript panel — fills the dock's transcript region (was a floating
+   overlay; now docked beside the terminal via .drawer-dock). */
 .drawer {
-  position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: clamp(360px, 40%, 720px);
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   background: var(--surface);
-  border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  z-index: 10;
   overflow: hidden;
-  animation: eigenform-fade 0.14s ease-out;
 }
 
 .drawer-header {
@@ -1273,15 +1340,16 @@ button { font: inherit; color: inherit; }
  * A backdrop dims the page; clicking it (or ✕ / Esc) dismisses. The scene is an
  * SVG spiderweb of the agent's tool reach with a time scrubber.
  */
+/* Reach map — fills the dock's reach region (top). `position: relative` anchors
+   its absolutely-positioned scene children (banner, tooltip, empty). */
 .reachmap {
-  position: absolute;
-  inset: 0;
-  z-index: 60;
+  position: relative;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: color-mix(in oklch, var(--bg) 86%, transparent);
-  backdrop-filter: blur(2px);
-  animation: eigenform-fade 0.14s ease-out;
+  background: var(--surface);
+  overflow: hidden;
 }
 
 .reachmap-head {

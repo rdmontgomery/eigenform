@@ -160,7 +160,11 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   const closeBtn = el("button", "reachmap-close");
   closeBtn.title = "Close (Esc)";
   closeBtn.append(icon("x", 15));
-  head.append(titleWrap, closeBtn);
+  head.append(titleWrap);
+  // The close button / Esc / backdrop only make sense for the standalone overlay
+  // (an `onClose` is wired). Docked inside the drawer there's nothing to close to,
+  // so we omit them — and crucially don't let a docked map swallow global Esc.
+  if (opts.onClose) head.append(closeBtn);
 
   // The scene: SVG graph + a flagged-exfil banner.
   const scene = el("div", "reachmap-scene");
@@ -445,21 +449,23 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     /* EventSource auto-reconnects. */
   };
 
-  // ── Dismiss affordances ───────────────────────────────────────────────────
+  // ── Dismiss affordances (standalone overlay only) ─────────────────────────
   function dismiss() {
     opts.onClose?.();
   }
-  closeBtn.addEventListener("click", dismiss);
-  root.addEventListener("mousedown", (e) => {
-    if (e.target === root) dismiss(); // backdrop click
-  });
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
       dismiss();
     }
   }
-  document.addEventListener("keydown", onKey);
+  if (opts.onClose) {
+    closeBtn.addEventListener("click", dismiss);
+    root.addEventListener("mousedown", (e) => {
+      if (e.target === root) dismiss(); // backdrop click
+    });
+    document.addEventListener("keydown", onKey);
+  }
 
   renderPlayBtn();
 

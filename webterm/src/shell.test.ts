@@ -16,6 +16,12 @@ import {
   RAIL_MIN,
   RAIL_MAX,
   RAIL_COLLAPSE_AT,
+  drawerWidthFromPointer,
+  DRAWER_MIN_W,
+  DRAWER_MAX_W,
+  splitHeightFromPointer,
+  REACH_MIN_H,
+  TRANSCRIPT_MIN_H,
 } from "./shell-helpers.ts";
 import type { PtyInfo } from "./types.ts";
 
@@ -133,6 +139,52 @@ test("railFromPointer: clamps width to [RAIL_MIN, RAIL_MAX]", () => {
 
 test("railFromPointer: rounds fractional pointer positions", () => {
   assert.equal(railFromPointer(300.6, 244).w, 301);
+});
+
+// ---------------------------------------------------------------------------
+// drawerWidthFromPointer — the docked drawer lives on the RIGHT, so its drag
+// handle sits on its left edge. Dragging left widens the drawer; the width is
+// the gap between the pointer and the container's right edge, clamped.
+// ---------------------------------------------------------------------------
+
+test("drawerWidthFromPointer: width is the gap to the container's right edge", () => {
+  // container right edge at 1000, pointer at 600 → 400px drawer.
+  assert.equal(drawerWidthFromPointer(600, 1000), 400);
+});
+
+test("drawerWidthFromPointer: clamps to [DRAWER_MIN_W, DRAWER_MAX_W]", () => {
+  // pointer near the right edge → narrower than the min → clamp up.
+  assert.equal(drawerWidthFromPointer(995, 1000), DRAWER_MIN_W);
+  // pointer far left → wider than the max → clamp down.
+  assert.equal(drawerWidthFromPointer(-9999, 1000), DRAWER_MAX_W);
+});
+
+test("drawerWidthFromPointer: rounds fractional pointer positions", () => {
+  assert.equal(drawerWidthFromPointer(599.4, 1000), 401);
+});
+
+// ---------------------------------------------------------------------------
+// splitHeightFromPointer — the reach map sits on top of the transcript inside
+// the drawer. The divider drag sets the reach region's height (pointer y minus
+// the region's top), clamped so neither pane collapses below its minimum.
+// ---------------------------------------------------------------------------
+
+test("splitHeightFromPointer: height is the pointer offset below the region top", () => {
+  // region spans y∈[100, 700] (top 100, height 600); pointer at 400 → 300px reach.
+  assert.equal(splitHeightFromPointer(400, 100, 600), 300);
+});
+
+test("splitHeightFromPointer: clamps up to REACH_MIN_H near the top", () => {
+  assert.equal(splitHeightFromPointer(105, 100, 600), REACH_MIN_H);
+});
+
+test("splitHeightFromPointer: leaves the transcript at least TRANSCRIPT_MIN_H", () => {
+  // region top 100, height 600 → bottom 700. Max reach = 600 - TRANSCRIPT_MIN_H.
+  assert.equal(splitHeightFromPointer(9999, 100, 600), 600 - TRANSCRIPT_MIN_H);
+});
+
+test("splitHeightFromPointer: rounds fractional pointer positions", () => {
+  assert.equal(splitHeightFromPointer(400.6, 100, 600), 301);
 });
 
 // ---------------------------------------------------------------------------
