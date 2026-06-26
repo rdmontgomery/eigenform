@@ -489,6 +489,8 @@ export function mountShell(appEl: HTMLElement): void {
   let reachOpen = localStorage.getItem(LS_REACH) === "1";
   /** Mounted reach overlay (uuid-bound), or null. */
   let reachCurrent: { uuid: string; handle: ReachHandle } | null = null;
+  /** Placeholder overlay shown when reach is open but the tab has no uuid yet. */
+  let reachPlaceholder: HTMLElement | null = null;
 
   function setReachOpen(open: boolean) {
     reachOpen = open;
@@ -501,22 +503,53 @@ export function mountShell(appEl: HTMLElement): void {
     const tab = activeTab();
     const uuid = reachOpen ? (tab?.descriptor.uuid ?? null) : null;
 
-    if (!reachOpen || tabs.length === 0 || !uuid) {
+    if (reachPlaceholder) {
+      reachPlaceholder.remove();
+      reachPlaceholder = null;
+    }
+
+    if (!reachOpen || tabs.length === 0) {
       reachCurrent?.handle.close();
       reachCurrent = null;
       renderControls();
       return;
     }
 
-    if (reachCurrent?.uuid !== uuid) {
+    if (uuid) {
+      if (reachCurrent?.uuid !== uuid) {
+        reachCurrent?.handle.close();
+        reachCurrent = {
+          uuid,
+          handle: mountReachMap(termHost, uuid, {
+            root: tab?.descriptor.cwd ?? undefined,
+            onClose: () => setReachOpen(false),
+          }),
+        };
+      }
+    } else {
+      // No transcript yet — show a dismissible placeholder so the toggle always
+      // does something visible (mirrors the drawer's placeholder).
       reachCurrent?.handle.close();
-      reachCurrent = {
-        uuid,
-        handle: mountReachMap(termHost, uuid, {
-          root: tab?.descriptor.cwd ?? undefined,
-          onClose: () => setReachOpen(false),
-        }),
-      };
+      reachCurrent = null;
+      reachPlaceholder = el("div", "reachmap");
+      const head = el("div", "reachmap-head");
+      const titleWrap = el("div", "reachmap-titlewrap");
+      const title = el("span", "reachmap-title");
+      title.textContent = "Reach";
+      titleWrap.append(title);
+      const closeBtn = el("button", "reachmap-close");
+      closeBtn.title = "Close (Esc)";
+      closeBtn.append(icon("x", 15));
+      closeBtn.addEventListener("click", () => setReachOpen(false));
+      head.append(titleWrap, closeBtn);
+      const empty = el("div", "reachmap-empty");
+      empty.textContent = "no transcript yet — start or resume a Claude session to map its reach";
+      reachPlaceholder.append(head, empty);
+      // The empty element is absolutely positioned to fill the host; give it a
+      // relative scene to anchor to.
+      empty.style.position = "static";
+      empty.style.flex = "1";
+      termHost.append(reachPlaceholder);
     }
     renderControls();
   }
