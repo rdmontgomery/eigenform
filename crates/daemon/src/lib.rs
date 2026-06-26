@@ -1096,14 +1096,32 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
     }
 
     // 3b. Pump fan-out → socket. Ends when the channel closes or the socket send fails.
+    // Interleaved with a periodic Ping: a quiet pty (claude thinking, a long tool
+    // call) otherwise leaves the socket idle, and idle WebSockets get reaped by
+    // WSL2 localhost forwarding / NAT — which silently freezes the client tab.
+    // The browser auto-replies Pong; it lands in the read loop below as `_ => {}`.
     let send_task = tokio::spawn(async move {
-        while let Some(out) = rx.recv().await {
-            let msg = match out {
-                Outbound::Binary(b) => Message::Binary(b),
-                Outbound::Text(t) => Message::Text(t),
-            };
-            if sink.send(msg).await.is_err() {
-                break; // socket gone: stop pumping (and drop rx → detach).
+        let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(20));
+        keepalive.tick().await; // first tick is immediate — skip it.
+        loop {
+            tokio::select! {
+                out = rx.recv() => match out {
+                    Some(out) => {
+                        let msg = match out {
+                            Outbound::Binary(b) => Message::Binary(b),
+                            Outbound::Text(t) => Message::Text(t),
+                        };
+                        if sink.send(msg).await.is_err() {
+                            break; // socket gone: stop pumping (and drop rx → detach).
+                        }
+                    }
+                    None => break, // channel closed: nothing left to pump.
+                },
+                _ = keepalive.tick() => {
+                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                        break; // socket gone.
+                    }
+                }
             }
         }
     });

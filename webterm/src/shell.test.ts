@@ -5,6 +5,10 @@ import assert from "node:assert/strict";
 import {
   relativeRecency,
   reconcileTabs,
+  reconnectQuery,
+  reconnectDelay,
+  RECONNECT_BASE_MS,
+  RECONNECT_CAP_MS,
   ageGroup,
   inkFor,
   INK_KEYS,
@@ -222,6 +226,73 @@ test("reconcileTabs: empty ptys, tab with uuid resumes; tab without uuid drops",
   const actions = reconcileTabs(saved, []);
   assert.equal(actions.find((a) => a.descriptor.label === "Restorable")?.action, "resume");
   assert.equal(actions.find((a) => a.descriptor.label === "Not restorable")?.action, "drop");
+});
+
+// ---------------------------------------------------------------------------
+// reconnectQuery — pick the right /pty query to re-open a dropped socket.
+//
+// A live socket can drop for two reasons we can recover from:
+//   - idle reaping (WSL2 localhost, NAT): the pty is still alive in the daemon
+//     → re-attach by its (possibly renumbered) id.
+//   - daemon restart (cargo watch): the pty is gone but the session is on disk
+//     → resume by uuid (spawns `claude --resume`).
+// Anything else is unrecoverable → null (give up, mark the tab dead).
+//
+// This is the single-tab analogue of reconcileTabs, returning the query string
+// the reconnect loop hands to connectPty (or null to stop).
+// ---------------------------------------------------------------------------
+
+test("reconnectQuery: re-attaches by id when the pty is still live", () => {
+  const ptys: PtyInfo[] = [pty({ id: "10", uuid: "uuid-a" })];
+  const q = reconnectQuery({ ptyId: "10", uuid: "uuid-a", label: "Tab" }, ptys);
+  assert.equal(q, "?attach=10");
+});
+
+test("reconnectQuery: re-attaches by renumbered id when uuid still matches a live pty", () => {
+  // Daemon restarted and the pty kept running under a NEW id; match on uuid and
+  // attach to the live id rather than resuming a duplicate.
+  const ptys: PtyInfo[] = [pty({ id: "42", uuid: "uuid-a" })];
+  const q = reconnectQuery({ ptyId: "10", uuid: "uuid-a", label: "Tab" }, ptys);
+  assert.equal(q, "?attach=42");
+});
+
+test("reconnectQuery: resumes by uuid when the pty is gone but the session is on disk", () => {
+  const ptys: PtyInfo[] = []; // daemon restarted, pty gone
+  const q = reconnectQuery({ ptyId: "10", uuid: "uuid-a", label: "Tab" }, ptys);
+  assert.equal(q, "?session=uuid-a");
+});
+
+test("reconnectQuery: encodes the uuid in the resume query", () => {
+  const q = reconnectQuery({ uuid: "a/b c", label: "Tab" }, []);
+  assert.equal(q, `?session=${encodeURIComponent("a/b c")}`);
+});
+
+test("reconnectQuery: returns null when the pty is gone and there is no uuid to resume", () => {
+  const q = reconnectQuery({ ptyId: "10", label: "Ephemeral" }, []);
+  assert.equal(q, null);
+});
+
+// ---------------------------------------------------------------------------
+// reconnectDelay — capped exponential backoff for the reconnect loop.
+// Attempt 0 is the first retry. Delay doubles each attempt, capped so a
+// long-down daemon (a slow `cargo watch` rebuild) is still polled steadily.
+// ---------------------------------------------------------------------------
+
+test("reconnectDelay: first attempt waits the base delay", () => {
+  assert.equal(reconnectDelay(0), RECONNECT_BASE_MS);
+});
+
+test("reconnectDelay: doubles each attempt", () => {
+  assert.equal(reconnectDelay(1), RECONNECT_BASE_MS * 2);
+  assert.equal(reconnectDelay(2), RECONNECT_BASE_MS * 4);
+});
+
+test("reconnectDelay: never exceeds the cap", () => {
+  assert.equal(reconnectDelay(100), RECONNECT_CAP_MS);
+});
+
+test("reconnectDelay: treats negative attempts as the base delay (defensive)", () => {
+  assert.equal(reconnectDelay(-1), RECONNECT_BASE_MS);
 });
 
 test("reconcileTabs: tab with uuid only (no ptyId) and uuid not in ptys → resume", () => {

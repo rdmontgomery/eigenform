@@ -40,6 +40,8 @@ import type { PtyInfo, ForestItem } from "./types.ts";
 import {
   relativeRecency,
   reconcileTabs,
+  reconnectQuery,
+  reconnectDelay,
   ageGroup,
   inkFor,
   railFromPointer,
@@ -152,6 +154,14 @@ interface TabEntry {
   state: string;
   /** true when the pty exited or an attach-miss closed the socket. */
   dead: boolean;
+  /** true once the tab is intentionally closed — suppresses reconnect. */
+  disposed: boolean;
+  /** true while a reconnect loop is in flight (socket dropped, retrying). */
+  reconnecting: boolean;
+  /** Consecutive reconnect attempts so far — drives the backoff. */
+  reconnectAttempt: number;
+  /** Pending reconnect timer id, or null. */
+  reconnectTimer: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +400,11 @@ export function mountShell(appEl: HTMLElement): void {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const t = tabs[idx]!;
+
+    // Mark disposed first so a reconnect-in-flight (or the socket's own onClose)
+    // doesn't resurrect the tab we're tearing down.
+    t.disposed = true;
+    clearReconnect(t);
 
     // Detach socket — pty stays alive in the daemon.
     t.ptyHandle?.dispose();
@@ -817,56 +832,13 @@ export function mountShell(appEl: HTMLElement): void {
       ptyHandle: null,
       state: "idle",
       dead: false,
+      disposed: false,
+      reconnecting: false,
+      reconnectAttempt: 0,
+      reconnectTimer: null,
     };
 
-    const ptyHandle = connectPty(query, handle.term, {
-      onPtyId(id) {
-        entry.descriptor = { ...entry.descriptor, ptyId: id };
-        // If we opened without a ptyId, update the tab's identity — and carry
-        // activeTabId along, or activeTab() would go null for the visible tab
-        // (header would blank, drawer would unmount).
-        if (entry.id !== id && !desc.ptyId) {
-          if (activeTabId === entry.id) activeTabId = id;
-          entry.id = id;
-        }
-        saveTabs();
-        renderTabStrip();
-      },
-      onSessionUuid(uuid) {
-        entry.descriptor = { ...entry.descriptor, uuid };
-        saveTabs();
-        renderTabStrip();
-        // The active tab just gained a transcript — swap the placeholder out.
-        if (entry.id === activeTabId) syncDrawer();
-      },
-      onExit() {
-        entry.state = "exited";
-        entry.dead = true;
-        renderTabStrip();
-        if (entry.id === activeTabId) renderTermHeader();
-      },
-      onClose(reason) {
-        if (reason === "no live pty with that id") {
-          // Attach-miss: drop the tab and refresh roster.
-          closeTab(entry.id);
-          void refreshRoster();
-        } else if (reason) {
-          // Policy close or other close with a reason: mark dead and annotate label
-          // so the user can see WHY the tab died (e.g. "no such directory").
-          entry.dead = true;
-          entry.descriptor = { ...entry.descriptor, label: `✗ ${reason}` };
-          renderTabStrip();
-          if (entry.id === activeTabId) renderTermHeader();
-        } else {
-          // Any other close: mark dead so user can see + manually close.
-          entry.dead = true;
-          renderTabStrip();
-          if (entry.id === activeTabId) renderTermHeader();
-        }
-      },
-    });
-
-    entry.ptyHandle = ptyHandle;
+    connectEntry(entry, query, desc.ptyId);
     tabs.push(entry);
     saveTabs();
     activateTab(entry.id);
@@ -876,6 +848,151 @@ export function mountShell(appEl: HTMLElement): void {
     });
 
     return entry;
+  }
+
+  /**
+   * Open (or re-open) the pty socket for `entry` with `query` and wire the
+   * protocol handlers. Reused by the initial connect and by the reconnect loop,
+   * so a dropped socket transparently re-attaches to the live pty — or resumes
+   * the session — without tearing down the tab. `hadPtyId` records whether the
+   * tab already knew a ptyId at connect time (used to decide whether the first
+   * announced id should become the tab's stable identity).
+   */
+  function connectEntry(entry: TabEntry, query: string, hadPtyId?: string) {
+    entry.ptyHandle = connectPty(query, entry.handle.term, {
+      onPtyId(id) {
+        // First frame after a (re)attach: the socket is live again.
+        clearReconnect(entry);
+        entry.dead = false;
+        entry.descriptor = { ...entry.descriptor, ptyId: id };
+        // If we opened without a ptyId, update the tab's identity — and carry
+        // activeTabId along, or activeTab() would go null for the visible tab
+        // (header would blank, drawer would unmount).
+        if (entry.id !== id && !hadPtyId) {
+          if (activeTabId === entry.id) activeTabId = id;
+          entry.id = id;
+        }
+        saveTabs();
+        renderTabStrip();
+        if (entry.id === activeTabId) renderTermHeader();
+      },
+      onSessionUuid(uuid) {
+        entry.descriptor = { ...entry.descriptor, uuid };
+        saveTabs();
+        renderTabStrip();
+        // The active tab just gained a transcript — swap the placeholder out.
+        if (entry.id === activeTabId) syncDrawer();
+      },
+      onExit() {
+        // The child genuinely exited — not a transport drop. Don't reconnect.
+        clearReconnect(entry);
+        entry.state = "exited";
+        entry.dead = true;
+        renderTabStrip();
+        if (entry.id === activeTabId) renderTermHeader();
+      },
+      onClose(reason) {
+        if (entry.disposed) return; // tab being closed by the user.
+        const attachMiss = reason === "no live pty with that id";
+        if (attachMiss && !entry.descriptor.uuid) {
+          // Stale ephemeral attach (e.g. a boot-restore race) with nothing to
+          // resume from: drop the tab, as before.
+          closeTab(entry.id);
+          void refreshRoster();
+        } else if (reason === "" || attachMiss) {
+          // Recoverable drop — daemon restart (cargo watch), idle reaping, or a
+          // renumbered/resumable pty. Keep the tab and reconnect with backoff.
+          scheduleReconnect(entry);
+        } else {
+          // Genuine policy close (e.g. "no such directory"): surface and stop.
+          clearReconnect(entry);
+          entry.dead = true;
+          entry.descriptor = { ...entry.descriptor, label: `✗ ${reason}` };
+          renderTabStrip();
+          if (entry.id === activeTabId) renderTermHeader();
+        }
+      },
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Reconnect loop — a dropped pty socket (daemon restart under `cargo watch`,
+  // or idle TCP reaping on WSL2 localhost) used to leave the tab silently dead:
+  // still focusable, but every keystroke dropped. Instead we reconcile against
+  // the live ptys and re-attach (or resume) on the SAME terminal, which is the
+  // exact path a fresh browser tab takes — and known to work.
+  // ------------------------------------------------------------------
+
+  /** Give up after ~2 min of a never-returning daemon (cap × attempts). */
+  const MAX_RECONNECT_ATTEMPTS = 40;
+
+  function clearReconnect(entry: TabEntry) {
+    if (entry.reconnectTimer !== null) {
+      clearTimeout(entry.reconnectTimer);
+      entry.reconnectTimer = null;
+    }
+    entry.reconnecting = false;
+    entry.reconnectAttempt = 0;
+  }
+
+  function scheduleReconnect(entry: TabEntry) {
+    if (entry.disposed || entry.reconnectTimer !== null) return;
+    entry.reconnecting = true;
+    entry.dead = false;
+    entry.state = "reconnecting";
+    renderTabStrip();
+    if (entry.id === activeTabId) renderTermHeader();
+
+    const delay = reconnectDelay(entry.reconnectAttempt);
+    entry.reconnectTimer = window.setTimeout(() => {
+      entry.reconnectTimer = null;
+      void attemptReconnect(entry);
+    }, delay);
+  }
+
+  function giveUpReconnect(entry: TabEntry) {
+    entry.reconnecting = false;
+    entry.reconnectAttempt = 0;
+    entry.dead = true;
+    entry.state = "exited";
+    renderTabStrip();
+    if (entry.id === activeTabId) renderTermHeader();
+  }
+
+  async function attemptReconnect(entry: TabEntry) {
+    if (entry.disposed) return;
+
+    let ptys: PtyInfo[] | null = null;
+    try {
+      ptys = (await (await fetch("/api/pty")).json()) as PtyInfo[];
+    } catch {
+      // Daemon still down (mid-rebuild). Retry with backoff until the ceiling.
+      ptys = null;
+    }
+    if (entry.disposed) return;
+
+    if (ptys !== null) {
+      const query = reconnectQuery(entry.descriptor, ptys);
+      if (query) {
+        // Reset to a fresh grid so the daemon's re-attach snapshot paints clean
+        // (same as a brand-new tab), then re-open the socket.
+        entry.handle.term.reset();
+        const hadPtyId = entry.descriptor.ptyId;
+        entry.ptyHandle?.dispose();
+        connectEntry(entry, query, hadPtyId);
+        return; // onPtyId clears the reconnect state on success.
+      }
+      // Daemon is up but the session is gone for good — stop trying.
+      giveUpReconnect(entry);
+      return;
+    }
+
+    entry.reconnectAttempt += 1;
+    if (entry.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      giveUpReconnect(entry);
+      return;
+    }
+    scheduleReconnect(entry);
   }
 
   // ------------------------------------------------------------------
