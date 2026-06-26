@@ -1308,6 +1308,15 @@ export function mountShell(appEl: HTMLElement): void {
     }
   });
 
+  // Dismiss the preview when clicking outside it and outside the rail rows
+  // (clicking another row re-selects via that row's own handler).
+  document.addEventListener("pointerdown", (e) => {
+    if (!preview.isOpen()) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.closest(".forest-preview") || t.closest(".rail-row"))) return;
+    clearSelection();
+  });
+
   searchInput.addEventListener("input", () => {
     searchQuery = searchInput.value.trim().toLowerCase();
     renderRail();
