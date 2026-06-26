@@ -96,26 +96,31 @@ pub fn session_json(session: &Session) -> String {
             Role::User => exchanges.push(json!({ "user": content_raw(turn), "uuid": turn.uuid })),
             Role::Assistant => {
                 let text = content_raw(turn);
+                // Append this turn's text to the open exchange (or open one if this is a
+                // leading assistant turn with no preceding user turn).
                 match exchanges.last_mut() {
-                    Some(cur) => {
-                        append_text(cur, "assistant", &text);
-                        // Attach the first tool_use from this assistant turn, if any.
-                        if cur.get("tool").is_none() {
-                            if let Some(tool) = extract_tool(turn, session) {
-                                cur["tool"] = tool;
-                            }
-                        }
-                    }
+                    Some(cur) => append_text(cur, "assistant", &text),
                     None => {
                         // TODO: guard against leading tool-only turns producing an empty-user exchange.
-                        // A session whose first visible turn is an assistant turn with a tool_use
-                        // produces `{"user":"","assistant":…,"tool":…}` — technically valid but the
-                        // empty `user` string renders as a blank group header in the drawer.
-                        let mut e = json!({ "user": "", "assistant": text });
-                        if let Some(tool) = extract_tool(turn, session) {
-                            e["tool"] = tool;
-                        }
-                        exchanges.push(e);
+                        // A session whose first visible turn is an assistant turn produces
+                        // `{"user":"",…}` — technically valid but renders a blank group header.
+                        exchanges.push(json!({ "user": "", "assistant": text }));
+                    }
+                }
+                // Emit EVERY tool_use from this turn. The first one rides the open exchange
+                // (which may be the group-opening user turn); each subsequent tool gets its
+                // own `{user:"", tool}` exchange so the drawer's `toolExchanges` and the reach
+                // map see the whole reach — not just the first call. tool_result user rows are
+                // invisible, so without this all of a turn's calls would collapse onto one.
+                for tool in extract_tools(turn, session) {
+                    let needs_new = exchanges
+                        .last()
+                        .map(|e| e.get("tool").is_some())
+                        .unwrap_or(true);
+                    if needs_new {
+                        exchanges.push(json!({ "user": "", "tool": tool }));
+                    } else {
+                        exchanges.last_mut().unwrap()["tool"] = tool;
                     }
                 }
             }
@@ -223,16 +228,22 @@ fn truncate_tool_content(s: &str) -> (&str, bool) {
     (&s[..end], true)
 }
 
-/// Build a `tool` JSON object for the first `tool_use` block found in an assistant turn,
-/// pairing it with its result from the session. Returns `None` if the turn has no tool_use.
+/// Build `tool` JSON objects for EVERY `tool_use` block in an assistant turn, in
+/// content order, each paired with its result from the session. A single assistant
+/// message can issue several tool calls at once (parallel tool use); all are emitted.
 ///
 /// Field naming asymmetry (historical-compat): `truncated` applies to OUTPUT (pre-existing
 /// field name consumed by woland), while `inputTruncated` applies to INPUT (added in 4.1).
 /// Do not normalise these without a simultaneous woland update.
-fn extract_tool(turn: &Turn, session: &Session) -> Option<serde_json::Value> {
-    let blocks = tool_use_blocks(turn);
-    let (id, name, input) = blocks.into_iter().next()?;
+fn extract_tools(turn: &Turn, session: &Session) -> Vec<serde_json::Value> {
+    tool_use_blocks(turn)
+        .into_iter()
+        .map(|(id, name, input)| build_tool(id, name, input, session))
+        .collect()
+}
 
+/// Build one `tool` JSON object from a single tool_use block, pairing it with its result.
+fn build_tool(id: String, name: String, input: serde_json::Value, session: &Session) -> serde_json::Value {
     // Truncate input if serialized form exceeds the cap.
     let input_str = serde_json::to_string(&input).unwrap_or_default();
     let (input_val, input_truncated) = if input_str.len() <= TOOL_CONTENT_BYTES {
@@ -275,7 +286,7 @@ fn extract_tool(turn: &Turn, session: &Session) -> Option<serde_json::Value> {
         }
     }
 
-    Some(tool)
+    tool
 }
 
 /// Set `obj[key]` to `text`, or append (blank-line joined) if it already holds text — so
@@ -863,5 +874,79 @@ mod session_json_tests {
         assert_eq!(doc["exchanges"][0]["assistant"], "on it");
         assert_eq!(doc["exchanges"][0]["system"], "4.2s");
         assert!(doc["exchanges"][0].get("tool").is_none(), "no tool field on plain exchange");
+    }
+
+    #[test]
+    fn all_tools_across_a_user_turn_are_emitted() {
+        // One user turn drives three tool calls across three assistant turns, each
+        // separated by an (invisible) tool_result user row. Every tool must survive —
+        // not just the first — so the reach map / drawer see the whole reach.
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"do the thing"}}"#,
+            &assistant_with_tool("a1", "toolu_01", "Read", r#"{"file_path":"/a"}"#, "reading"),
+            &tool_result_turn("r1", "toolu_01", "contents a"),
+            &assistant_with_tool("a2", "toolu_02", "Edit", r#"{"file_path":"/b"}"#, ""),
+            &tool_result_turn("r2", "toolu_02", "edited b"),
+            &assistant_with_tool("a3", "toolu_03", "Bash", r#"{"command":"ls"}"#, "listing"),
+            &tool_result_turn("r3", "toolu_03", "file list"),
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        let exchanges = doc["exchanges"].as_array().unwrap();
+
+        // Every tool kind, in session order.
+        let kinds: Vec<&str> = exchanges
+            .iter()
+            .filter_map(|e| e["tool"]["kind"].as_str())
+            .collect();
+        assert_eq!(kinds, vec!["Read", "Edit", "Bash"], "all three tool calls are emitted in order");
+
+        // Each tool keeps its own paired output.
+        let outputs: Vec<&str> = exchanges
+            .iter()
+            .filter_map(|e| e["tool"]["output"].as_str())
+            .collect();
+        assert_eq!(outputs, vec!["contents a", "edited b", "file list"]);
+
+        // The first tool still rides the group-opening user exchange (drawer invariant).
+        assert_eq!(exchanges[0]["user"], "do the thing");
+        assert_eq!(exchanges[0]["tool"]["kind"], "Read");
+        // Subsequent tool exchanges carry no user text so they don't open new groups.
+        assert_eq!(exchanges[1]["user"], "");
+        assert_eq!(exchanges[2]["user"], "");
+    }
+
+    #[test]
+    fn parallel_tool_uses_in_one_message_are_all_emitted() {
+        // A single assistant message issues two tool_use blocks at once — both survive.
+        let two_tools = serde_json::to_string(&json!({
+            "type": "assistant",
+            "uuid": "a1",
+            "sessionId": "abc12345-0000",
+            "message": { "role": "assistant", "content": [
+                { "type": "tool_use", "id": "toolu_01", "name": "Read", "input": {"file_path": "/a"} },
+                { "type": "tool_use", "id": "toolu_02", "name": "Read", "input": {"file_path": "/b"} }
+            ]}
+        })).unwrap();
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"read both"}}"#,
+            &two_tools,
+            &tool_result_turn("r1", "toolu_01", "contents a"),
+            &tool_result_turn("r2", "toolu_02", "contents b"),
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        let exchanges = doc["exchanges"].as_array().unwrap();
+        let paths: Vec<&str> = exchanges
+            .iter()
+            .filter_map(|e| e["tool"]["input"]["file_path"].as_str())
+            .collect();
+        assert_eq!(paths, vec!["/a", "/b"], "both parallel tool calls are emitted");
+        // Outputs pair correctly by tool_use_id, not position.
+        let outputs: Vec<&str> = exchanges
+            .iter()
+            .filter_map(|e| e["tool"]["output"].as_str())
+            .collect();
+        assert_eq!(outputs, vec!["contents a", "contents b"]);
     }
 }
