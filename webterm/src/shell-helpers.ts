@@ -86,6 +86,48 @@ export function railFromPointer(x: number, prevW: number): RailDrag {
 }
 
 // ---------------------------------------------------------------------------
+// drawerWidthFromPointer — width of the right-docked drawer during a drag.
+// ---------------------------------------------------------------------------
+
+export const DRAWER_MIN_W = 320;
+export const DRAWER_MAX_W = 900;
+export const DRAWER_DEFAULT_W = 460;
+
+/**
+ * Map a pointer x (px from the viewport's left) to the docked drawer's width,
+ * given the drawer container's right edge. The drawer grows to the LEFT, so its
+ * width is the gap between the pointer and the right edge, clamped to
+ * [DRAWER_MIN_W, DRAWER_MAX_W].
+ */
+export function drawerWidthFromPointer(x: number, containerRight: number): number {
+  return Math.min(DRAWER_MAX_W, Math.max(DRAWER_MIN_W, Math.round(containerRight - x)));
+}
+
+// ---------------------------------------------------------------------------
+// splitHeightFromPointer — reach-region height for the in-drawer vertical split.
+// ---------------------------------------------------------------------------
+
+export const REACH_MIN_H = 120;
+export const TRANSCRIPT_MIN_H = 140;
+export const REACH_DEFAULT_H = 260;
+
+/**
+ * Map a pointer y (px from the viewport's top) to the reach region's height in
+ * the drawer's vertical split, given the split region's top and total height.
+ * The reach map sits above the transcript, so its height is the pointer's
+ * offset below `regionTop`, clamped to keep the reach map ≥ REACH_MIN_H and the
+ * transcript ≥ TRANSCRIPT_MIN_H.
+ */
+export function splitHeightFromPointer(
+  y: number,
+  regionTop: number,
+  regionHeight: number,
+): number {
+  const max = Math.max(REACH_MIN_H, regionHeight - TRANSCRIPT_MIN_H);
+  return Math.min(max, Math.max(REACH_MIN_H, Math.round(y - regionTop)));
+}
+
+// ---------------------------------------------------------------------------
 // inkFor
 // ---------------------------------------------------------------------------
 
