@@ -137,8 +137,12 @@ function dotClass(state: string): string {
 }
 
 /** The session's ink hue CSS value, from its most durable key. */
-function inkVar(uuid: string | undefined, ptyId: string | undefined, fallback: string): string {
-  return `var(--ink-${inkFor(uuid ?? ptyId ?? fallback)})`;
+// Color = project: hash on the full cwd path so every session in the same
+// directory shares one hue (in both the rail and the tab strip). Falls back to
+// a label/chip when the cwd is unknown. Hashing the full path (not the basename)
+// keeps unrelated `…/src` dirs from colliding.
+function inkVar(cwd: string | undefined, fallback: string): string {
+  return `var(--ink-${inkFor(cwd ?? fallback)})`;
 }
 
 const GROUP_LABELS: Record<AgeGroup, string> = {
@@ -861,7 +865,7 @@ export function mountShell(appEl: HTMLElement): void {
         tab.classList.add("tab--active");
         tab.style.setProperty(
           "--tab-ink",
-          inkVar(t.descriptor.uuid, t.descriptor.ptyId, t.descriptor.label),
+          inkVar(t.descriptor.cwd, t.descriptor.label),
         );
       }
       if (t.dead) tab.classList.add("tab--dead");
@@ -1258,7 +1262,7 @@ export function mountShell(appEl: HTMLElement): void {
 
   function renderRailRow(row: RosterRow, now: number): HTMLElement {
     const item = el("button", "rail-row");
-    item.style.setProperty("--row-ink", inkVar(row.uuid, row.ptyId, row.cwdChip));
+    item.style.setProperty("--row-ink", inkVar(row.cwd, row.cwdChip));
     if (isActiveRow(row)) item.classList.add("rail-row--active");
 
     const dotWrap = el("span", "rail-row-dot");
