@@ -17,8 +17,10 @@
  * persists across reloads (LS_DRAWER). When the active tab has no session
  * uuid yet, the open drawer shows a placeholder instead of a transcript.
  *
- * THEME: dark (default) / light, toggled from the top bar, persisted
- * (LS_THEME). The terminal pane stays dark ink in both — see .term-scope.
+ * THEME: a color scheme (src/themes/schemes.ts) picked from the top bar drives
+ * the WHOLE surface — deriveChrome() generates every chrome token from it and
+ * the same scheme colors the terminal. Persisted as a scheme id (LS_SCHEME);
+ * the legacy light/dark toggle (LS_THEME) migrates to Warm Ink light/dark.
  *
  * LOCALSTORAGE SCHEMA (key "eigenform:term:tabs:v1"):
  *   JSON array of TabDescriptor. Versioned key — bump suffix if schema changes.
@@ -27,14 +29,19 @@
  * Interval is cleared on visibilitychange → hidden to avoid background fan-out.
  */
 
-import { newTerminal, connectPty, applyFont, DEFAULT_FONT } from "./pty.ts";
+import { newTerminal, connectPty, applyFont, applyTermTheme, DEFAULT_FONT } from "./pty.ts";
 import type { FontSettings } from "./pty.ts";
+import { SCHEMES, DEFAULT_SCHEME_ID, schemeById } from "./themes/schemes.ts";
+import type { Scheme } from "./themes/schemes.ts";
+import { deriveChrome } from "./themes/derive.ts";
 import { buildRoster } from "./roster.ts";
 import type { RosterRow } from "./roster.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
 import {
   relativeRecency,
   reconcileTabs,
+  reconnectQuery,
+  reconnectDelay,
   ageGroup,
   inkFor,
   railFromPointer,
@@ -60,7 +67,18 @@ export type { TabDescriptor, TabReconcileAction };
 
 const LS_KEY = "eigenform:term:tabs:v1";
 const LS_OVERRIDES = "eigenform:term:overrides:v1";
-const LS_THEME = "eigenform:term:theme:v1";
+const LS_THEME = "eigenform:term:theme:v1"; // legacy light/dark — migrated to v2
+const LS_SCHEME = "eigenform:term:theme:v2"; // scheme id
+
+/** Resolve the active scheme: stored v2 id → migrated v1 light/dark → default. */
+function loadSchemeId(): string {
+  const v2 = localStorage.getItem(LS_SCHEME);
+  if (v2 && schemeById(v2)) return v2;
+  const v1 = localStorage.getItem(LS_THEME);
+  if (v1 === "light") return "warm-ink-light";
+  if (v1 === "dark") return "warm-ink-dark";
+  return DEFAULT_SCHEME_ID;
+}
 const LS_DRAWER = "eigenform:term:drawer:v1";
 const LS_REACH = "eigenform:term:reach:v1";
 const LS_RAIL = "eigenform:term:rail:v1";
@@ -139,6 +157,14 @@ interface TabEntry {
   state: string;
   /** true when the pty exited or an attach-miss closed the socket. */
   dead: boolean;
+  /** true once the tab is intentionally closed — suppresses reconnect. */
+  disposed: boolean;
+  /** true while a reconnect loop is in flight (socket dropped, retrying). */
+  reconnecting: boolean;
+  /** Consecutive reconnect attempts so far — drives the backoff. */
+  reconnectAttempt: number;
+  /** Pending reconnect timer id, or null. */
+  reconnectTimer: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,11 +185,26 @@ export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
   // Theme (applied before any layout so first paint is correct)
   // ------------------------------------------------------------------
-  let theme = localStorage.getItem(LS_THEME) === "light" ? "light" : "dark";
-  applyTheme(theme);
+  let scheme: Scheme = schemeById(loadSchemeId()) ?? SCHEMES[0]!;
+  applyChrome(scheme);
 
-  function applyTheme(t: string) {
-    document.documentElement.classList.toggle("theme-light", t === "light");
+  /** Paint the whole surface from a scheme: chrome tokens on :root + every
+   *  open terminal's colors. Persisted so it survives reload. */
+  function applyScheme(next: Scheme) {
+    scheme = next;
+    localStorage.setItem(LS_SCHEME, next.id);
+    applyChrome(next);
+    for (const t of tabs) applyTermTheme(t.handle.term, next.theme);
+    renderControls();
+    if (themePopover) renderThemePopover();
+  }
+
+  function applyChrome(s: Scheme) {
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(deriveChrome(s.theme))) {
+      root.style.setProperty(k, v);
+    }
+    root.style.colorScheme = s.dark ? "dark" : "light";
   }
 
   // ------------------------------------------------------------------
@@ -240,7 +281,7 @@ export function mountShell(appEl: HTMLElement): void {
   const controls = el("div", "topbar-controls");
   topbar.append(railBtn, tabStrip, controls);
 
-  const termArea = el("div", "term-area term-scope");
+  const termArea = el("div", "term-area");
   const termHeader = el("div", "term-header");
   const termHost = el("div", "term-host");
   termArea.append(termHeader, termHost);
@@ -363,6 +404,11 @@ export function mountShell(appEl: HTMLElement): void {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const t = tabs[idx]!;
+
+    // Mark disposed first so a reconnect-in-flight (or the socket's own onClose)
+    // doesn't resurrect the tab we're tearing down.
+    t.disposed = true;
+    clearReconnect(t);
 
     // Detach socket — pty stays alive in the daemon.
     t.ptyHandle?.dispose();
@@ -561,15 +607,10 @@ export function mountShell(appEl: HTMLElement): void {
   function renderControls() {
     controls.innerHTML = "";
 
-    const themeBtn = el("button", "icon-btn");
-    themeBtn.title = theme === "dark" ? "Light mode" : "Dark mode";
-    themeBtn.append(icon(theme === "dark" ? "sun" : "moon", 16));
-    themeBtn.addEventListener("click", () => {
-      theme = theme === "dark" ? "light" : "dark";
-      localStorage.setItem(LS_THEME, theme);
-      applyTheme(theme);
-      renderControls();
-    });
+    const themeBtn = el("button", `icon-btn theme-btn${themePopover ? " icon-btn--active" : ""}`);
+    themeBtn.title = `Theme — ${scheme.name}`;
+    themeBtn.append(icon("palette", 16));
+    themeBtn.addEventListener("click", () => toggleThemePopover(themeBtn));
 
     const fontBtn = el("button", `icon-btn font-btn${fontPopover ? " icon-btn--active" : ""}`);
     fontBtn.title = "Terminal font";
@@ -689,6 +730,75 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
+  // Theme popover — pick a scheme by sight (live swatch strips)
+  // ------------------------------------------------------------------
+
+  let themePopover: HTMLElement | null = null;
+
+  function toggleThemePopover(anchor: HTMLElement) {
+    if (themePopover) { closeThemePopover(); return; }
+    const pop = el("div", "theme-pop");
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect();
+    pop.style.top = `${Math.round(r.bottom + 6)}px`;
+    pop.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+    themePopover = pop;
+    renderThemePopover();
+    renderControls();
+    document.addEventListener("pointerdown", onThemeOutside, true);
+    document.addEventListener("keydown", onThemeKey, true);
+  }
+
+  function closeThemePopover() {
+    themePopover?.remove();
+    themePopover = null;
+    document.removeEventListener("pointerdown", onThemeOutside, true);
+    document.removeEventListener("keydown", onThemeKey, true);
+    renderControls();
+  }
+
+  function onThemeOutside(e: PointerEvent) {
+    const t = e.target as HTMLElement;
+    if (themePopover && !themePopover.contains(t) && !t.closest(".theme-btn")) {
+      closeThemePopover();
+    }
+  }
+
+  function onThemeKey(e: KeyboardEvent) {
+    if (e.key === "Escape") { e.preventDefault(); closeThemePopover(); }
+  }
+
+  // The 6 ANSI hues shown in a swatch strip — a quick read of a scheme's palette.
+  const SWATCH_KEYS = ["red", "yellow", "green", "cyan", "blue", "magenta"] as const;
+
+  function renderThemePopover() {
+    const pop = themePopover;
+    if (!pop) return;
+    pop.innerHTML = "";
+    for (const s of SCHEMES) {
+      const row = el("button", `theme-row${s.id === scheme.id ? " theme-row--on" : ""}`);
+
+      const swatch = el("div", "theme-swatch");
+      swatch.style.background = s.theme.background;
+      for (const k of SWATCH_KEYS) {
+        const dot = el("span", "theme-dot");
+        dot.style.background = s.theme[k];
+        swatch.append(dot);
+      }
+      const fg = el("span", "theme-dot theme-dot--fg");
+      fg.style.background = s.theme.foreground;
+      swatch.append(fg);
+
+      const name = el("span", "theme-row-name");
+      name.textContent = s.name;
+
+      row.append(swatch, name);
+      row.addEventListener("click", () => applyScheme(s));
+      pop.append(row);
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Tab strip
   // ------------------------------------------------------------------
 
@@ -794,7 +904,7 @@ export function mountShell(appEl: HTMLElement): void {
     const termEl = el("div", "term-pane");
     termHost.append(termEl);
 
-    const handle = newTerminal(font);
+    const handle = newTerminal(font, scheme.theme);
     handle.term.open(termEl);
 
     const entry: TabEntry = {
@@ -805,20 +915,49 @@ export function mountShell(appEl: HTMLElement): void {
       ptyHandle: null,
       state: "idle",
       dead: false,
+      disposed: false,
+      reconnecting: false,
+      reconnectAttempt: 0,
+      reconnectTimer: null,
     };
 
-    const ptyHandle = connectPty(query, handle.term, {
+    connectEntry(entry, query, desc.ptyId);
+    tabs.push(entry);
+    saveTabs();
+    activateTab(entry.id);
+
+    requestAnimationFrame(() => {
+      try { handle.fit.fit(); } catch { /* ok */ }
+    });
+
+    return entry;
+  }
+
+  /**
+   * Open (or re-open) the pty socket for `entry` with `query` and wire the
+   * protocol handlers. Reused by the initial connect and by the reconnect loop,
+   * so a dropped socket transparently re-attaches to the live pty — or resumes
+   * the session — without tearing down the tab. `hadPtyId` records whether the
+   * tab already knew a ptyId at connect time (used to decide whether the first
+   * announced id should become the tab's stable identity).
+   */
+  function connectEntry(entry: TabEntry, query: string, hadPtyId?: string) {
+    entry.ptyHandle = connectPty(query, entry.handle.term, {
       onPtyId(id) {
+        // First frame after a (re)attach: the socket is live again.
+        clearReconnect(entry);
+        entry.dead = false;
         entry.descriptor = { ...entry.descriptor, ptyId: id };
         // If we opened without a ptyId, update the tab's identity — and carry
         // activeTabId along, or activeTab() would go null for the visible tab
         // (header would blank, drawer would unmount).
-        if (entry.id !== id && !desc.ptyId) {
+        if (entry.id !== id && !hadPtyId) {
           if (activeTabId === entry.id) activeTabId = id;
           entry.id = id;
         }
         saveTabs();
         renderTabStrip();
+        if (entry.id === activeTabId) renderTermHeader();
       },
       onSessionUuid(uuid) {
         entry.descriptor = { ...entry.descriptor, uuid };
@@ -831,42 +970,115 @@ export function mountShell(appEl: HTMLElement): void {
         }
       },
       onExit() {
+        // The child genuinely exited — not a transport drop. Don't reconnect.
+        clearReconnect(entry);
         entry.state = "exited";
         entry.dead = true;
         renderTabStrip();
         if (entry.id === activeTabId) renderTermHeader();
       },
       onClose(reason) {
-        if (reason === "no live pty with that id") {
-          // Attach-miss: drop the tab and refresh roster.
+        if (entry.disposed) return; // tab being closed by the user.
+        const attachMiss = reason === "no live pty with that id";
+        if (attachMiss && !entry.descriptor.uuid) {
+          // Stale ephemeral attach (e.g. a boot-restore race) with nothing to
+          // resume from: drop the tab, as before.
           closeTab(entry.id);
           void refreshRoster();
-        } else if (reason) {
-          // Policy close or other close with a reason: mark dead and annotate label
-          // so the user can see WHY the tab died (e.g. "no such directory").
+        } else if (reason === "" || attachMiss) {
+          // Recoverable drop — daemon restart (cargo watch), idle reaping, or a
+          // renumbered/resumable pty. Keep the tab and reconnect with backoff.
+          scheduleReconnect(entry);
+        } else {
+          // Genuine policy close (e.g. "no such directory"): surface and stop.
+          clearReconnect(entry);
           entry.dead = true;
           entry.descriptor = { ...entry.descriptor, label: `✗ ${reason}` };
-          renderTabStrip();
-          if (entry.id === activeTabId) renderTermHeader();
-        } else {
-          // Any other close: mark dead so user can see + manually close.
-          entry.dead = true;
           renderTabStrip();
           if (entry.id === activeTabId) renderTermHeader();
         }
       },
     });
+  }
 
-    entry.ptyHandle = ptyHandle;
-    tabs.push(entry);
-    saveTabs();
-    activateTab(entry.id);
+  // ------------------------------------------------------------------
+  // Reconnect loop — a dropped pty socket (daemon restart under `cargo watch`,
+  // or idle TCP reaping on WSL2 localhost) used to leave the tab silently dead:
+  // still focusable, but every keystroke dropped. Instead we reconcile against
+  // the live ptys and re-attach (or resume) on the SAME terminal, which is the
+  // exact path a fresh browser tab takes — and known to work.
+  // ------------------------------------------------------------------
 
-    requestAnimationFrame(() => {
-      try { handle.fit.fit(); } catch { /* ok */ }
-    });
+  /** Give up after ~2 min of a never-returning daemon (cap × attempts). */
+  const MAX_RECONNECT_ATTEMPTS = 40;
 
-    return entry;
+  function clearReconnect(entry: TabEntry) {
+    if (entry.reconnectTimer !== null) {
+      clearTimeout(entry.reconnectTimer);
+      entry.reconnectTimer = null;
+    }
+    entry.reconnecting = false;
+    entry.reconnectAttempt = 0;
+  }
+
+  function scheduleReconnect(entry: TabEntry) {
+    if (entry.disposed || entry.reconnectTimer !== null) return;
+    entry.reconnecting = true;
+    entry.dead = false;
+    entry.state = "reconnecting";
+    renderTabStrip();
+    if (entry.id === activeTabId) renderTermHeader();
+
+    const delay = reconnectDelay(entry.reconnectAttempt);
+    entry.reconnectTimer = window.setTimeout(() => {
+      entry.reconnectTimer = null;
+      void attemptReconnect(entry);
+    }, delay);
+  }
+
+  function giveUpReconnect(entry: TabEntry) {
+    entry.reconnecting = false;
+    entry.reconnectAttempt = 0;
+    entry.dead = true;
+    entry.state = "exited";
+    renderTabStrip();
+    if (entry.id === activeTabId) renderTermHeader();
+  }
+
+  async function attemptReconnect(entry: TabEntry) {
+    if (entry.disposed) return;
+
+    let ptys: PtyInfo[] | null = null;
+    try {
+      ptys = (await (await fetch("/api/pty")).json()) as PtyInfo[];
+    } catch {
+      // Daemon still down (mid-rebuild). Retry with backoff until the ceiling.
+      ptys = null;
+    }
+    if (entry.disposed) return;
+
+    if (ptys !== null) {
+      const query = reconnectQuery(entry.descriptor, ptys);
+      if (query) {
+        // Reset to a fresh grid so the daemon's re-attach snapshot paints clean
+        // (same as a brand-new tab), then re-open the socket.
+        entry.handle.term.reset();
+        const hadPtyId = entry.descriptor.ptyId;
+        entry.ptyHandle?.dispose();
+        connectEntry(entry, query, hadPtyId);
+        return; // onPtyId clears the reconnect state on success.
+      }
+      // Daemon is up but the session is gone for good — stop trying.
+      giveUpReconnect(entry);
+      return;
+    }
+
+    entry.reconnectAttempt += 1;
+    if (entry.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      giveUpReconnect(entry);
+      return;
+    }
+    scheduleReconnect(entry);
   }
 
   // ------------------------------------------------------------------

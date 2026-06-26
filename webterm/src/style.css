@@ -1,9 +1,8 @@
 /* webterm — eigenform warm-ink design system (Claude Design handoff, 2026-06-12).
  *
- * Warm ink-on-paper: the terminal is the manuscript page; the chrome is the
- * binding. Dark (default) and light themes share one token vocabulary; the
- * terminal pane carries its own dark token context (.term-scope) so the
- * manuscript stays an ink slab in both modes.
+ * Warm ink-on-paper by default, but every color token is a CSS custom property
+ * that deriveChrome() (src/themes/derive.ts) regenerates from the chosen color
+ * scheme at boot — so the whole surface, terminal included, follows the theme.
  *
  * Fonts (Hanken Grotesk for chrome, IBM Plex Mono for terminal/data) are
  * loaded from index.html — an @import here would land mid-bundle (after
@@ -42,7 +41,10 @@
   --radius-sm: 6px;
 }
 
-/* ── Dark (default) — warm espresso ink ─────────────────────────────────── */
+/* ── Pre-JS fallback (Warm Ink dark) ────────────────────────────────────────
+ * deriveChrome() overrides every color token inline on :root at boot from the
+ * chosen scheme (see shell.ts applyChrome). These static values only show for
+ * the first paint before that runs, and as a no-scheme safety net. */
 :root, .theme-dark {
   --bg:        oklch(0.175 0.012 58);   /* app background */
   --surface:   oklch(0.205 0.012 58);   /* rail / drawer / topbar */
@@ -62,42 +64,6 @@
   --accent-wash: color-mix(in oklch, var(--accent) 16%, transparent);
   --shadow: 0 1px 0 oklch(0.10 0.01 58 / 0.5), 0 8px 24px -12px oklch(0.05 0.01 58 / 0.7);
   color-scheme: dark;
-}
-
-/* ── Light — warm paper; the terminal stays ink ─────────────────────────── */
-.theme-light {
-  --bg:        oklch(0.955 0.009 82);
-  --surface:   oklch(0.975 0.007 82);
-  --raised:    oklch(0.995 0.004 82);
-  --raised-2:  oklch(0.93 0.010 82);
-  --line:      oklch(0.86 0.012 78);
-  --line-soft: oklch(0.90 0.010 80);
-
-  --term-bg:   oklch(0.185 0.013 56);   /* page stays dark ink */
-  --term-line: oklch(0.28 0.012 56);
-
-  --tx:        oklch(0.30 0.018 58);
-  --tx-2:      oklch(0.44 0.016 60);
-  --tx-3:      oklch(0.56 0.014 62);
-  --tx-faint:  oklch(0.66 0.012 66);
-
-  --accent:      oklch(0.60 0.145 45);
-  --accent-2:    oklch(0.66 0.10 47);
-  --accent-wash: color-mix(in oklch, var(--accent) 12%, transparent);
-
-  --st-idle:   oklch(0.62 0.020 70);
-  --shadow: 0 1px 2px oklch(0.5 0.02 70 / 0.10), 0 12px 28px -16px oklch(0.4 0.03 60 / 0.30);
-  color-scheme: light;
-}
-
-/* The terminal pane keeps dark ink tokens regardless of theme. */
-.term-scope {
-  --tx:        oklch(0.91 0.018 75);
-  --tx-2:      oklch(0.70 0.015 70);
-  --tx-3:      oklch(0.54 0.012 64);
-  --tx-faint:  oklch(0.44 0.010 60);
-  --line:      var(--term-line);
-  --line-soft: color-mix(in oklch, var(--term-line) 60%, transparent);
 }
 
 /* ── Base ───────────────────────────────────────────────────────────────── */
@@ -590,6 +556,49 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
 }
 .font-pop-reset:hover { color: var(--tx); border-color: var(--line); background: var(--raised-2); }
+
+/* ── Theme popover (scheme picker) ──────────────────────────────────────── */
+.theme-pop {
+  position: fixed;
+  z-index: 40;
+  width: 244px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+  font-family: var(--font-ui);
+}
+.theme-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.theme-row:hover { background: var(--raised-2); }
+.theme-row--on { border-color: var(--accent); background: var(--accent-wash); }
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.theme-dot { width: 7px; height: 12px; border-radius: 2px; }
+.theme-dot--fg { width: 3px; margin-left: 2px; }
+.theme-row-name { font-size: 12.5px; color: var(--tx); }
+.theme-row--on .theme-row-name { color: var(--accent); }
 
 /* ── Terminal area (the manuscript page) ────────────────────────────────── */
 .term-area {

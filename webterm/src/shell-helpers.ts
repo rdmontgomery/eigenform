@@ -180,3 +180,48 @@ export function reconcileTabs(
     return { action: "drop", descriptor: desc };
   });
 }
+
+/**
+ * Pick the `/pty` query that re-opens a single dropped socket, or null if the
+ * tab is unrecoverable. This is the single-tab analogue of {@link reconcileTabs}:
+ * the reconnect loop reconciles ONE descriptor against the freshly-fetched live
+ * ptys and hands the result straight to `connectPty`.
+ *
+ *   - pty still live (idle drop / WSL2 localhost reaping) → `?attach=<liveId>`,
+ *     matching on id first, then on uuid (the id renumbers across a daemon
+ *     restart that kept the child alive).
+ *   - pty gone but uuid known (daemon restart) → `?session=<uuid>` to resume
+ *     `claude --resume` from disk.
+ *   - otherwise (ephemeral pty, no uuid) → null: nothing to reconnect to.
+ */
+export function reconnectQuery(
+  desc: TabDescriptor,
+  ptys: PtyInfo[],
+): string | null {
+  const [action] = reconcileTabs([desc], ptys);
+  if (!action) return null;
+  if (action.action === "attach") return `?attach=${action.descriptor.ptyId}`;
+  if (action.action === "resume") {
+    return `?session=${encodeURIComponent(action.descriptor.uuid)}`;
+  }
+  return null;
+}
+
+/** Base delay before the first reconnect attempt (attempt 0), in ms. */
+export const RECONNECT_BASE_MS = 500;
+/**
+ * Cap on the reconnect backoff, in ms. A daemon down for a slow `cargo watch`
+ * rebuild keeps getting polled at this steady interval rather than backing off
+ * into minutes — it mirrors the 3s roster poll.
+ */
+export const RECONNECT_CAP_MS = 3000;
+
+/**
+ * Capped exponential backoff for the reconnect loop. Attempt 0 is the first
+ * retry; the delay doubles each attempt and saturates at {@link RECONNECT_CAP_MS}.
+ * Negative attempts are clamped to the base delay (defensive).
+ */
+export function reconnectDelay(attempt: number): number {
+  const n = Math.max(0, attempt);
+  return Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** n);
+}
