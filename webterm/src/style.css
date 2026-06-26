@@ -340,6 +340,100 @@ button { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 
+/* approximate turn count chip (~N) — quiet, sits in the meta line */
+.rail-row-count {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--tx-faint);
+  white-space: nowrap;
+}
+
+/* selected row: focus/preview state, a ring distinct from --active's wash */
+.rail-row--selected {
+  background: var(--raised-2);
+  border-color: color-mix(in oklch, var(--row-ink, var(--accent)) 45%, transparent);
+}
+.rail-row:focus-visible { outline: none; }
+
+/* ── forest preview float ──────────────────────────────────────────────────
+   A single floating panel previewing a session before launch. Static snapshot
+   (no SSE); the transcript inside is a .drawer mounted in live:false mode. */
+.forest-preview {
+  position: fixed;
+  z-index: 60;
+  width: 440px;
+  max-width: calc(100vw - 16px);
+  /* Fixed height so positioning is stable as the transcript loads async; the
+     body scrolls within. */
+  height: 68vh;
+  max-height: calc(100vh - 16px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.forest-preview-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "cwd launch" "meta launch";
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.forest-preview-cwd {
+  grid-area: cwd;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--row-ink, var(--tx-2));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* keep the tail (basename) visible when clipped */
+  text-align: left;
+}
+.forest-preview-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--tx-faint);
+}
+.forest-preview-live:not(:empty) { color: var(--st-success); }
+.forest-preview-launch {
+  grid-area: launch;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tx);
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+  border-radius: 7px;
+  padding: 5px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.forest-preview-launch:hover {
+  background: color-mix(in oklch, var(--accent) 26%, transparent);
+  border-color: var(--accent);
+}
+.forest-preview-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.forest-preview-empty {
+  padding: 18px 14px;
+  font-size: 11.5px;
+  color: var(--tx-3);
+}
+
 .rail-rename-input {
   width: 100%;
   background: var(--bg);
