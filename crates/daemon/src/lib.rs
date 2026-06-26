@@ -1184,8 +1184,14 @@ impl Pty {
         for arg in args {
             cmd.arg(arg);
         }
+        // Only set cwd if it still exists. A recorded session dir can move or be
+        // deleted (e.g. a renamed checkout); setting cwd to a missing dir makes the
+        // post-fork chdir fail and abort the whole daemon (SIGABRT) instead of just
+        // this child. Falling through lets the child inherit the daemon's cwd.
         if let Some(cwd) = cwd {
-            cmd.cwd(cwd);
+            if cwd.is_dir() {
+                cmd.cwd(cwd);
+            }
         }
 
         let child = pair.slave.spawn_command(cmd)?;
