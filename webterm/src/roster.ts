@@ -71,6 +71,11 @@ export interface RosterRow {
    *  timestamps in the group share the same UTC offset (+00:00 from the backend),
    *  making byte-order equivalent to chronological order. */
   recency: string;
+  /** Approximate turn count for at-a-glance triage: the length of the forest
+   *  activity spark (one entry per completed turn). Absent for live-only rows
+   *  with no matching forest item (no transcript on disk yet). Rendered as
+   *  `~N` to signal it is approximate, not the exact grouped-exchange count. */
+  msgCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,11 +233,13 @@ export function buildRoster(
     // Attempt merge with a forest item of the same uuid.
     let aiTitle: string | null = null;
     let forestCwd: string | null = null;
+    let sparkCount: number | null = null;
     if (resolvedUuid !== null) {
       const fi = forestByUuid.get(resolvedUuid);
       if (fi) {
         aiTitle = fi.title;
         forestCwd = fi.cwd;
+        sparkCount = fi.spark.length;
         mergedForestUuids.add(resolvedUuid);
       }
     }
@@ -266,6 +273,9 @@ export function buildRoster(
     }
     if (resolvedUuid !== null) {
       row.uuid = resolvedUuid;
+    }
+    if (sparkCount !== null) {
+      row.msgCount = sparkCount;
     }
 
     liveRows.push(row);
@@ -304,6 +314,7 @@ export function buildRoster(
       live: false,
       uuid: fi.uuid,
       recency: fi.recency,
+      msgCount: fi.spark.length,
     });
   }
 
