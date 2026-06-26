@@ -1266,3 +1266,197 @@ button { font: inherit; color: inherit; }
   color: var(--st-error);
   flex: 1;
 }
+
+/* ── Reach map overlay ──────────────────────────────────────────────────── */
+/*
+ * Full-host overlay (the terminal is NOT reflowed) layered above the drawer.
+ * A backdrop dims the page; clicking it (or ✕ / Esc) dismisses. The scene is an
+ * SVG spiderweb of the agent's tool reach with a time scrubber.
+ */
+.reachmap {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in oklch, var(--bg) 86%, transparent);
+  backdrop-filter: blur(2px);
+  animation: eigenform-fade 0.14s ease-out;
+}
+
+.reachmap-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.reachmap-titlewrap { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; }
+.reachmap-title {
+  font-weight: 650;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--tx);
+}
+.reachmap-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tx-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reachmap-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--tx-2);
+  cursor: pointer;
+}
+.reachmap-close:hover { background: var(--raised-2); color: var(--tx); }
+
+/* Scene — the SVG fills it; banner/tooltip float over it. */
+.reachmap-scene { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.reachmap-svg { width: 100%; height: 100%; display: block; }
+
+.reachmap-hub-disc {
+  fill: var(--accent);
+  stroke: color-mix(in oklch, var(--accent) 55%, var(--bg));
+  stroke-width: 6;
+}
+.reachmap-hub-label {
+  fill: var(--tx);
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  text-anchor: middle;
+}
+.reachmap-node-label {
+  fill: var(--tx-2);
+  font-family: var(--font-mono);
+  font-size: 17px;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 3px;
+}
+.reachmap-node { cursor: default; }
+.reachmap-node--active .reachmap-node-label { fill: var(--tx); }
+.reachmap-node--active circle { filter: drop-shadow(0 0 6px color-mix(in oklch, var(--accent) 70%, transparent)); }
+@keyframes reachmap-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+.reachmap-node--sensitive circle { animation: reachmap-pulse 1.6s ease-in-out infinite; }
+
+.reachmap-exfil-arc {
+  fill: none;
+  stroke: var(--st-error);
+  stroke-width: 3;
+  stroke-dasharray: 3 7;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+
+.reachmap-banner {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  max-width: 92%;
+  display: none;
+  padding: 7px 13px;
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--st-error) 22%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--st-error) 55%, transparent);
+  color: var(--tx);
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reachmap-banner--on { display: block; }
+
+.reachmap-tooltip {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  max-width: 60%;
+  display: none;
+  padding: 8px 11px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+.reachmap-tooltip--on { display: block; }
+.reachmap-tip-head { font-weight: 650; font-size: 12.5px; color: var(--tx); }
+.reachmap-tip-meta { margin-top: 2px; font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-3); }
+.reachmap-tip-detail {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-2);
+  word-break: break-all;
+}
+
+.reachmap-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tx-3);
+  font-size: 13px;
+}
+
+/* Controls — legend on the left, transport on the right. */
+.reachmap-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.reachmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  flex: 1;
+  min-width: 0;
+}
+.reachmap-legitem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--tx-2);
+  white-space: nowrap;
+}
+.reachmap-legdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+.reachmap-transport { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.reachmap-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--tx);
+  cursor: pointer;
+}
+.reachmap-play:hover { background: var(--raised-2); }
+.reachmap-scrub { width: clamp(120px, 22vw, 280px); accent-color: var(--accent); cursor: pointer; }
+.reachmap-turn {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-3);
+  min-width: 150px;
+  text-align: right;
+}
