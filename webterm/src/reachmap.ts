@@ -442,12 +442,31 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   void load();
 
   // ── SSE live updates ──────────────────────────────────────────────────────
-  const es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
-  es.onmessage = () => void load();
-  es.addEventListener("change", () => void load());
-  es.onerror = () => {
-    /* EventSource auto-reconnects. */
-  };
+  // EventSource only auto-reconnects after an *established* (2xx) stream drops.
+  // A non-2xx response — notably the 404 the daemon returns for a session whose
+  // JSONL hasn't been flushed to disk yet (brand-new session) — is a hard
+  // failure: the browser fires onerror, sets readyState=CLOSED, and never
+  // retries. So we reconnect manually until the file lands.
+  let es: EventSource | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  function connect() {
+    if (closed) return;
+    es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
+    es.onmessage = () => void load();
+    es.addEventListener("change", () => void load());
+    es.onerror = () => {
+      if (closed) return;
+      es?.close();
+      es = null;
+      if (reconnectTimer === null) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, 1500);
+      }
+    };
+  }
+  connect();
 
   // ── Dismiss affordances (standalone overlay only) ─────────────────────────
   function dismiss() {
@@ -475,7 +494,9 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       if (closed) return;
       closed = true;
       stop();
-      es.close();
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      es?.close();
+      es = null;
       document.removeEventListener("keydown", onKey);
       root.remove();
     },
