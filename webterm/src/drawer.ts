@@ -118,6 +118,10 @@ export interface DrawerHandle {
 export interface DrawerActions {
   /** Send an interrupt (^C) to the session's pty. */
   interrupt?: () => void;
+  /** Subscribe to /api/watch for live updates. Defaults to true. Set false for a
+   *  static snapshot (e.g. the forest preview float, which re-fetches on focus
+   *  rather than tailing). */
+  live?: boolean;
 }
 
 /**
@@ -849,15 +853,19 @@ export function mountDrawer(
 
   void load();
 
-  es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
-  // The daemon sends unnamed SSE events; onmessage handles them.
-  // The named "change" listener is a safety net in case the daemon is updated
-  // to emit named events (mirrors woland's followManuscript pattern).
-  es.onmessage = () => void load();
-  es.addEventListener("change", () => void load());
-  es.onerror = () => {
-    // EventSource will auto-reconnect; no action needed here.
-  };
+  // Static mode (live === false): one fetch, no subscription. Used by the forest
+  // preview float, which re-fetches on focus instead of tailing the file.
+  if (actions.live !== false) {
+    es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
+    // The daemon sends unnamed SSE events; onmessage handles them.
+    // The named "change" listener is a safety net in case the daemon is updated
+    // to emit named events (mirrors woland's followManuscript pattern).
+    es.onmessage = () => void load();
+    es.addEventListener("change", () => void load());
+    es.onerror = () => {
+      // EventSource will auto-reconnect; no action needed here.
+    };
+  }
 
   // ------------------------------------------------------------------
   // Handle (teardown)

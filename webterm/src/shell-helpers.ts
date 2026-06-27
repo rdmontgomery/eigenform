@@ -131,14 +131,15 @@ export function splitHeightFromPointer(
 // inkFor
 // ---------------------------------------------------------------------------
 
-/** Per-session ink hues — each key has a matching CSS var --ink-<key>. */
+/** Per-project ink hues — each key has a matching CSS var --ink-<key>. */
 export const INK_KEYS = ["clay", "ochre", "olive", "teal", "slate", "plum"] as const;
 
 export type InkKey = (typeof INK_KEYS)[number];
 
 /**
- * Deterministic per-session ink hue: a stable key (session uuid, else ptyId,
- * else cwd) hashes to one of INK_KEYS. FNV-1a keeps nearby keys from clumping
+ * Deterministic ink hue: a stable key (the full cwd path, else a label/chip)
+ * hashes to one of INK_KEYS, so every session in the same project shares a
+ * color across the rail and tab strip. FNV-1a keeps nearby keys from clumping
  * the way a char-code sum would.
  */
 export function inkFor(key: string): InkKey {

@@ -59,6 +59,8 @@ import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
 import { mountReachMap } from "./reachmap.ts";
 import type { ReachHandle } from "./reachmap.ts";
+import { createForestPreview } from "./forest-preview.ts";
+import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { icon } from "./icons.ts";
 
 // Re-export so callers can reach pure helpers via either module.
@@ -137,8 +139,12 @@ function dotClass(state: string): string {
 }
 
 /** The session's ink hue CSS value, from its most durable key. */
-function inkVar(uuid: string | undefined, ptyId: string | undefined, fallback: string): string {
-  return `var(--ink-${inkFor(uuid ?? ptyId ?? fallback)})`;
+// Color = project: hash on the full cwd path so every session in the same
+// directory shares one hue (in both the rail and the tab strip). Falls back to
+// a label/chip when the cwd is unknown. Hashing the full path (not the basename)
+// keeps unrelated `…/src` dirs from colliding.
+function inkVar(cwd: string | undefined, fallback: string): string {
+  return `var(--ink-${inkFor(cwd ?? fallback)})`;
 }
 
 const GROUP_LABELS: Record<AgeGroup, string> = {
@@ -861,7 +867,7 @@ export function mountShell(appEl: HTMLElement): void {
         tab.classList.add("tab--active");
         tab.style.setProperty(
           "--tab-ink",
-          inkVar(t.descriptor.uuid, t.descriptor.ptyId, t.descriptor.label),
+          inkVar(t.descriptor.cwd, t.descriptor.label),
         );
       }
       if (t.dead) tab.classList.add("tab--dead");
@@ -1199,6 +1205,118 @@ export function mountShell(appEl: HTMLElement): void {
   let lastRows: RosterRow[] = [];
   let searchQuery = "";
 
+  // ── Forest selection + preview float ──────────────────────────────────────
+  // Focusing a row (click or ↑/↓) selects it and previews its transcript; launch
+  // is a separate commit (Enter / double-click / the float's Launch button).
+  let selectedKey: string | null = null;
+  /** Flattened, group-ordered visible rows — the keyboard-nav order. */
+  let visibleRows: RosterRow[] = [];
+  /** row.key → its rendered rail button, for focus/scroll + selected styling. */
+  const rowEls = new Map<string, HTMLElement>();
+
+  const preview: ForestPreviewHandle = createForestPreview({
+    onLaunch: (row) => {
+      launchRow(row);
+      preview.hide();
+    },
+    onFork: (newUuid) => {
+      openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
+        uuid: newUuid,
+        label: "fork",
+      });
+      void refreshRoster();
+    },
+  });
+
+  /** Launch/attach a session (the old single-click behavior, now an explicit commit). */
+  function launchRow(row: RosterRow) {
+    if (row.ptyId) {
+      openTabWithQuery(`?attach=${row.ptyId}`, {
+        ptyId: row.ptyId,
+        uuid: row.uuid,
+        label: row.label,
+        cwd: row.cwd,
+      });
+    } else if (row.uuid) {
+      openTabWithQuery(`?session=${row.uuid}`, {
+        uuid: row.uuid,
+        label: row.label,
+        cwd: row.cwd,
+      });
+    }
+  }
+
+  /** Focus a row: mark it selected and float its preview. */
+  function selectRow(row: RosterRow) {
+    selectedKey = row.key;
+    for (const [key, elm] of rowEls) {
+      elm.classList.toggle("rail-row--selected", key === selectedKey);
+    }
+    const anchor = rowEls.get(row.key);
+    if (anchor) {
+      anchor.focus({ preventScroll: true });
+      anchor.scrollIntoView({ block: "nearest" });
+      preview.show(row, anchor);
+    }
+  }
+
+  /** Clear selection and dismiss the preview float. */
+  function clearSelection() {
+    selectedKey = null;
+    for (const elm of rowEls.values()) elm.classList.remove("rail-row--selected");
+    preview.hide();
+  }
+
+  /** Move selection by `delta` through the visible rows (clamped at the ends). */
+  function moveSelection(delta: number) {
+    if (visibleRows.length === 0) return;
+    const i = visibleRows.findIndex((r) => r.key === selectedKey);
+    const next = i === -1 ? (delta > 0 ? 0 : visibleRows.length - 1)
+                         : Math.min(visibleRows.length - 1, Math.max(0, i + delta));
+    selectRow(visibleRows[next]!);
+  }
+
+  // Keyboard nav for the forest: ↑/↓ move selection (driving the preview),
+  // Enter launches, Esc dismisses. Ignored while a rename input has focus so
+  // typing is never hijacked. The search box is a sibling of railScroll, so its
+  // own typing is unaffected; ArrowDown from search jumps into the list.
+  railScroll.addEventListener("keydown", (e) => {
+    if (document.activeElement instanceof HTMLInputElement) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveSelection(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveSelection(-1);
+    } else if (e.key === "Enter") {
+      const row = visibleRows.find((r) => r.key === selectedKey);
+      if (row) {
+        e.preventDefault();
+        launchRow(row);
+        preview.hide();
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      clearSelection();
+    }
+  });
+
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && visibleRows.length > 0) {
+      e.preventDefault();
+      selectRow(visibleRows[0]!);
+    }
+  });
+
+  // Dismiss the preview when clicking outside it and outside the rail rows
+  // (clicking another row re-selects via that row's own handler).
+  document.addEventListener("pointerdown", (e) => {
+    if (!preview.isOpen()) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.closest(".forest-preview") || t.closest(".rail-row"))) return;
+    clearSelection();
+  });
+
   searchInput.addEventListener("input", () => {
     searchQuery = searchInput.value.trim().toLowerCase();
     renderRail();
@@ -1222,6 +1340,8 @@ export function mountShell(appEl: HTMLElement): void {
     }
     const now = Date.now();
     railScroll.innerHTML = "";
+    rowEls.clear();
+    visibleRows = [];
 
     const rows = searchQuery
       ? lastRows.filter((r) =>
@@ -1249,7 +1369,20 @@ export function mountShell(appEl: HTMLElement): void {
       railScroll.append(header);
 
       for (const row of groupRows) {
-        railScroll.append(renderRailRow(row, now));
+        visibleRows.push(row);
+        const item = renderRailRow(row, now);
+        rowEls.set(row.key, item);
+        railScroll.append(item);
+      }
+    }
+
+    // Preserve selection across re-renders; drop it (and the float) if the
+    // selected row is gone (e.g. filtered out or no longer in the roster).
+    if (selectedKey !== null) {
+      if (rowEls.has(selectedKey)) {
+        rowEls.get(selectedKey)!.classList.add("rail-row--selected");
+      } else {
+        clearSelection();
       }
     }
 
@@ -1258,7 +1391,7 @@ export function mountShell(appEl: HTMLElement): void {
 
   function renderRailRow(row: RosterRow, now: number): HTMLElement {
     const item = el("button", "rail-row");
-    item.style.setProperty("--row-ink", inkVar(row.uuid, row.ptyId, row.cwdChip));
+    item.style.setProperty("--row-ink", inkVar(row.cwd, row.cwdChip));
     if (isActiveRow(row)) item.classList.add("rail-row--active");
 
     const dotWrap = el("span", "rail-row-dot");
@@ -1271,6 +1404,11 @@ export function mountShell(appEl: HTMLElement): void {
     const project = el("span", "rail-row-project");
     project.textContent = row.cwdChip;
     meta.append(project);
+    if (row.msgCount !== undefined) {
+      const count = el("span", "rail-row-count");
+      count.textContent = `~${row.msgCount}`;
+      meta.append(count);
+    }
     if (row.live) {
       const live = el("span", "rail-row-live");
       live.textContent = "· live";
@@ -1283,22 +1421,15 @@ export function mountShell(appEl: HTMLElement): void {
 
     item.append(dotWrap, body, recencyEl);
 
-    // Click: open/attach to this session.
-    item.addEventListener("click", () => {
-      if (row.ptyId) {
-        openTabWithQuery(`?attach=${row.ptyId}`, {
-          ptyId: row.ptyId,
-          uuid: row.uuid,
-          label: row.label,
-          cwd: row.cwd,
-        });
-      } else if (row.uuid) {
-        openTabWithQuery(`?session=${row.uuid}`, {
-          uuid: row.uuid,
-          label: row.label,
-          cwd: row.cwd,
-        });
-      }
+    if (row.key === selectedKey) item.classList.add("rail-row--selected");
+
+    // Single click / focus → select + preview (no launch). Launch is a separate
+    // commit: double-click, Enter, or the float's Launch button.
+    item.addEventListener("click", () => selectRow(row));
+    item.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      launchRow(row);
+      preview.hide();
     });
 
     // Double-click label → inline rename → localStorage override.

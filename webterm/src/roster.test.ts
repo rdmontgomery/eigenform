@@ -89,6 +89,28 @@ test("user override beats every derived label", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildRoster — msgCount (approximate turn count from the spark)
+// ---------------------------------------------------------------------------
+
+test("forest-only row carries msgCount from spark length", () => {
+  const rows = buildRoster([], [forest({ uuid: "aaa", spark: [1, 2, 3] })], {});
+  assert.equal(rows[0]!.msgCount, 3);
+});
+
+test("live row merged with a forest item inherits its spark count", () => {
+  const ptys: PtyInfo[] = [pty({ id: "1", uuid: "aaa" })];
+  const forestItems: ForestItem[] = [forest({ uuid: "aaa", spark: [9, 9] })];
+  const rows = buildRoster(ptys, forestItems, {});
+  assert.equal(rows[0]!.live, true);
+  assert.equal(rows[0]!.msgCount, 2);
+});
+
+test("live-only row with no forest match has no msgCount", () => {
+  const rows = buildRoster([pty({ id: "1", uuid: null })], [], {});
+  assert.equal(rows[0]!.msgCount, undefined);
+});
+
+// ---------------------------------------------------------------------------
 // buildRoster — ordering
 // ---------------------------------------------------------------------------
 
