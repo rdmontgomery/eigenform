@@ -11,6 +11,8 @@ fn sk(name: &str, layer: Layer, path: &str) -> LayeredSkill {
             name: name.into(),
             description: format!("{name} desc"),
             source_path: PathBuf::from(path),
+            size: 0,
+            tokens: 0,
         },
     }
 }
@@ -178,9 +180,10 @@ fn render_tree_skills_grouped_alphabetically() {
         sk("mid", Layer::Repo { project: None }, "/r/mid.md"),
     ];
     let out = render_tree(&scan);
-    let p_a = out.find("\nalpha\n").unwrap();
-    let p_m = out.find("\nmid\n").unwrap();
-    let p_z = out.find("\nzeta\n").unwrap();
+    // Name headers now carry a trailing token estimate, e.g. `alpha  ~0 tok`.
+    let p_a = out.find("\nalpha  ").unwrap();
+    let p_m = out.find("\nmid  ").unwrap();
+    let p_z = out.find("\nzeta  ").unwrap();
     assert!(p_a < p_m);
     assert!(p_m < p_z);
 }

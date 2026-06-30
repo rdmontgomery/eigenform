@@ -8,6 +8,7 @@ use std::fmt::Write as _;
 
 use chrono::{DateTime, Utc};
 use eigenform_forest::SessionRef;
+use eigenform_inspect::{InspectData, InspectLayer};
 use eigenform_surgery::{Role, Session, Turn};
 use serde_json::json;
 
@@ -35,6 +36,122 @@ pub fn sessions_view(sessions: &[SessionRef], now: DateTime<Utc>, show_project: 
         title,
         body: vec![View::Lines(lines)],
     }
+}
+
+/// Format a token count for display: `~N tok` under 1k, `~N.Nk tok` above. The
+/// `~` marks it as an estimate. Mirrors `eigenform_skills::fmt_tokens` so the
+/// legacy text trees and the unified view agree on notation.
+fn fmt_tokens(tokens: usize) -> String {
+    if tokens >= 1000 {
+        format!("~{:.1}k tok", tokens as f64 / 1000.0)
+    } else {
+        format!("~{tokens} tok")
+    }
+}
+
+/// Project the unified config inventory to a [`View`] tree: one node per
+/// resolution layer (with its token total), drilling into `skills` and `memory`
+/// subgroups, each entry annotated with its token weight and — for skills — its
+/// resolution status (`WINS` / `shadowed` / `namespaced`). This is the unified,
+/// token-budgeted, navigable model the call-to-action asked for, rendered through
+/// the same `View` IR as the session view.
+pub fn inspect_view(data: &InspectData) -> View {
+    let title = format!(
+        "inspect · {} layer{} · {}",
+        data.layers.len(),
+        if data.layers.len() == 1 { "" } else { "s" },
+        fmt_tokens(data.tokens()),
+    );
+
+    let layers = data.layers.iter().map(layer_node).collect();
+    View::Document {
+        title,
+        body: vec![View::Tree(layers)],
+    }
+}
+
+fn layer_node(layer: &InspectLayer) -> Node {
+    let mut node = Node::new("▸", &format!("{}  {}", layer.label, fmt_tokens(layer.tokens())));
+
+    if !layer.skills.is_empty() {
+        let skill_tok: usize = layer.skills.iter().map(|s| s.tokens).sum();
+        let mut group = Node::label(&format!("skills ({})  {}", layer.skills.len(), fmt_tokens(skill_tok)));
+        for s in &layer.skills {
+            let status = if s.namespaced {
+                "namespaced"
+            } else if s.wins {
+                "WINS"
+            } else {
+                "shadowed"
+            };
+            let mut item = Node::new("◆", &format!("{}  {}", s.name, fmt_tokens(s.tokens)))
+                .with_marker(status);
+            if !s.description.is_empty() {
+                item.children.push(Node::label(&s.description));
+            }
+            group.children.push(item);
+        }
+        node.children.push(group);
+    }
+
+    if !layer.memory.is_empty() {
+        let mem_tok: usize = layer.memory.iter().map(|m| m.tokens).sum();
+        let mut group = Node::label(&format!("memory ({})  {}", layer.memory.len(), fmt_tokens(mem_tok)));
+        for m in &layer.memory {
+            let mut item = Node::new("▪", &format!("{}  {}", m.name, fmt_tokens(m.tokens)))
+                .with_marker(&format!("[{}]", m.kind));
+            if !m.description.is_empty() {
+                item.children.push(Node::label(&m.description));
+            }
+            group.children.push(item);
+        }
+        node.children.push(group);
+    }
+
+    if node.children.is_empty() {
+        node.children.push(Node::label("(empty)"));
+    }
+    node
+}
+
+/// The unified config inventory as JSON: total token estimate, then one object
+/// per layer with its skills and memory (each carrying size + token estimate and,
+/// for skills, the `wins` / `namespaced` resolution flags). The shape mirrors
+/// [`InspectData`] so a browser consumer can render it without remapping.
+pub fn inspect_json(data: &InspectData) -> String {
+    let layers: Vec<serde_json::Value> = data
+        .layers
+        .iter()
+        .map(|l| {
+            json!({
+                "label": l.label,
+                "tokens": l.tokens(),
+                "skills": l.skills.iter().map(|s| json!({
+                    "name": s.name,
+                    "description": s.description,
+                    "path": s.path.display().to_string(),
+                    "size": s.size,
+                    "tokens": s.tokens,
+                    "wins": s.wins,
+                    "namespaced": s.namespaced,
+                })).collect::<Vec<_>>(),
+                "memory": l.memory.iter().map(|m| json!({
+                    "name": m.name,
+                    "description": m.description,
+                    "kind": m.kind,
+                    "path": m.path.display().to_string(),
+                    "size": m.size,
+                    "tokens": m.tokens,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    serde_json::to_string(&json!({
+        "tokens": data.tokens(),
+        "layers": layers,
+    }))
+    .expect("inspect json serializes")
 }
 
 /// The session transcript as semantic HTML: a collapsible `<details>` per exchange
@@ -661,6 +778,16 @@ impl Node {
     pub fn new(glyph: &str, text: &str) -> Node {
         Node {
             glyph: Some(glyph.to_string()),
+            text: text.to_string(),
+            marker: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// A node with no leading glyph (group headers, wrapped description lines).
+    pub fn label(text: &str) -> Node {
+        Node {
+            glyph: None,
             text: text.to_string(),
             marker: None,
             children: Vec::new(),

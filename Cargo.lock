@@ -390,6 +390,7 @@ dependencies = [
  "clap",
  "eigenform-daemon",
  "eigenform-forest",
+ "eigenform-inspect",
  "eigenform-memory",
  "eigenform-projects",
  "eigenform-render",
@@ -440,6 +441,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eigenform-inspect"
+version = "0.0.1"
+dependencies = [
+ "eigenform-memory",
+ "eigenform-projects",
+ "eigenform-skills",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "eigenform-memory"
 version = "0.0.1"
 dependencies = [
@@ -465,6 +477,7 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "eigenform-forest",
+ "eigenform-inspect",
  "eigenform-surgery",
  "serde_json",
 ]

@@ -27,6 +27,19 @@ enum Cmd {
         #[command(subcommand)]
         action: MemoryAction,
     },
+    /// unified config inventory: skills + memory across resolution layers, each
+    /// annotated with a token estimate. Defaults to the current context; pass
+    /// --all-projects for a machine-wide inventory.
+    Inspect {
+        /// override the working directory used to compute the repo layer
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// inventory every recorded project instead of just the current context
+        #[arg(long)]
+        all_projects: bool,
+        #[arg(long, value_enum, default_value_t = RenderFormat::Text)]
+        render: RenderFormat,
+    },
     /// context surgery on a session JSONL: fork, rewind, inject (prints the new uuid)
     Surgery {
         #[command(subcommand)]
@@ -241,6 +254,7 @@ fn main() -> Result<()> {
             MemoryAction::Tree { cwd } => memory_tree(cwd),
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
+        Cmd::Inspect { cwd, all_projects, render } => inspect_cmd(cwd, all_projects, render),
         Cmd::Surgery { action } => surgery(action),
         Cmd::Ptys { port } => ptys_list(port),
         Cmd::Candidates { workspace } => candidates_list(workspace),
@@ -858,11 +872,39 @@ fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+/// `eigenform inspect` — the unified config inventory. Skills + memory across
+/// resolution layers, token-budgeted, projected through the render crate's View IR
+/// to text or json (html is deferred until the browser consumes it).
+fn inspect_cmd(cwd_override: Option<PathBuf>, all_projects: bool, render: RenderFormat) -> Result<()> {
+    let home = home_dir().context("could not determine home directory")?;
+    let data = if all_projects {
+        eigenform_inspect::collect_all_projects(&home).map_err(|e| anyhow::anyhow!("{e}"))?
+    } else {
+        let cwd = match cwd_override {
+            Some(p) => p,
+            None => env::current_dir().context("could not read current dir")?,
+        };
+        eigenform_inspect::collect(&home, &cwd).map_err(|e| anyhow::anyhow!("{e}"))?
+    };
+    match render {
+        RenderFormat::Text => {
+            print!("{}", eigenform_render::render_text(&eigenform_render::inspect_view(&data)))
+        }
+        RenderFormat::Json => println!("{}", eigenform_render::inspect_json(&data)),
+        RenderFormat::Html => anyhow::bail!(
+            "--render html for inspect is deferred until the browser consumes it; use text or json"
+        ),
+    }
+    Ok(())
+}
+
 fn skills_list(all_projects: bool) -> Result<()> {
     let home = home_dir().context("could not determine home directory")?;
 
+    // The single-project view is the common case: default to the current context
+    // (mirrors `skills tree`) rather than rejecting the no-flag invocation.
     if !all_projects {
-        anyhow::bail!("eigenform skills list currently requires --all-projects");
+        return skills_tree(None);
     }
 
     let projects_dir = home.join(".claude/projects");
@@ -914,8 +956,9 @@ fn memory_tree(cwd_override: Option<PathBuf>) -> Result<()> {
 
 fn memory_list(all_projects: bool) -> Result<()> {
     let home = home_dir().context("could not determine home directory")?;
+    // Default to the current project's memory rather than rejecting the no-flag case.
     if !all_projects {
-        anyhow::bail!("eigenform memory list currently requires --all-projects");
+        return memory_tree(None);
     }
     let projects_dir = home.join(".claude/projects");
     let projects = eigenform_projects::enumerate_projects(&projects_dir)
