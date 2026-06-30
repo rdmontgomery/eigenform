@@ -410,6 +410,7 @@ dependencies = [
  "axum",
  "chrono",
  "eigenform-forest",
+ "eigenform-inspect",
  "eigenform-projects",
  "eigenform-render",
  "eigenform-surgery",

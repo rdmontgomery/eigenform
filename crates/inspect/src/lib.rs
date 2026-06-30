@@ -1,8 +1,8 @@
 //! eigenform-inspect: one unified config model with many faces.
 //!
-//! aleph's `inspect` was a single rich data model rendered three ways; eigenform
-//! had skills and memory as independent crates each rendered as a one-shot text
-//! dump. This crate is the unified model — it walks the Claude Code resolution
+//! Skills and memory used to be independent crates, each rendered as a one-shot
+//! text dump — fragmented data, no token weights, no shared surface. This crate
+//! is the cohesive replacement: one model that walks the Claude Code resolution
 //! layers (Global → Plugin → Repo) and, for each, captures the skills and memory
 //! contributed there, every entry annotated with a byte size and a token
 //! estimate. The model is data only; projecting it to text / json / html lives in
