@@ -32,10 +32,16 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // Geometry + palette
 // ---------------------------------------------------------------------------
 
-const VIEW = 1000;
-const CX = VIEW / 2;
-const CY = VIEW / 2;
-const RAD = 430;
+// The viewBox height is fixed; its width tracks the scene's aspect ratio so the map
+// *fills* a landscape frame instead of being scaled to the height and letterboxed with
+// big side gutters (the old square 1000×1000 viewBox looked small and over-centered).
+// Nodes lay out on an ellipse (rx, ry) that spans the viewBox minus a label margin.
+const VH = 1000; // viewBox height — the vertical reference; node sizes stay constant in these units
+const PAD = 78; // breathing room for discs + labels inside the viewBox, in user units
+const MAX_ASPECT = 1.85; // cap so a very wide frame doesn't stretch the web into a thin ellipse
+let vbW = VH; // current viewBox width (updated by the ResizeObserver below)
+let CX = vbW / 2;
+const CY = VH / 2;
 
 /** Distance-from-home ring per kind (1 = inside the workspace, 4 = off-box). */
 const RING: Record<ReachKind, number> = {
@@ -49,7 +55,9 @@ const RING: Record<ReachKind, number> = {
   web: 4,
   comms: 4,
 };
-const RING_FRAC: Record<number, number> = { 1: 0.3, 2: 0.52, 3: 0.74, 4: 0.93 };
+// Fraction of the ellipse radius per ring. The outer ring reaches the full radius (the
+// PAD margin already keeps labels off the edge), so the web spreads wide inside the frame.
+const RING_FRAC: Record<number, number> = { 1: 0.34, 2: 0.58, 3: 0.8, 4: 1 };
 
 /** Kind → CSS color token. Secret/comms are alarm red (the exfil surfaces). */
 const COLOR: Record<ReachKind, string> = {
@@ -169,7 +177,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
 
   // The scene: SVG graph + a flagged-exfil banner.
   const scene = el("div", "reachmap-scene");
-  const canvas = svg("svg", { viewBox: `0 0 ${VIEW} ${VIEW}`, class: "reachmap-svg" });
+  const canvas = svg("svg", { viewBox: `0 0 ${vbW} ${VH}`, class: "reachmap-svg" });
   canvas.setAttribute("preserveAspectRatio", "xMidYMid meet");
   const gEdges = svg("g");
   const gExfil = svg("g");
@@ -214,14 +222,16 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       list.push(n);
       byRing.set(d, list);
     }
+    const rx = vbW / 2 - PAD;
+    const ry = VH / 2 - PAD;
     for (const [d, list] of byRing) {
       list.sort((a, b) => a.firstSeq - b.firstSeq);
-      const r = (RING_FRAC[d] ?? 0.93) * RAD;
+      const fr = RING_FRAC[d] ?? 1;
       const phase = d * 0.7; // per-ring twist so spokes don't stack
       const n = list.length;
       list.forEach((node, i) => {
         const a = phase + (i / Math.max(1, n)) * Math.PI * 2;
-        positions.set(node.id, { x: CX + r * Math.cos(a), y: CY + r * Math.sin(a) });
+        positions.set(node.id, { x: CX + fr * rx * Math.cos(a), y: CY + fr * ry * Math.sin(a) });
       });
     }
   }
@@ -391,7 +401,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     if (cursor >= model.events.length) cursor = 0; // replay from the top
     playing = true;
     renderPlayBtn();
-    timer = window.setInterval(tick, 650);
+    timer = window.setInterval(tick, 300);
   }
   function stop() {
     playing = false;
@@ -447,6 +457,24 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   // across the reach map + drawer, reconnecting on the pre-flush 404 (watch.ts).
   const unsubscribe = subscribeWatch(uuid, () => void load());
 
+  // ── Responsive viewBox ────────────────────────────────────────────────────
+  // Track the scene's aspect ratio so the web fills the frame's width instead of
+  // being letterboxed inside a square. Re-layout + redraw on every resize.
+  function resize() {
+    const w = scene.clientWidth || VH;
+    const h = scene.clientHeight || VH;
+    const aspect = Math.min(MAX_ASPECT, Math.max(1, w / h));
+    vbW = Math.round(VH * aspect);
+    CX = vbW / 2;
+    canvas.setAttribute("viewBox", `0 0 ${vbW} ${VH}`);
+    if (model) {
+      layout(model);
+      draw();
+    }
+  }
+  const ro = new ResizeObserver(resize);
+  ro.observe(scene);
+
   // ── Dismiss affordances (standalone overlay only) ─────────────────────────
   function dismiss() {
     opts.onClose?.();
@@ -474,6 +502,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       closed = true;
       stop();
       unsubscribe();
+      ro.disconnect();
       document.removeEventListener("keydown", onKey);
       root.remove();
     },
