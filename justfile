@@ -69,7 +69,10 @@ dev port="4317":
     #!/usr/bin/env bash
     set -euo pipefail
     cd webterm && npm install >/dev/null 2>&1
-    npx esbuild src/main.ts --bundle --outdir=dist --format=esm --watch &
+    # --watch=forever, not --watch: esbuild stops watching when its stdin closes,
+    # which it does the moment we background it with `&` in this non-interactive
+    # recipe — you'd get one build and no hot reload. `forever` keeps it watching.
+    npx esbuild src/main.ts --bundle --outdir=dist --format=esm --watch=forever </dev/null &
     ESBUILD=$!
     trap "kill $ESBUILD 2>/dev/null || true" EXIT
     cd ..
