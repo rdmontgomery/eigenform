@@ -109,6 +109,17 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLEl
   return e;
 }
 
+/** Keyboard-nav handle for a collapsible group, keyed by its header button.
+ *  Lets the overlay's arrow-key handler drive any node it lands on. */
+interface GroupHandle {
+  header: HTMLElement;
+  body: HTMLElement;
+  isOpen(): boolean;
+  setOpen(v: boolean): void;
+  toggle(): void;
+}
+const groupHandles = new WeakMap<HTMLElement, GroupHandle>();
+
 /** A collapsible row: a header (click to toggle) over a children container. */
 function group(headerContent: (h: HTMLElement) => void, open = true): { row: HTMLElement; body: HTMLElement } {
   const row = el("div", "ix-group");
@@ -123,12 +134,43 @@ function group(headerContent: (h: HTMLElement) => void, open = true): { row: HTM
     row.classList.toggle("ix-open", open);
     body.style.display = open ? "" : "none";
   };
-  header.addEventListener("click", () => {
-    open = !open;
-    apply();
-  });
+  const handle: GroupHandle = {
+    header,
+    body,
+    isOpen: () => open,
+    setOpen: (v) => {
+      if (open === v) return;
+      open = v;
+      apply();
+    },
+    toggle: () => {
+      open = !open;
+      apply();
+    },
+  };
+  groupHandles.set(header, handle);
+  header.addEventListener("click", () => handle.toggle());
   apply();
   return { row, body };
+}
+
+/** A node is expandable when it owns rendered children (desc/path or subrows). */
+function isExpandable(header: HTMLElement): boolean {
+  const h = groupHandles.get(header);
+  return !!h && h.body.childElementCount > 0;
+}
+
+/** The first child header nested directly under a node, if any. */
+function firstChildHead(header: HTMLElement): HTMLElement | null {
+  const h = groupHandles.get(header);
+  return h ? h.body.querySelector<HTMLElement>(":scope > .ix-group > .ix-grouphead") : null;
+}
+
+/** The header of the node that encloses this one, if any. */
+function parentHead(header: HTMLElement): HTMLElement | null {
+  const grp = header.closest(".ix-group");
+  const outer = grp?.parentElement?.closest<HTMLElement>(".ix-group");
+  return outer?.querySelector<HTMLElement>(":scope > .ix-grouphead") ?? null;
 }
 
 function tokenTag(tokens: number): HTMLElement {
@@ -140,7 +182,7 @@ function tokenTag(tokens: number): HTMLElement {
 function skillRow(s: InspectSkill): HTMLElement {
   const status = skillStatus(s);
   const { row, body } = group((h) => {
-    h.append(icon("skill", 13));
+    h.append(icon("bolt", 13));
     const name = el("span", "ix-name");
     name.textContent = s.name;
     const badge = el("span", `ix-badge ix-badge--${status}`);
@@ -160,7 +202,7 @@ function skillRow(s: InspectSkill): HTMLElement {
 
 function memoryRow(m: InspectMemory): HTMLElement {
   const { row, body } = group((h) => {
-    h.append(icon("doc", 13));
+    h.append(icon("brain", 13));
     const name = el("span", "ix-name");
     name.textContent = m.name;
     const badge = el("span", "ix-badge ix-badge--kind");
@@ -293,6 +335,8 @@ export function openInspect(opts: InspectOptions = {}): { close: () => void } {
       const s = inspectSummary(data);
       sub.textContent = `${s.layers} layers · ${s.skills} skills · ${s.memory} memory · ${fmtTokens(s.tokens)}${s.shadowed ? ` · ${s.shadowed} shadowed` : ""}`;
       bodyScroll.append(renderInspectTree(data));
+      // Land the cursor on the first row so arrow-key nav works immediately.
+      bodyScroll.querySelector<HTMLElement>(".ix-grouphead")?.focus();
     } catch (err) {
       bodyScroll.innerHTML = "";
       const e = el("div", "ix-status ix-status--err");
@@ -316,10 +360,66 @@ export function openInspect(opts: InspectOptions = {}): { close: () => void } {
     backdrop.remove();
     window.removeEventListener("keydown", onKey);
   }
+
+  function focusHead(h: HTMLElement | null | undefined) {
+    if (!h) return;
+    h.focus();
+    h.scrollIntoView({ block: "nearest" });
+  }
+
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
       close();
+      return;
+    }
+    // Arrow-key tree navigation over the visible rows. Selection rides native
+    // focus: every row header is a <button>, so the focused element is the cursor.
+    const heads = Array.from(
+      bodyScroll.querySelectorAll<HTMLElement>(".ix-grouphead"),
+    ).filter((h) => h.offsetParent !== null);
+    if (!heads.length) return;
+    const active = document.activeElement as HTMLElement | null;
+    const cur = active && groupHandles.has(active) ? active : null;
+    const idx = cur ? heads.indexOf(cur) : -1;
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        focusHead(idx < 0 ? heads[0] : heads[Math.min(idx + 1, heads.length - 1)]);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        focusHead(idx < 0 ? heads[0] : heads[Math.max(idx - 1, 0)]);
+        break;
+      case "ArrowRight": {
+        e.preventDefault();
+        if (!cur) {
+          focusHead(heads[0]);
+          break;
+        }
+        const h = groupHandles.get(cur)!;
+        if (isExpandable(cur) && !h.isOpen()) h.setOpen(true);
+        else focusHead(firstChildHead(cur));
+        break;
+      }
+      case "ArrowLeft": {
+        e.preventDefault();
+        if (!cur) {
+          focusHead(heads[0]);
+          break;
+        }
+        const h = groupHandles.get(cur)!;
+        if (isExpandable(cur) && h.isOpen()) h.setOpen(false);
+        else focusHead(parentHead(cur));
+        break;
+      }
+      case "Enter":
+      case " ":
+        if (cur) {
+          e.preventDefault();
+          groupHandles.get(cur)!.toggle();
+        }
+        break;
     }
   }
   closeBtn.addEventListener("click", close);

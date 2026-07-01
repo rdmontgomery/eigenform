@@ -1712,6 +1712,7 @@ button { font: inherit; color: inherit; }
   border-radius: var(--radius-sm);
 }
 .ix-grouphead:hover { background: var(--raised); }
+.ix-grouphead:focus { background: var(--accent-wash); outline: none; }
 .ix-caret { color: var(--tx-faint); transition: transform 0.1s ease; flex: none; }
 .ix-group.ix-open > .ix-grouphead > .ix-caret { transform: rotate(90deg); }
 
