@@ -1466,6 +1466,17 @@ button { font: inherit; color: inherit; }
   overflow: hidden;
 }
 
+/* Collapsed: fold the map to just its header. The dock's reach-region shrinks
+   to fit (via :has), the splitter hides, and the transcript fills the dock. */
+.reachmap--collapsed .reachmap-scene,
+.reachmap--collapsed .reachmap-controls { display: none; }
+.reach-region:has(.reachmap--collapsed) {
+  height: auto;
+  max-height: none;
+  flex: 0 0 auto;
+}
+.reach-region:has(.reachmap--collapsed) + .dock-vsplit { display: none; }
+
 .reachmap-head {
   display: flex;
   align-items: center;
@@ -1473,7 +1484,19 @@ button { font: inherit; color: inherit; }
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
+  cursor: pointer;
+  user-select: none;
 }
+.reachmap-head:hover { background: var(--raised); }
+/* Caret points down when expanded, right when collapsed (rotate the chevron). */
+.reachmap-caret {
+  display: inline-flex;
+  color: var(--tx-3);
+  transform: rotate(90deg);
+  transition: transform 0.12s ease;
+  flex-shrink: 0;
+}
+.reachmap--collapsed .reachmap-caret { transform: rotate(0deg); }
 .reachmap-titlewrap { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; }
 .reachmap-title {
   font-weight: 650;

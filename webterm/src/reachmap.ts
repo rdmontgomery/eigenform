@@ -159,7 +159,14 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   // ── Structure: backdrop + panel ──────────────────────────────────────────
   const root = el("div", "reachmap");
 
+  // The header doubles as a collapse toggle: click "Reach" to fold the map away
+  // so the transcript below fills the whole dock (a caret shows the state).
   const head = el("div", "reachmap-head");
+  head.setAttribute("role", "button");
+  head.setAttribute("aria-expanded", "true");
+  head.tabIndex = 0;
+  const caret = el("span", "reachmap-caret");
+  caret.append(icon("chevron", 13));
   const titleWrap = el("div", "reachmap-titlewrap");
   const title = el("span", "reachmap-title");
   title.textContent = "Reach";
@@ -169,7 +176,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   const closeBtn = el("button", "reachmap-close");
   closeBtn.title = "Close (Esc)";
   closeBtn.append(icon("x", 15));
-  head.append(titleWrap);
+  head.append(caret, titleWrap);
   // The close button / Esc / backdrop only make sense for the standalone overlay
   // (an `onClose` is wired). Docked inside the drawer there's nothing to close to,
   // so we omit them — and crucially don't let a docked map swallow global Esc.
@@ -204,6 +211,25 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
 
   root.append(head, scene, controls);
   hostEl.append(root);
+
+  // ── Collapse toggle ───────────────────────────────────────────────────────
+  // Clicking the header folds the map to just this bar; CSS (:has) shrinks the
+  // dock's reach-region and hides the splitter so the transcript fills the rest.
+  let collapsed = false;
+  function setCollapsed(c: boolean) {
+    collapsed = c;
+    root.classList.toggle("reachmap--collapsed", c);
+    head.setAttribute("aria-expanded", String(!c));
+    head.title = c ? "Show reach map" : "Hide reach map";
+    if (c) stop(); // no point animating a hidden map
+  }
+  head.addEventListener("click", () => setCollapsed(!collapsed));
+  head.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setCollapsed(!collapsed);
+    }
+  });
 
   // ── State ────────────────────────────────────────────────────────────────
   let model: ReachModel | null = null;
@@ -486,7 +512,10 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     }
   }
   if (opts.onClose) {
-    closeBtn.addEventListener("click", dismiss);
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // don't also toggle the header's collapse
+      dismiss();
+    });
     root.addEventListener("mousedown", (e) => {
       if (e.target === root) dismiss(); // backdrop click
     });
