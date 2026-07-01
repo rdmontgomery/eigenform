@@ -1621,6 +1621,103 @@ button { font: inherit; color: inherit; }
   font-size: 13px;
 }
 
+/* ── Alternate reach views (reachviews.ts) — cycled from the header ────────── */
+.reachmap-mode {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-2);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.reachmap-mode:hover { background: var(--raised-2); color: var(--tx); }
+
+/* HTML layer that hosts every non-web view; crisp text at any dock size. */
+.reachmap-alt {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+
+/* bands — distance-from-home lanes */
+.rv-bands { display: flex; flex-direction: column; gap: 8px; }
+.rv-band { display: flex; gap: 10px; align-items: baseline; }
+.rv-band-label {
+  flex: 0 0 128px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-3);
+  text-align: right;
+  padding-top: 3px;
+}
+.rv-band--off .rv-band-label { color: var(--st-error); }
+.rv-band-chips { display: flex; flex-wrap: wrap; gap: 5px; flex: 1; min-width: 0; }
+.rv-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--tx);
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 9px; max-width: 100%;
+}
+.rv-chip--alarm { border-color: var(--st-error); }
+.rv-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.rv-cnt { font-family: var(--font-mono); font-size: 10px; color: var(--tx-3); }
+
+/* treemap — squarified area ∝ activity */
+.rv-treemap { position: relative; width: 100%; height: 100%; min-height: 160px; }
+.rv-cell {
+  position: absolute; overflow: hidden;
+  padding: 4px 6px; box-sizing: border-box;
+  background: color-mix(in oklch, var(--c) 24%, var(--surface));
+  border: 1px solid var(--surface);
+  border-left: 3px solid var(--c);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.rv-cell--alarm { outline: 1px solid var(--st-error); outline-offset: -2px; }
+.rv-cell-lab { font-size: 11px; color: var(--tx); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rv-cell-cnt { font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-3); }
+
+/* timeline — kind lanes across turns */
+.rv-timeline { display: flex; flex-direction: column; gap: 5px; }
+.rv-tl-lane { display: flex; align-items: center; gap: 8px; }
+.rv-tl-label {
+  flex: 0 0 110px; text-align: right;
+  font-family: var(--font-mono); font-size: 10px; color: var(--tx-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rv-tl-track { position: relative; flex: 1; height: 18px; background: var(--raised); border-radius: 3px; min-width: 0; }
+.rv-tl-bar {
+  position: absolute; top: 2px; height: 14px; min-width: 3px;
+  background: color-mix(in oklch, var(--c) 65%, transparent);
+  border-radius: 3px; display: flex; align-items: center; padding: 0 5px; overflow: hidden;
+}
+.rv-tl-bar--alarm { outline: 1px solid var(--st-error); }
+.rv-tl-bar-lab { font-size: 10px; color: var(--tx); white-space: nowrap; }
+.rv-tl-axis { font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-3); text-align: right; margin-top: 2px; }
+
+/* dial — radial blast radius (angle = kind, radius = distance-from-home) */
+.rv-dial { position: relative; width: 100%; height: 100%; min-height: 180px; }
+.rv-dial-ring { position: absolute; border: 1px solid var(--line); border-radius: 50%; opacity: 0.5; }
+.rv-dial-ring--off { border-color: color-mix(in oklch, var(--st-error) 45%, transparent); opacity: 0.8; }
+.rv-dial-hub {
+  position: absolute; transform: translate(-50%, -50%);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 650;
+  background: var(--accent); color: var(--bg);
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+}
+.rv-dial-node {
+  position: absolute; transform: translate(-50%, -50%);
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; color: var(--tx);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+  padding: 2px 7px; white-space: nowrap;
+}
+.rv-dial-node--alarm { border-color: var(--st-error); }
+
 /* Controls — legend on the left, transport on the right. */
 .reachmap-controls {
   display: flex;

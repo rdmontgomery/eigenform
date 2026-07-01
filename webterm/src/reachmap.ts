@@ -25,6 +25,19 @@ import type { ReachModel, ReachNode, ReachKind } from "./reach.ts";
 import type { Exchange } from "./turns.ts";
 import { icon } from "./icons.ts";
 import { subscribeWatch } from "./watch.ts";
+import { renderBands, renderDial, renderTreemap, renderTimeline } from "./reachviews.ts";
+import type { ReachViewCtx } from "./reachviews.ts";
+
+/** The selectable reach renderings, cycled from the header. */
+type ReachView = "web" | "bands" | "dial" | "treemap" | "timeline";
+const MODES: ReachView[] = ["web", "bands", "dial", "treemap", "timeline"];
+const MODE_LABEL: Record<ReachView, string> = {
+  web: "spiderweb",
+  bands: "bands",
+  dial: "dial",
+  treemap: "treemap",
+  timeline: "timeline",
+};
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -173,10 +186,13 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   const summary = el("span", "reachmap-summary");
   titleWrap.append(title, summary);
 
+  // View cycler: clicking flips spiderweb → bands → dial → treemap → timeline.
+  const modeBtn = el("button", "reachmap-mode");
+
   const closeBtn = el("button", "reachmap-close");
   closeBtn.title = "Close (Esc)";
   closeBtn.append(icon("x", 15));
-  head.append(caret, titleWrap);
+  head.append(caret, titleWrap, modeBtn);
   // The close button / Esc / backdrop only make sense for the standalone overlay
   // (an `onClose` is wired). Docked inside the drawer there's nothing to close to,
   // so we omit them — and crucially don't let a docked map swallow global Esc.
@@ -195,7 +211,9 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   const tooltip = el("div", "reachmap-tooltip");
   const empty = el("div", "reachmap-empty");
   empty.textContent = "no reach yet — the agent hasn't used any tools";
-  scene.append(canvas, banner, tooltip, empty);
+  // HTML layer for the non-web views (crisp, non-scaling text); hidden in web mode.
+  const altLayer = el("div", "reachmap-alt");
+  scene.append(canvas, altLayer, banner, tooltip, empty);
 
   // Controls: legend + scrubber + play.
   const controls = el("div", "reachmap-controls");
@@ -233,6 +251,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
 
   // ── State ────────────────────────────────────────────────────────────────
   let model: ReachModel | null = null;
+  let mode: ReachView = "web";
   let positions = new Map<string, Pos>();
   let cursor = 0; // number of events revealed
   let playing = false;
@@ -371,12 +390,21 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     }
 
     drawExfil(m, live);
+    updateBanner(m, live);
     updateReadout(m, revealed.length);
   }
 
-  // ── Exfil arc + banner ────────────────────────────────────────────────────
-  function drawExfil(m: ReachModel, live: Map<string, number>) {
+  // The exfil warning banner — shown in every view once both ends are revealed.
+  function updateBanner(m: ReachModel, live: Map<string, number>) {
     banner.classList.remove("reachmap-banner--on");
+    if (!m.exfil) return;
+    if (!live.get(m.exfil.from) || !live.get(m.exfil.to)) return;
+    banner.textContent = `⚠ possible exfil — secret read (turn ${m.exfil.fromTurn}) then egress (turn ${m.exfil.toTurn})`;
+    banner.classList.add("reachmap-banner--on");
+  }
+
+  // ── Exfil arc (web view only) ─────────────────────────────────────────────
+  function drawExfil(m: ReachModel, live: Map<string, number>) {
     if (!m.exfil) return;
     // Only once both ends are revealed.
     if (!live.get(m.exfil.from) || !live.get(m.exfil.to)) return;
@@ -394,9 +422,44 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       });
       gExfil.append(path);
     }
-    banner.textContent = `⚠ possible exfil — secret read (turn ${m.exfil.fromTurn}) then egress (turn ${m.exfil.toTurn})`;
-    banner.classList.add("reachmap-banner--on");
   }
+
+  // ── View dispatch ─────────────────────────────────────────────────────────
+  // Show the web SVG or the HTML alt-layer per `mode`, and render into it. The
+  // alt views share the scrubber: `live` is the per-node count up to the cursor.
+  function render() {
+    if (!model) return;
+    const isWeb = mode === "web";
+    canvas.style.display = isWeb ? "" : "none";
+    altLayer.style.display = isWeb ? "none" : "";
+    if (isWeb) {
+      draw();
+      return;
+    }
+    const revealed = model.events.slice(0, cursor);
+    const live = new Map<string, number>();
+    for (const e of revealed) live.set(e.node, (live.get(e.node) ?? 0) + 1);
+    altLayer.innerHTML = "";
+    const ctx: ReachViewCtx = { color: COLOR, kindLabel: KIND_LABEL, ring: RING, ringFrac: RING_FRAC, trunc };
+    if (mode === "bands") renderBands(altLayer, model, live, ctx);
+    else if (mode === "dial") renderDial(altLayer, model, live, ctx);
+    else if (mode === "treemap") renderTreemap(altLayer, model, live, ctx);
+    else if (mode === "timeline") renderTimeline(altLayer, model, live, ctx);
+    updateBanner(model, live);
+    updateReadout(model, revealed.length);
+  }
+
+  function renderModeBtn() {
+    modeBtn.textContent = MODE_LABEL[mode];
+    modeBtn.title = "Switch reach view (spiderweb → bands → dial → treemap → timeline)";
+  }
+  modeBtn.addEventListener("click", (e) => {
+    e.stopPropagation(); // don't toggle the header's collapse
+    mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length] ?? "web";
+    renderModeBtn();
+    render();
+  });
+  renderModeBtn();
 
   function updateReadout(m: ReachModel, shown: number) {
     const activeTurn = cursor > 0 ? (m.events[cursor - 1]?.turn ?? 0) : 0;
@@ -409,7 +472,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     if (!model) return;
     cursor = Math.max(0, Math.min(model.events.length, c));
     scrub.value = String(cursor);
-    draw();
+    render();
     if (cursor >= model.events.length) stop();
   }
 
@@ -464,7 +527,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     // Default: show the whole map; scrubbing rewinds time.
     cursor = m.events.length;
     scrub.value = String(cursor);
-    draw();
+    render();
   }
 
   async function load() {
@@ -495,7 +558,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     canvas.setAttribute("viewBox", `0 0 ${vbW} ${VH}`);
     if (model) {
       layout(model);
-      draw();
+      render(); // re-lays out the dial too (it reads the scene's pixel size)
     }
   }
   const ro = new ResizeObserver(resize);
