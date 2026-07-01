@@ -25,18 +25,15 @@ import type { ReachModel, ReachNode, ReachKind } from "./reach.ts";
 import type { Exchange } from "./turns.ts";
 import { icon } from "./icons.ts";
 import { subscribeWatch } from "./watch.ts";
-import { renderBands, renderDial, renderTreemap, renderTimeline } from "./reachviews.ts";
+import { renderBands } from "./reachviews.ts";
 import type { ReachViewCtx } from "./reachviews.ts";
 
 /** The selectable reach renderings, cycled from the header. */
-type ReachView = "web" | "bands" | "dial" | "treemap" | "timeline";
-const MODES: ReachView[] = ["web", "bands", "dial", "treemap", "timeline"];
+type ReachView = "web" | "bands";
+const MODES: ReachView[] = ["web", "bands"];
 const MODE_LABEL: Record<ReachView, string> = {
   web: "spiderweb",
   bands: "bands",
-  dial: "dial",
-  treemap: "treemap",
-  timeline: "timeline",
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -65,6 +62,7 @@ const RING: Record<ReachKind, number> = {
   external: 3,
   mcp: 3,
   secret: 3,
+  loopback: 3,
   web: 4,
   comms: 4,
 };
@@ -78,6 +76,7 @@ const COLOR: Record<ReachKind, string> = {
   repo: "var(--ink-olive)",
   external: "var(--ink-slate)",
   web: "var(--ink-ochre)",
+  loopback: "var(--tx-2)",
   mcp: "var(--ink-plum)",
   agent: "var(--ink-clay)",
   shell: "var(--tx-3)",
@@ -90,6 +89,7 @@ const KIND_LABEL: Record<ReachKind, string> = {
   repo: "sibling repo",
   external: "elsewhere on disk",
   web: "web host",
+  loopback: "localhost",
   mcp: "MCP server",
   agent: "subagent / skill",
   shell: "shell",
@@ -186,7 +186,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   const summary = el("span", "reachmap-summary");
   titleWrap.append(title, summary);
 
-  // View cycler: clicking flips spiderweb → bands → dial → treemap → timeline.
+  // View cycler: clicking flips between the spiderweb and the bands view.
   const modeBtn = el("button", "reachmap-mode");
 
   const closeBtn = el("button", "reachmap-close");
@@ -346,7 +346,10 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       const isActive = node.id === activeNode;
 
       // edge: dashed when the node is an egress surface (leaving the box).
-      const egress = node.kind === "web" || node.kind === "comms" || node.actions.includes("network") || node.actions.includes("write");
+      // Loopback (localhost) is on-machine, not an egress surface.
+      const egress =
+        node.kind !== "loopback" &&
+        (node.kind === "web" || node.kind === "comms" || node.actions.includes("network") || node.actions.includes("write"));
       const edge = svg("line", {
         x1: CX,
         y1: CY,
@@ -440,18 +443,15 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     const live = new Map<string, number>();
     for (const e of revealed) live.set(e.node, (live.get(e.node) ?? 0) + 1);
     altLayer.innerHTML = "";
-    const ctx: ReachViewCtx = { color: COLOR, kindLabel: KIND_LABEL, ring: RING, ringFrac: RING_FRAC, trunc };
-    if (mode === "bands") renderBands(altLayer, model, live, ctx);
-    else if (mode === "dial") renderDial(altLayer, model, live, ctx);
-    else if (mode === "treemap") renderTreemap(altLayer, model, live, ctx);
-    else if (mode === "timeline") renderTimeline(altLayer, model, live, ctx);
+    const ctx: ReachViewCtx = { color: COLOR, ring: RING, trunc };
+    renderBands(altLayer, model, live, ctx);
     updateBanner(model, live);
     updateReadout(model, revealed.length);
   }
 
   function renderModeBtn() {
     modeBtn.textContent = MODE_LABEL[mode];
-    modeBtn.title = "Switch reach view (spiderweb → bands → dial → treemap → timeline)";
+    modeBtn.title = "Switch reach view (spiderweb ⇄ bands)";
   }
   modeBtn.addEventListener("click", (e) => {
     e.stopPropagation(); // don't toggle the header's collapse

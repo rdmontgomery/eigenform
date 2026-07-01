@@ -75,6 +75,36 @@ test("targetOf: Bash with a curl egress surfaces the host", () => {
   assert.equal(t?.id, "web:evil.example.com");
 });
 
+test("targetOf: WebFetch to localhost → loopback, not web", () => {
+  const t = targetOf(tool("WebFetch", { url: "http://localhost:5173/" }), ctx);
+  assert.equal(t?.kind, "loopback");
+  assert.equal(t?.id, "local:localhost");
+  assert.equal(t?.sensitive, false);
+});
+
+test("targetOf: Bash curl to 127.0.0.1:port → loopback (on-machine, not egress)", () => {
+  const t = targetOf(tool("Bash", { command: "curl -s http://127.0.0.1:4317/api/inspect" }), ctx);
+  assert.equal(t?.kind, "loopback");
+  assert.equal(t?.id, "local:127.0.0.1:4317");
+});
+
+test("targetOf: external host stays web even alongside loopback", () => {
+  const t = targetOf(tool("WebFetch", { url: "https://claude.com/docs" }), ctx);
+  assert.equal(t?.kind, "web");
+  assert.equal(t?.id, "web:claude.com");
+});
+
+test("buildReach: a secret read then a localhost hit is NOT flagged as exfil", () => {
+  const m = buildReach(
+    [
+      ex(1, "mcp__vault__read_secret", { key: "db/password" }),
+      ex(2, "Bash", { command: "curl -s http://127.0.0.1:4317/health" }),
+    ],
+    { root: ROOT },
+  );
+  assert.equal(m.exfil, null);
+});
+
 test("targetOf: plain Bash → shell exec node", () => {
   const t = targetOf(tool("Bash", { command: "cargo test" }), ctx);
   assert.equal(t?.kind, "shell");
