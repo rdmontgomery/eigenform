@@ -462,7 +462,16 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
         .map(|json| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(json)));
-    axum::response::sse::Sse::new(stream).into_response()
+    // Keep-alive comments force a periodic write so a disconnected client is detected
+    // (the write fails) and the stream + connection are dropped promptly. Without it, a
+    // dead SSE connection to a quiet endpoint lingers until the next real event — which
+    // may never come — leaking ESTABLISHED sockets against the browser's per-origin cap.
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(std::time::Duration::from_secs(10)),
+        )
+        .into_response()
 }
 
 /// `GET /api/recent` — the most recent session uuid across all projects.
@@ -669,7 +678,15 @@ fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response
     let (rx, _handle) = watch_channel(watch_dir, target);
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
         .map(|_| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data("change")));
-    axum::response::sse::Sse::new(stream).into_response()
+    // See the forest watch above: keep-alive comments let the daemon notice and reap a
+    // disconnected client within the interval instead of leaking the connection until the
+    // session's next filesystem write (which, for an idle session, may never arrive).
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(std::time::Duration::from_secs(10)),
+        )
+        .into_response()
 }
 
 /// Wrap a transcript fragment in a standalone dark page with collapsible styling.
