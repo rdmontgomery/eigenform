@@ -1534,20 +1534,23 @@ button { font: inherit; color: inherit; }
   stroke: color-mix(in oklch, var(--accent) 55%, var(--bg));
   stroke-width: 6;
 }
+/* Font sizes are in SVG user units (viewBox is VH=1000 tall), so they scale
+   DOWN with the map when it's rendered into the small dock region — keep these
+   large so labels stay legible. */
 .reachmap-hub-label {
   fill: var(--tx);
   font-family: var(--font-mono);
-  font-size: 22px;
+  font-size: 40px;
   font-weight: 600;
   text-anchor: middle;
 }
 .reachmap-node-label {
   fill: var(--tx-2);
   font-family: var(--font-mono);
-  font-size: 17px;
+  font-size: 34px;
   paint-order: stroke;
   stroke: var(--bg);
-  stroke-width: 3px;
+  stroke-width: 5px;
 }
 .reachmap-node { cursor: default; }
 .reachmap-node--active .reachmap-node-label { fill: var(--tx); }
