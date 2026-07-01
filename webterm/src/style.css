@@ -1598,8 +1598,9 @@ button { font: inherit; color: inherit; }
 /* Controls — legend on the left, transport on the right. */
 .reachmap-controls {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
   padding: 9px 12px;
   border-top: 1px solid var(--line);
   background: var(--surface);
@@ -1608,7 +1609,6 @@ button { font: inherit; color: inherit; }
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  flex: 1;
   min-width: 0;
 }
 .reachmap-legitem {
@@ -1621,12 +1621,14 @@ button { font: inherit; color: inherit; }
 }
 .reachmap-legdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
-.reachmap-transport { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+/* Dedicated full-width play-bar row (below the legend): [play] [scrub grows] [readout]. */
+.reachmap-transport { display: flex; align-items: center; gap: 9px; }
 .reachmap-play {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px; height: 28px;
+  flex-shrink: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--raised);
@@ -1634,12 +1636,15 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
 }
 .reachmap-play:hover { background: var(--raised-2); }
-.reachmap-scrub { width: clamp(120px, 22vw, 280px); accent-color: var(--accent); cursor: pointer; }
+/* Scrub grows to fill the row and is the first thing to shrink when space is tight,
+   so the turn readout stays intact instead of clipping off the right edge. */
+.reachmap-scrub { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; }
 .reachmap-turn {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--tx-3);
-  min-width: 150px;
+  flex-shrink: 0;
+  white-space: nowrap;
   text-align: right;
 }
 
