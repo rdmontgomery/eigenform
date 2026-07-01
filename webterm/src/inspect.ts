@@ -244,7 +244,7 @@ export function openInspect(opts: InspectOptions = {}): { close: () => void } {
 
   const head = el("div", "ix-head");
   const titleWrap = el("div", "ix-title");
-  titleWrap.append(icon("skill", 16));
+  titleWrap.append(icon("sliders", 16));
   const title = el("span");
   title.textContent = "config";
   const sub = el("span", "ix-subtitle");

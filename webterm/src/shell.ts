@@ -681,7 +681,7 @@ export function mountShell(appEl: HTMLElement): void {
     // Scoped to the active tab's cwd when one is known, else machine-wide.
     const configBtn = el("button", "icon-btn config-btn");
     configBtn.title = "Config inventory (skills · memory)";
-    configBtn.append(icon("skill", 16));
+    configBtn.append(icon("sliders", 16));
     configBtn.addEventListener("click", () =>
       openInspect({ cwd: activeTab()?.descriptor.cwd ?? undefined }),
     );

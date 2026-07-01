@@ -19,6 +19,8 @@ const PATHS: Record<string, string> = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   search: '<path d="M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16zM21 21l-4.3-4.3"/>',
+  // config inventory — two tracks with slider handles (settings/inspect glyph)
+  sliders: '<path d="M4 8h16M4 16h16"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
   copy: '<path d="M9 9h10v10H9zM5 15V5h10"/>',
   fork: '<path d="M6 4v8M18 4v3a4 4 0 0 1-4 4H6"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="4" r="2"/><circle cx="6" cy="4" r="2"/>',
