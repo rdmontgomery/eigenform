@@ -19,6 +19,8 @@ const PATHS: Record<string, string> = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   search: '<path d="M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16zM21 21l-4.3-4.3"/>',
+  // config inventory — two tracks with slider handles (settings/inspect glyph)
+  sliders: '<path d="M4 8h16M4 16h16"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
   copy: '<path d="M9 9h10v10H9zM5 15V5h10"/>',
   fork: '<path d="M6 4v8M18 4v3a4 4 0 0 1-4 4H6"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="4" r="2"/><circle cx="6" cy="4" r="2"/>',
@@ -31,6 +33,8 @@ const PATHS: Record<string, string> = {
   check: '<path d="M5 13l4 4L19 7"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
   skill: '<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z"/>',
+  // memory — a two-lobed brain (single-stroke, mirrors left/right around a central fissure)
+  brain: '<path d="M12 5.5a3 3 0 0 0-5 2.2 3 3 0 0 0-1.2 5.2A2.6 2.6 0 0 0 8 18a2.5 2.5 0 0 0 4 .5M12 5.5a3 3 0 0 1 5 2.2 3 3 0 0 1 1.2 5.2A2.6 2.6 0 0 1 16 18a2.5 2.5 0 0 1-4 .5M12 5.5V19"/>',
   bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
   chevrons: '<path d="M6 5l6 6 6-6M6 12l6 6 6-6"/>',
   type: '<path d="M5 7V5h14v2M12 5v14M9 19h6"/>',

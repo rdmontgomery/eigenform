@@ -62,6 +62,7 @@ import type { ReachHandle } from "./reachmap.ts";
 import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { icon } from "./icons.ts";
+import { openInspect } from "./inspect.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -676,6 +677,15 @@ export function mountShell(appEl: HTMLElement): void {
     fontBtn.append(icon("type", 16));
     fontBtn.addEventListener("click", () => toggleFontPopover(fontBtn));
 
+    // Config inventory — skills + memory across resolution layers, token-budgeted.
+    // Scoped to the active tab's cwd when one is known, else machine-wide.
+    const configBtn = el("button", "icon-btn config-btn");
+    configBtn.title = "Config inventory (skills · memory)";
+    configBtn.append(icon("sliders", 16));
+    configBtn.addEventListener("click", () =>
+      openInspect({ cwd: activeTab()?.descriptor.cwd ?? undefined }),
+    );
+
     const sep = el("div", "topbar-sep");
 
     // Single "inspect" toggle — opens the docked panel (reach map + transcript).
@@ -684,7 +694,7 @@ export function mountShell(appEl: HTMLElement): void {
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, fontBtn, sep, drawerBtn);
+    controls.append(themeBtn, fontBtn, configBtn, sep, drawerBtn);
   }
 
   // ------------------------------------------------------------------

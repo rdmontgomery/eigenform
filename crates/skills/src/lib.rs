@@ -13,6 +13,27 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub source_path: PathBuf,
+    /// Size of the source file in bytes.
+    pub size: usize,
+    /// Rough token estimate for the source file (see [`estimate_tokens`]).
+    pub tokens: usize,
+}
+
+/// A coarse token estimate: ~4 bytes/token, the rule of thumb for English text
+/// under the Claude tokenizer. Deliberately cheap and dependency-free — this is
+/// a budgeting aid for a context-surgery tool, not a billing oracle.
+pub fn estimate_tokens(text: &str) -> usize {
+    text.len().div_ceil(4)
+}
+
+/// Format a token count for display: `~N tok` under 1k, `~N.Nk tok` above. The
+/// `~` is a standing reminder that this is an estimate, not a measured count.
+pub fn fmt_tokens(tokens: usize) -> String {
+    if tokens >= 1000 {
+        format!("~{:.1}k tok", tokens as f64 / 1000.0)
+    } else {
+        format!("~{tokens} tok")
+    }
 }
 
 /// Which level of the skill resolution hierarchy a skill came from.
@@ -102,6 +123,8 @@ pub fn scan_dir(dir: &Path) -> Result<Vec<Skill>> {
         out.push(Skill {
             name: fm.name,
             description: fm.description,
+            size: body.len(),
+            tokens: estimate_tokens(&body),
             source_path: skill_path,
         });
     }
@@ -263,16 +286,25 @@ pub fn render_tree(scan: &[LayeredSkill]) -> String {
         // Plugins are namespaced (`plugin:<plug>:<skill>`) — multiple plugin
         // contributions to the same name coexist, they don't shadow.
         let namespaced = non_plugin.is_empty() && plugin_count > 1;
+        let group_tokens: usize = contribs.iter().map(|ls| ls.skill.tokens).sum();
         if namespaced {
-            let _ = writeln!(out, "{name}  (namespaced)");
+            let _ = writeln!(out, "{name}  (namespaced)  {}", fmt_tokens(group_tokens));
         } else {
-            let _ = writeln!(out, "{name}");
+            let _ = writeln!(out, "{name}  {}", fmt_tokens(group_tokens));
+        }
+        // One description line under the name (the winning contribution's, or the
+        // sole one). Descriptions are why a reader can tell skills apart at a glance.
+        if let Some(desc) = contribs.last().map(|ls| ls.skill.description.as_str()) {
+            if !desc.is_empty() {
+                let _ = writeln!(out, "  {desc}");
+            }
         }
         for ls in contribs {
             let _ = writeln!(
                 out,
-                "  [{}]  {}",
+                "  [{}]  {}  {}",
                 layer_tag(&ls.layer),
+                fmt_tokens(ls.skill.tokens),
                 ls.skill.source_path.display()
             );
         }
@@ -285,6 +317,12 @@ pub fn render_tree(scan: &[LayeredSkill]) -> String {
         out.push('\n');
     }
     out
+}
+
+/// A short human label for a layer, e.g. `global`, `plugin:foo`, `repo`,
+/// `repo:eigenform`. Used by the text tree and by the unified inspect model.
+pub fn layer_label(l: &Layer) -> String {
+    layer_tag(l)
 }
 
 fn layer_tag(l: &Layer) -> String {

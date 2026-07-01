@@ -30,6 +30,7 @@ eigenform-forest   = { path = "../forest" }
 eigenform-surgery  = { path = "../surgery" }
 eigenform-render   = { path = "../render" }
 eigenform-projects = { path = "../projects" }
+eigenform-inspect  = { path = "../inspect" }
 
 [dev-dependencies]
 tokio-tungstenite = "0.21"
