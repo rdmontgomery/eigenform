@@ -24,6 +24,7 @@ import { buildReach } from "./reach.ts";
 import type { ReachModel, ReachNode, ReachKind } from "./reach.ts";
 import type { Exchange } from "./turns.ts";
 import { icon } from "./icons.ts";
+import { subscribeWatch } from "./watch.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -442,31 +443,9 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   void load();
 
   // ── SSE live updates ──────────────────────────────────────────────────────
-  // EventSource only auto-reconnects after an *established* (2xx) stream drops.
-  // A non-2xx response — notably the 404 the daemon returns for a session whose
-  // JSONL hasn't been flushed to disk yet (brand-new session) — is a hard
-  // failure: the browser fires onerror, sets readyState=CLOSED, and never
-  // retries. So we reconnect manually until the file lands.
-  let es: EventSource | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  function connect() {
-    if (closed) return;
-    es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
-    es.onmessage = () => void load();
-    es.addEventListener("change", () => void load());
-    es.onerror = () => {
-      if (closed) return;
-      es?.close();
-      es = null;
-      if (reconnectTimer === null) {
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          connect();
-        }, 1500);
-      }
-    };
-  }
-  connect();
+  // Follow the session through the shared watch hub: one EventSource per uuid
+  // across the reach map + drawer, reconnecting on the pre-flush 404 (watch.ts).
+  const unsubscribe = subscribeWatch(uuid, () => void load());
 
   // ── Dismiss affordances (standalone overlay only) ─────────────────────────
   function dismiss() {
@@ -494,9 +473,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       if (closed) return;
       closed = true;
       stop();
-      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-      es?.close();
-      es = null;
+      unsubscribe();
       document.removeEventListener("keydown", onKey);
       root.remove();
     },

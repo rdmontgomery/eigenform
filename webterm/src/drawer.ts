@@ -39,8 +39,8 @@
  *
  * Data flow:
  *   1. On open: fetchSession(uuid) → initial render
- *   2. EventSource /api/watch/:uuid → re-fetch + re-render on unnamed message
- *      events (named "change" listener kept as a safety net, mirroring woland).
+ *   2. subscribeWatch(uuid) → re-fetch + re-render on each write, via the shared
+ *      watch hub (one EventSource per uuid across the reach map + drawer).
  *   3. Auto-scroll to bottom unless the user has scrolled up (stick-to-bottom).
  *
  * Per-turn edit-and-fork:
@@ -57,6 +57,7 @@ import type { TurnGroup, Exchange, Tool } from "./turns.ts";
 import { toolView, toolsSummary } from "./toolview.ts";
 import type { ToolView } from "./toolview.ts";
 import { icon } from "./icons.ts";
+import { subscribeWatch } from "./watch.ts";
 
 // ---------------------------------------------------------------------------
 // Minimal session fetch (mirrors web/src/data.ts fetchSession — do not import
@@ -110,7 +111,7 @@ async function forkSession(
 // ---------------------------------------------------------------------------
 
 export interface DrawerHandle {
-  /** Tear down EventSource + remove DOM. Safe to call multiple times. */
+  /** Unsubscribe from the watch hub + remove DOM. Safe to call multiple times. */
   close(): void;
 }
 
@@ -839,8 +840,7 @@ export function mountDrawer(
   // Data: initial fetch + SSE
   // ------------------------------------------------------------------
 
-  let es: EventSource | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let unsubscribe: (() => void) | null = null;
   let closed = false;
 
   async function load() {
@@ -856,34 +856,12 @@ export function mountDrawer(
 
   // Static mode (live === false): one fetch, no subscription. Used by the forest
   // preview float, which re-fetches on focus instead of tailing the file.
+  //
+  // Live mode: follow the session through the shared watch hub, which keeps a
+  // single EventSource per uuid across the reach map + drawer and reconnects on
+  // the pre-flush 404 (see watch.ts).
   if (actions.live !== false) {
-    connect();
-  }
-
-  // EventSource only auto-reconnects after an *established* (2xx) stream drops.
-  // A non-2xx response — notably the 404 the daemon returns for a session whose
-  // JSONL hasn't been flushed to disk yet (brand-new session) — is a hard
-  // failure: the browser fires onerror, sets readyState=CLOSED, and never
-  // retries. So we reconnect manually until the file lands.
-  function connect() {
-    if (closed) return;
-    es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
-    // The daemon sends unnamed SSE events; onmessage handles them.
-    // The named "change" listener is a safety net in case the daemon is updated
-    // to emit named events (mirrors woland's followManuscript pattern).
-    es.onmessage = () => void load();
-    es.addEventListener("change", () => void load());
-    es.onerror = () => {
-      if (closed) return;
-      es?.close();
-      es = null;
-      if (reconnectTimer === null) {
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          connect();
-        }, 1500);
-      }
-    };
+    unsubscribe = subscribeWatch(uuid, () => void load());
   }
 
   // ------------------------------------------------------------------
@@ -894,9 +872,8 @@ export function mountDrawer(
     close() {
       if (closed) return;
       closed = true;
-      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-      es?.close();
-      es = null;
+      unsubscribe?.();
+      unsubscribe = null;
       panel.remove();
     },
   };
