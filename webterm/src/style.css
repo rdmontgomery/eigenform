@@ -1466,6 +1466,17 @@ button { font: inherit; color: inherit; }
   overflow: hidden;
 }
 
+/* Collapsed: fold the map to just its header. The dock's reach-region shrinks
+   to fit (via :has), the splitter hides, and the transcript fills the dock. */
+.reachmap--collapsed .reachmap-scene,
+.reachmap--collapsed .reachmap-controls { display: none; }
+.reach-region:has(.reachmap--collapsed) {
+  height: auto;
+  max-height: none;
+  flex: 0 0 auto;
+}
+.reach-region:has(.reachmap--collapsed) + .dock-vsplit { display: none; }
+
 .reachmap-head {
   display: flex;
   align-items: center;
@@ -1473,7 +1484,19 @@ button { font: inherit; color: inherit; }
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
+  cursor: pointer;
+  user-select: none;
 }
+.reachmap-head:hover { background: var(--raised); }
+/* Caret points down when expanded, right when collapsed (rotate the chevron). */
+.reachmap-caret {
+  display: inline-flex;
+  color: var(--tx-3);
+  transform: rotate(90deg);
+  transition: transform 0.12s ease;
+  flex-shrink: 0;
+}
+.reachmap--collapsed .reachmap-caret { transform: rotate(0deg); }
 .reachmap-titlewrap { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; }
 .reachmap-title {
   font-weight: 650;
@@ -1511,20 +1534,44 @@ button { font: inherit; color: inherit; }
   stroke: color-mix(in oklch, var(--accent) 55%, var(--bg));
   stroke-width: 6;
 }
+/* Trust-zone rings — concentric guides behind the web; outer ring = off-box. */
+.reachmap-ring {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 3;
+  opacity: 0.55;
+}
+.reachmap-ring--off {
+  stroke: color-mix(in oklch, var(--st-error) 55%, transparent);
+  stroke-width: 4;
+  stroke-dasharray: 9 7;
+  opacity: 0.9;
+}
+.reachmap-ring-label {
+  fill: var(--tx-3);
+  font-family: var(--font-mono);
+  font-size: 26px;
+  opacity: 0.8;
+}
+.reachmap-ring-label--off { fill: var(--st-error); opacity: 1; }
+
+/* Font sizes are in SVG user units (viewBox is VH=1000 tall), so they scale
+   DOWN with the map when it's rendered into the small dock region — keep these
+   large so labels stay legible. */
 .reachmap-hub-label {
   fill: var(--tx);
   font-family: var(--font-mono);
-  font-size: 22px;
+  font-size: 40px;
   font-weight: 600;
   text-anchor: middle;
 }
 .reachmap-node-label {
   fill: var(--tx-2);
   font-family: var(--font-mono);
-  font-size: 17px;
+  font-size: 34px;
   paint-order: stroke;
   stroke: var(--bg);
-  stroke-width: 3px;
+  stroke-width: 5px;
 }
 .reachmap-node { cursor: default; }
 .reachmap-node--active .reachmap-node-label { fill: var(--tx); }
@@ -1595,11 +1642,72 @@ button { font: inherit; color: inherit; }
   font-size: 13px;
 }
 
+/* ── Alternate reach views (reachviews.ts) — cycled from the header ────────── */
+.reachmap-mode {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-2);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.reachmap-mode:hover { background: var(--raised-2); color: var(--tx); }
+
+/* HTML layer that hosts every non-web view; crisp text at any dock size. */
+.reachmap-alt {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+
+/* bands — distance-from-home zones (header above its chips) */
+.rv-bands { display: flex; flex-direction: column; gap: 11px; }
+.rv-band {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 9px;
+  border-left: 2px solid var(--line);
+}
+.rv-band--off { border-left-color: var(--st-error); }
+.rv-band-head { display: flex; align-items: baseline; gap: 7px; }
+.rv-band-name {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+.rv-band-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-3);
+  opacity: 0.7;
+}
+.rv-band--off .rv-band-name,
+.rv-band--off .rv-band-count { color: var(--st-error); opacity: 1; }
+.rv-band-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.rv-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--tx);
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 9px; max-width: 100%;
+}
+.rv-chip--alarm { border-color: var(--st-error); }
+.rv-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.rv-cnt { font-family: var(--font-mono); font-size: 10px; color: var(--tx-3); }
+
 /* Controls — legend on the left, transport on the right. */
 .reachmap-controls {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
   padding: 9px 12px;
   border-top: 1px solid var(--line);
   background: var(--surface);
@@ -1608,7 +1716,6 @@ button { font: inherit; color: inherit; }
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  flex: 1;
   min-width: 0;
 }
 .reachmap-legitem {
@@ -1621,12 +1728,14 @@ button { font: inherit; color: inherit; }
 }
 .reachmap-legdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
-.reachmap-transport { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+/* Dedicated full-width play-bar row (below the legend): [play] [scrub grows] [readout]. */
+.reachmap-transport { display: flex; align-items: center; gap: 9px; }
 .reachmap-play {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px; height: 28px;
+  flex-shrink: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--raised);
@@ -1634,12 +1743,15 @@ button { font: inherit; color: inherit; }
   cursor: pointer;
 }
 .reachmap-play:hover { background: var(--raised-2); }
-.reachmap-scrub { width: clamp(120px, 22vw, 280px); accent-color: var(--accent); cursor: pointer; }
+/* Scrub grows to fill the row and is the first thing to shrink when space is tight,
+   so the turn readout stays intact instead of clipping off the right edge. */
+.reachmap-scrub { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; }
 .reachmap-turn {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--tx-3);
-  min-width: 150px;
+  flex-shrink: 0;
+  white-space: nowrap;
   text-align: right;
 }
 
