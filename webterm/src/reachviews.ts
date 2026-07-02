@@ -53,8 +53,14 @@ export function renderBands(host: HTMLElement, m: ReachModel, live: Map<string, 
     const inBand = nodes.filter((n) => ctx.ring[n.kind] === ring);
     if (!inBand.length) continue;
     const lane = elh("div", "rv-band" + (ring === 4 ? " rv-band--off" : ""));
-    const label = elh("div", "rv-band-label");
-    label.textContent = `${BAND_LABEL[ring]} · ${inBand.length}`;
+    // Full-width zone header above its chips — avoids a cramped left column
+    // wrapping mid-phrase and orphaning the count in the narrow dock.
+    const head = elh("div", "rv-band-head");
+    const name = elh("span", "rv-band-name");
+    name.textContent = BAND_LABEL[ring] ?? "";
+    const count = elh("span", "rv-band-count");
+    count.textContent = String(inBand.length);
+    head.append(name, count);
     const chips = elh("div", "rv-band-chips");
     for (const n of inBand) {
       const chip = elh("div", "rv-chip" + (n.sensitive ? " rv-chip--alarm" : ""));
@@ -68,7 +74,7 @@ export function renderBands(host: HTMLElement, m: ReachModel, live: Map<string, 
       chip.append(dot, lab, cnt);
       chips.append(chip);
     }
-    lane.append(label, chips);
+    lane.append(head, chips);
     wrap.append(lane);
   }
   host.append(wrap);

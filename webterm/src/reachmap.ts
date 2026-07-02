@@ -70,6 +70,15 @@ const RING: Record<ReachKind, number> = {
 // PAD margin already keeps labels off the edge), so the web spreads wide inside the frame.
 const RING_FRAC: Record<number, number> = { 1: 0.34, 2: 0.58, 3: 0.8, 4: 1 };
 
+// Trust zone per ring — drawn as concentric guides so the web reads like the
+// bands view: inner = home, outer = off the box. Ring 4 is the egress signal.
+const RING_LABEL: Record<number, string> = {
+  1: "workspace",
+  2: "local",
+  3: "this machine",
+  4: "off-box",
+};
+
 /** Kind → CSS color token. Secret/comms are alarm red (the exfil surfaces). */
 const COLOR: Record<ReachKind, string> = {
   workspace: "var(--ink-teal)",
@@ -202,11 +211,12 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   const scene = el("div", "reachmap-scene");
   const canvas = svg("svg", { viewBox: `0 0 ${vbW} ${VH}`, class: "reachmap-svg" });
   canvas.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  const gRings = svg("g");
   const gEdges = svg("g");
   const gExfil = svg("g");
   const gNodes = svg("g");
   const gHub = svg("g");
-  canvas.append(gEdges, gExfil, gNodes, gHub);
+  canvas.append(gRings, gEdges, gExfil, gNodes, gHub);
   const banner = el("div", "reachmap-banner");
   const tooltip = el("div", "reachmap-tooltip");
   const empty = el("div", "reachmap-empty");
@@ -299,6 +309,36 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     }
   }
 
+  // ── Trust-zone rings ──────────────────────────────────────────────────────
+  // Concentric guides at each ring's radius, labelled by zone, so the web reads
+  // like the bands view. The outer (off-box) ring is dashed + alarm-tinted.
+  function drawRings() {
+    gRings.innerHTML = "";
+    const rx = vbW / 2 - PAD;
+    const ry = VH / 2 - PAD;
+    for (let ring = 1; ring <= 4; ring++) {
+      const fr = RING_FRAC[ring] ?? 1;
+      const off = ring === 4;
+      gRings.append(
+        svg("ellipse", {
+          cx: CX,
+          cy: CY,
+          rx: fr * rx,
+          ry: fr * ry,
+          class: "reachmap-ring" + (off ? " reachmap-ring--off" : ""),
+        }),
+      );
+      const label = svg("text", {
+        x: CX,
+        y: CY - fr * ry + 26,
+        class: "reachmap-ring-label" + (off ? " reachmap-ring-label--off" : ""),
+        "text-anchor": "middle",
+      });
+      label.textContent = RING_LABEL[ring] ?? "";
+      gRings.append(label);
+    }
+  }
+
   // ── Draw the hub (once per model) ─────────────────────────────────────────
   function drawHub(m: ReachModel) {
     gHub.innerHTML = "";
@@ -328,6 +368,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   function draw() {
     if (!model) return;
     const m = model;
+    drawRings();
     gEdges.innerHTML = "";
     gNodes.innerHTML = "";
     gExfil.innerHTML = "";

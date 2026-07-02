@@ -1534,6 +1534,27 @@ button { font: inherit; color: inherit; }
   stroke: color-mix(in oklch, var(--accent) 55%, var(--bg));
   stroke-width: 6;
 }
+/* Trust-zone rings — concentric guides behind the web; outer ring = off-box. */
+.reachmap-ring {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 3;
+  opacity: 0.55;
+}
+.reachmap-ring--off {
+  stroke: color-mix(in oklch, var(--st-error) 55%, transparent);
+  stroke-width: 4;
+  stroke-dasharray: 9 7;
+  opacity: 0.9;
+}
+.reachmap-ring-label {
+  fill: var(--tx-3);
+  font-family: var(--font-mono);
+  font-size: 26px;
+  opacity: 0.8;
+}
+.reachmap-ring-label--off { fill: var(--st-error); opacity: 1; }
+
 /* Font sizes are in SVG user units (viewBox is VH=1000 tall), so they scale
    DOWN with the map when it's rendered into the small dock region — keep these
    large so labels stay legible. */
@@ -1644,19 +1665,33 @@ button { font: inherit; color: inherit; }
   box-sizing: border-box;
 }
 
-/* bands — distance-from-home lanes */
-.rv-bands { display: flex; flex-direction: column; gap: 8px; }
-.rv-band { display: flex; gap: 10px; align-items: baseline; }
-.rv-band-label {
-  flex: 0 0 128px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--tx-3);
-  text-align: right;
-  padding-top: 3px;
+/* bands — distance-from-home zones (header above its chips) */
+.rv-bands { display: flex; flex-direction: column; gap: 11px; }
+.rv-band {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 9px;
+  border-left: 2px solid var(--line);
 }
-.rv-band--off .rv-band-label { color: var(--st-error); }
-.rv-band-chips { display: flex; flex-wrap: wrap; gap: 5px; flex: 1; min-width: 0; }
+.rv-band--off { border-left-color: var(--st-error); }
+.rv-band-head { display: flex; align-items: baseline; gap: 7px; }
+.rv-band-name {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+.rv-band-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-3);
+  opacity: 0.7;
+}
+.rv-band--off .rv-band-name,
+.rv-band--off .rv-band-count { color: var(--st-error); opacity: 1; }
+.rv-band-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .rv-chip {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 11.5px; color: var(--tx);
