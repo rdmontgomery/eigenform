@@ -34,8 +34,8 @@ import type { FontSettings } from "./pty.ts";
 import { SCHEMES, DEFAULT_SCHEME_ID, schemeById } from "./themes/schemes.ts";
 import type { Scheme } from "./themes/schemes.ts";
 import { deriveChrome } from "./themes/derive.ts";
-import { buildRoster } from "./roster.ts";
-import type { RosterRow } from "./roster.ts";
+import { buildRoster, ptyActivity } from "./roster.ts";
+import type { RosterRow, Liveness, Activity } from "./roster.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
 import {
   relativeRecency,
@@ -132,11 +132,45 @@ function loadFont(): FontSettings {
   }
 }
 
-const KNOWN_STATES = new Set(["working", "waiting", "idle", "exited"]);
+const KNOWN_ACTIVITY = new Set(["working", "waiting", "idle"]);
 
-/** CSS dot modifier for a state string; unknown forest states render idle. */
-function dotClass(state: string): string {
-  return `dot dot--${KNOWN_STATES.has(state) ? state : "idle"}`;
+/**
+ * CSS classes for a status dot across the two orthogonal channels:
+ *   activity → color + glow (`dot--working|waiting|idle`)
+ *   liveness → fill        (`dot--eigenform|external|dead`)
+ * Only live provenances (eigenform/external) animate; dead never glows.
+ */
+function dotClasses(activity: string, liveness: Liveness): string {
+  const act = KNOWN_ACTIVITY.has(activity) ? activity : "idle";
+  const prov = liveness === "eigenform" ? "eigenform" : liveness === "external" ? "external" : "dead";
+  return `dot dot--${act} dot--${prov}`;
+}
+
+/** Short turn-state tag for a live row's meta line; null for dead rows.
+ *  External (live outside eigenform) rows are prefixed so provenance reads at a
+ *  glance without hovering, complementing the hollow-ring dot. */
+function livenessTag(activity: Activity, liveness: Liveness): string | null {
+  if (liveness === "none") return null;
+  const turn = activity === "working" ? "running" : activity === "waiting" ? "your turn" : "live";
+  return liveness === "external" ? `· ext · ${turn}` : `· ${turn}`;
+}
+
+/** Full hover explanation of a dot's combined state. */
+function dotTitle(activity: Activity, liveness: Liveness): string {
+  const where =
+    liveness === "eigenform"
+      ? "eigenform session"
+      : liveness === "external"
+        ? "running outside eigenform — can't attach"
+        : "no live process";
+  if (liveness === "none") return where;
+  const turn =
+    activity === "working"
+      ? "assistant running"
+      : activity === "waiting"
+        ? "waiting for your input"
+        : "idle at prompt";
+  return `${turn} — ${where}`;
 }
 
 /** The session's ink hue CSS value, from its most durable key. */
@@ -882,7 +916,12 @@ export function mountShell(appEl: HTMLElement): void {
       }
       if (t.dead) tab.classList.add("tab--dead");
 
-      const badge = el("span", dotClass(t.state));
+      // Tabs are always eigenform-spawned (you can only open a tab on an
+      // attachable pty); a dead/exited pty has no live process.
+      const tabLiveness: Liveness = t.dead || t.state === "exited" ? "none" : "eigenform";
+      const tabActivity = ptyActivity(t.state);
+      const badge = el("span", dotClasses(tabActivity, tabLiveness));
+      badge.title = dotTitle(tabActivity, tabLiveness);
 
       const labelEl = el("span", "tab-label");
       labelEl.textContent = t.descriptor.label;
@@ -1405,7 +1444,9 @@ export function mountShell(appEl: HTMLElement): void {
     if (isActiveRow(row)) item.classList.add("rail-row--active");
 
     const dotWrap = el("span", "rail-row-dot");
-    dotWrap.append(el("span", dotClass(row.state)));
+    const dot = el("span", dotClasses(row.activity, row.liveness));
+    dot.title = dotTitle(row.activity, row.liveness);
+    dotWrap.append(dot);
 
     const body = el("span", "rail-row-body");
     const labelEl = el("span", "rail-row-label");
@@ -1419,9 +1460,12 @@ export function mountShell(appEl: HTMLElement): void {
       count.textContent = `~${row.msgCount}`;
       meta.append(count);
     }
-    if (row.live) {
+    const tag = livenessTag(row.activity, row.liveness);
+    if (tag) {
       const live = el("span", "rail-row-live");
-      live.textContent = "· live";
+      if (row.liveness === "external") live.classList.add("rail-row-live--external");
+      live.textContent = tag;
+      live.title = dotTitle(row.activity, row.liveness);
       meta.append(live);
     }
     body.append(labelEl, meta);
@@ -1477,8 +1521,11 @@ export function mountShell(appEl: HTMLElement): void {
 
   function renderRailFoot() {
     railFoot.innerHTML = "";
-    const working = lastRows.filter((r) => r.live && r.state === "working").length;
-    const dot = el("span", working > 0 ? "dot dot--working" : "dot dot--idle");
+    const working = lastRows.filter((r) => r.liveness !== "none" && r.activity === "working").length;
+    const dot = el(
+      "span",
+      working > 0 ? dotClasses("working", "eigenform") : dotClasses("idle", "eigenform"),
+    );
     const label = el("span");
     label.textContent = `${working} working`;
     const total = el("span", "rail-foot-total");
