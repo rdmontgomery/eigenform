@@ -18,6 +18,7 @@ async fn start() -> String {
         state_dir: None,
         workspace_root: None,
         dev: false,
+        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -34,6 +34,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir, Config
         state_dir: Some(state.path().to_path_buf()),
         workspace_root: None,
         dev: false,
+        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
     };
     (proj, sess, state, cfg)
 }
@@ -119,6 +120,7 @@ fn downgrade_fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempD
         state_dir: Some(state.path().to_path_buf()),
         workspace_root: None,
         dev: false,
+        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
     };
     (proj, sess, state, cfg)
 }

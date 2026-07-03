@@ -18,6 +18,7 @@ fn cfg() -> Config {
         state_dir: None,
         workspace_root: None,
         dev: false,
+        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
     }
 }
 

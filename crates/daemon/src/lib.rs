@@ -82,6 +82,48 @@ pub struct Config {
     pub workspace_root: Option<PathBuf>,
     /// Dev mode: inject the live-reload hook and serve `/api/dev/reload`.
     pub dev: bool,
+    /// Command that turns an offending prompt into a suggested restatement. The
+    /// composed prompt is appended as the final argv entry; stdout is the
+    /// suggestion. Default `["claude", "-p"]`; tests inject a stub. Keeping the
+    /// daemon's only model call as a `claude` subprocess (never the API) matches
+    /// the invariant that eigenform only ever runs `claude`.
+    pub rephrase_cmd: Vec<String>,
+}
+
+/// Run `cmd` in `cwd`, appending the restatement instruction + the offending
+/// prompt as the final argv entry, and return trimmed stdout. Errors (spawn
+/// failure, non-zero exit, empty output) bubble up so the caller can fall back to
+/// the verbatim prompt.
+pub fn rephrase_prompt(
+    cmd: &[String],
+    cwd: &Path,
+    offending: &str,
+) -> std::io::Result<String> {
+    let (program, args) = cmd
+        .split_first()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty rephrase_cmd"))?;
+    let prompt = format!(
+        "The prompt below caused an over-eager safety downgrade of a coding \
+         session. Restate it to remove ambiguity and make the benign intent \
+         explicit, preserving the actual ask. Return ONLY the restated prompt. \
+         If the ask is genuinely disallowed, say so plainly instead.\n\n{offending}"
+    );
+    let output = std::process::Command::new(program)
+        .args(args)
+        .arg(&prompt)
+        .current_dir(cwd)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "rephrase command exited {}",
+            output.status
+        )));
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return Err(std::io::Error::other("empty rephrase output"));
+    }
+    Ok(text)
 }
 
 /// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
@@ -1459,6 +1501,7 @@ mod tests {
             state_dir: None,
             workspace_root: None,
             dev: false,
+            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         };
 
         let resumed = pty_command(
@@ -1527,6 +1570,7 @@ mod tests {
             state_dir: None,
             workspace_root: None,
             dev: false,
+            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         };
 
         // The vanished-cwd resume still resolves to claude --resume in the recorded cwd...
@@ -1586,6 +1630,7 @@ mod tests {
             state_dir: None,
             workspace_root: None,
             dev: false,
+            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         };
 
         // fork "before" u2 → rewind to the s1 boundary; u2 and its tail drop.
