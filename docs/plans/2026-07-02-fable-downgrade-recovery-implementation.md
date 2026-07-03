@@ -685,8 +685,10 @@ git add webterm/src/shell.ts
 git commit -m "webterm: auto-stage a Fable retry for the active downgraded session"
 ```
 
-**Follow-ups:**
+**Follow-ups (from the final full-branch review; none blocking merge):**
 - The 500 ms seed settle (after `onSessionUuid`) is a heuristic. A more robust signal is the **first output frame after attach** (or "quiet for N ms after first output") rather than the `onSessionUuid` transcript event — harden later so the seed reliably lands after claude's `--resume` has painted its input line.
+- **`recovered` dedupe is in-memory only** (`webterm/src/shell.ts`). After a page reload, re-activating a still-downgraded source session re-fires and forks a *second* `fable-retry` branch (safe — source untouched, nothing sent — but litters branches). Persist handled uuids, or skip when a branch of this source already exists. Cannot manifest until Task 7 activates the marker.
+- **`rephrase_prompt` runs `claude -p` synchronously on a tokio worker** (`daemon/src/lib.rs`). Fine for a local single-user daemon (mirrors the existing blocking-fs routes), but a multi-second rephrase blocks that worker — move to `spawn_blocking` if it ever matters.
 
 ---
 
@@ -694,10 +696,11 @@ git commit -m "webterm: auto-stage a Fable retry for the active downgraded sessi
 
 Not blocking. When a real Fable→Opus guardrail downgrade next occurs in a live
 session, capture the exact `<synthetic>` notice string, replace `GUARDRAIL_MARKER`
-(one line), and record it in a new `notes/spikes/11-guardrail-marker.md` with
-`claude --version` per the `vetting-claude-internals` habit. Until then the
-feature is wired end-to-end but dormant on the placeholder string — which is the
-intended "vitality now, reliability at steady state" posture.
+(one line), and record it in a new `notes/spikes/12-guardrail-marker.md` (spike 11
+is already taken by the session_id change) with `claude --version` per the
+`vetting-claude-internals` habit. Until then the feature is wired end-to-end but
+dormant on the placeholder string — which is the intended "vitality now,
+reliability at steady state" posture.
 
 ---
 
