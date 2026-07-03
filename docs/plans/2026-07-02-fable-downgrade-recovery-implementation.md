@@ -685,6 +685,9 @@ git add webterm/src/shell.ts
 git commit -m "webterm: auto-stage a Fable retry for the active downgraded session"
 ```
 
+**Follow-ups:**
+- The 500 ms seed settle (after `onSessionUuid`) is a heuristic. A more robust signal is the **first output frame after attach** (or "quiet for N ms after first output") rather than the `onSessionUuid` transcript event — harden later so the seed reliably lands after claude's `--resume` has painted its input line.
+
 ---
 
 ## Task 7: Capture the real marker (deferred, follow-up spike)

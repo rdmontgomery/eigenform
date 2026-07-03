@@ -1045,6 +1045,9 @@ export function mountShell(appEl: HTMLElement): void {
         }
         // Seed a staged prompt into the resumed branch WITHOUT submitting (no
         // "\n"). One-shot: clear it before sending so a reconnect can't re-inject.
+        // If the pty reconnects within this settle window the seed is dropped by
+        // design — clearing seedInput eagerly is what guarantees it's never
+        // re-injected on reconnect/reload.
         if (entry.descriptor.seedInput) {
           const seed = entry.descriptor.seedInput;
           entry.descriptor = { ...entry.descriptor, seedInput: undefined };
@@ -1540,6 +1543,7 @@ export function mountShell(appEl: HTMLElement): void {
         { method: "POST" },
       );
       if (!res.ok) {
+        // Deliberate non-ok (4xx/5xx): keep it handled so we don't spin.
         console.warn(`recover-downgrade failed (${res.status}) for ${hit.uuid}`);
         return;
       }
@@ -1549,17 +1553,21 @@ export function mountShell(appEl: HTMLElement): void {
         offendingTurn: string;
         note: string | null;
       };
-      // note != null → the rephraser fell back to verbatim; surface it on the
-      // tab label (no toast system to reuse) and warn.
-      const label = note ? `fable-retry (${note})` : "fable-retry";
+      // note != null → the rephraser fell back to verbatim. Surface it WITHOUT
+      // baking it into the persisted label (label is saved by saveTabs, so a
+      // one-shot note must not become a permanent tab name). No toast to reuse,
+      // and TabDescriptor has no per-tab title channel — so just warn.
       if (note) console.warn(`fable retry rephrase note for ${hit.uuid}: ${note}`);
       openTabWithQuery("?session=" + encodeURIComponent(branchUuid), {
         uuid: branchUuid,
-        label,
+        label: "fable-retry",
         seedInput: stagedText,
       });
       void refreshRoster();
     } catch (err) {
+      // Network blip → allow one retry next poll; a deliberate non-ok stays
+      // handled to avoid spinning.
+      recovered.delete(hit.uuid);
       console.warn(`recover-downgrade errored for ${hit.uuid}:`, err);
     }
   }
