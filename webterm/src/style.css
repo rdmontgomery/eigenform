@@ -96,33 +96,45 @@ button { font: inherit; color: inherit; }
 
 @keyframes eigenform-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes eigenform-ring {
-  0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--st-running) 55%, transparent); }
+  0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--dot-color, var(--st-running)) 55%, transparent); }
   70%, 100% { box-shadow: 0 0 0 5px transparent; }
 }
 @keyframes eigenform-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 /* ── Status dots ────────────────────────────────────────────────────────── */
-/* State mapping (registry → palette): working = running amber (pulse + ring),
-   waiting = accent orange pulse (attention: claude is blocked on you),
-   idle = slate, exited = faint. */
+/* Two orthogonal channels (see docs/plans/2026-07-02-live-session-clarity):
+   • activity → color + glow: working = running amber (ring + pulse),
+     waiting = accent "your turn" (pulse), idle = slate (steady).
+   • provenance → fill: eigenform = solid (attachable), external = hollow ring
+     (live outside eigenform, can't attach), dead = faint flat.
+   Only live provenances animate; a dead dot never glows regardless of activity. */
 .dot {
   position: relative;
   display: inline-block;
+  box-sizing: border-box;
   width: 7px; height: 7px;
   border-radius: 99px;
   flex: 0 0 auto;
-  background: var(--st-idle);
+  --dot-color: var(--st-idle);
+  background: var(--dot-color);
 }
-.dot--working {
-  background: var(--st-running);
+/* activity → color */
+.dot--working { --dot-color: var(--st-running); }
+.dot--waiting { --dot-color: var(--accent); }
+.dot--idle    { --dot-color: var(--st-idle); }
+/* provenance → fill */
+.dot--eigenform { background: var(--dot-color); }
+.dot--external  { background: transparent; border: 1.5px solid var(--dot-color); }
+.dot--dead      { background: var(--tx-faint); }
+/* glow → live provenances only, gated by activity (dead never animates) */
+.dot--eigenform.dot--working,
+.dot--external.dot--working {
   animation: eigenform-ring 1.8s ease-out infinite, eigenform-pulse 1.4s ease-in-out infinite;
 }
-.dot--waiting {
-  background: var(--accent);
+.dot--eigenform.dot--waiting,
+.dot--external.dot--waiting {
   animation: eigenform-pulse 1.2s ease-in-out infinite;
 }
-.dot--idle   { background: var(--st-idle); }
-.dot--exited { background: var(--tx-faint); }
 
 /* ── Shell layout ───────────────────────────────────────────────────────── */
 .shell {
@@ -332,6 +344,8 @@ button { font: inherit; color: inherit; }
   color: var(--tx-faint);
   white-space: nowrap;
 }
+/* live outside eigenform: tint the tag to match the hollow-ring dot */
+.rail-row-live--external { color: var(--tx-3); }
 
 .rail-row-recency {
   font-family: var(--font-mono);
