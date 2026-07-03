@@ -45,7 +45,9 @@ pub enum RewriteError {
 }
 
 /// Replace the session id `old` with `new` in one JSONL line, targeting **only** values
-/// that sit at a `sessionId` key (anywhere in the tree). Substring occurrences inside
+/// that sit at a `sessionId` key — or its snake_case twin `session_id`, which claude
+/// 2.1.199 began writing alongside it on assistant rows (spike 11) — anywhere in the
+/// tree. Substring occurrences inside
 /// content — e.g. a tool that printed the session's own `<id>.jsonl` filename — are left
 /// untouched (spike 07 finding 4). Bails if `old` is the exact full value of some other
 /// key (`exact-other`), as an early warning for an id-bearing key we don't yet rewrite.
@@ -68,8 +70,9 @@ pub fn rewrite_session_id(line: &str, old: &str, new: &str) -> Result<String, Re
     Ok(serde_json::to_string(&value).expect("re-serialize rewritten row"))
 }
 
-/// Walk the tree: swap string values equal to `old` that are keyed `sessionId`; flag any
-/// other key whose full value equals `old` as a stray.
+/// Walk the tree: swap string values equal to `old` that are keyed `sessionId` (or its
+/// snake_case twin `session_id`, added by claude 2.1.199 — spike 11); flag any other key
+/// whose full value equals `old` as a stray.
 fn rewrite_session_fields(
     value: &mut Value,
     key: Option<&str>,
@@ -80,7 +83,7 @@ fn rewrite_session_fields(
     match value {
         Value::String(s) => {
             if s == old {
-                if key == Some("sessionId") {
+                if key == Some("sessionId") || key == Some("session_id") {
                     *s = new.to_string();
                 } else {
                     *stray = true;
@@ -494,4 +497,35 @@ fn str_field(value: &Value, key: &str) -> Option<String> {
 /// The top-level `sessionId` of a parsed JSON line, if present.
 fn session_id_of(value: &Value) -> Option<String> {
     value.get("sessionId")?.as_str().map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrites_both_camel_and_snake_session_id() {
+        // claude 2.1.199 assistant rows carry BOTH keys with the same value.
+        let line = r#"{"type":"assistant","uuid":"a1","session_id":"OLD","sessionId":"OLD"}"#;
+        let out = rewrite_session_id(line, "OLD", "NEW").expect("must not flag a stray");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v.get("sessionId").unwrap(), "NEW");
+        assert_eq!(v.get("session_id").unwrap(), "NEW");
+    }
+
+    #[test]
+    fn still_flags_a_genuinely_stray_occurrence() {
+        // A non-id key whose value equals the session id must STILL be refused (spike-07 guard).
+        let line = r#"{"type":"assistant","uuid":"a1","sessionId":"OLD","note":"OLD"}"#;
+        assert!(rewrite_session_id(line, "OLD", "NEW").is_err());
+    }
+
+    #[test]
+    fn pre_2_1_199_rows_with_only_sessionid_still_rewrite() {
+        // BACKWARDS COMPAT: older sessions (no snake_case field) must be unaffected.
+        let line = r#"{"type":"assistant","uuid":"a1","sessionId":"OLD"}"#;
+        let out = rewrite_session_id(line, "OLD", "NEW").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v.get("sessionId").unwrap(), "NEW");
+    }
 }
