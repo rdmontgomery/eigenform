@@ -621,14 +621,18 @@ Add CSS in `style.css` (mirror an existing chip's tokens):
 
 ```css
 .rail-downgrade {
-  font-size: 0.7rem;
-  color: var(--warn, #d08770);
+  font-size: 9.5px;                /* match neighbouring meta chips */
+  color: var(--st-running);        /* theme-adaptive amber; NOT a hardcoded hex */
   border: 1px solid currentColor;
   border-radius: 3px;
   padding: 0 3px;
   margin-left: 4px;
 }
 ```
+
+> Note: use the real design token `--st-running` (regenerated per color scheme by
+> `deriveChrome`), never an invented `--warn`/hardcoded hex — the badge must adapt
+> to light/dark and alternate schemes like every other rail chip.
 
 **Step 4: Run**
 
