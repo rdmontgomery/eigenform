@@ -148,6 +148,7 @@ pub fn app(config: Config) -> Router {
         .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/session/:uuid/json", get(session_json_route))
         .route("/api/session/:uuid/fork", post(fork_route))
+        .route("/api/session/:uuid/recover-downgrade", post(recover_downgrade_route))
         .route("/api/sessions", get(sessions_route))
         .route("/api/forest", get(forest_route))
         .route("/api/watch/forest", get(forest_watch_route))
@@ -308,6 +309,79 @@ fn fork_session(
         .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "session path has no parent"))?;
     eigenform_surgery::write(&forked, project_dir)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not write fork"))
+}
+
+/// `POST /api/session/:uuid/recover-downgrade` — detect the guardrail downgrade,
+/// fork a Fable branch truncated to before the offending prompt (reusing
+/// `fork_session` → `surgery::fork_before`), and stage a suggested restatement.
+/// Never sends. Returns `{ branchUuid, stagedText, offendingTurn, note }`.
+async fn recover_downgrade_route(
+    AxumPath(uuid): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    match recover_downgrade(&state.config, &uuid) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+fn recover_downgrade(
+    cfg: &Config,
+    src_uuid: &str,
+) -> Result<serde_json::Value, (StatusCode, &'static str)> {
+    let dir = cfg
+        .projects_dir
+        .as_ref()
+        .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
+    let src_path = eigenform_forest::resolve(dir, src_uuid)
+        .map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
+    let down = eigenform_forest::detect_downgrade(&src_path)
+        .ok_or((StatusCode::UNPROCESSABLE_ENTITY, "no downgrade detected"))?;
+
+    // Fork first (load-bearing). Reuses the existing primitive.
+    let branch_uuid = fork_session(cfg, src_uuid, &down.offending_turn)?;
+
+    // Pull the offending prompt's text for the rephraser and the verbatim fallback.
+    let offending_text = user_turn_text(&src_path, &down.offending_turn).unwrap_or_default();
+    let cwd = src_path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let (staged_text, note) = match rephrase_prompt(&cfg.rephrase_cmd, &cwd, &offending_text) {
+        Ok(t) => (t, serde_json::Value::Null),
+        Err(_) => (
+            offending_text,
+            serde_json::Value::String(
+                "couldn't reach the rephraser — staged your prompt verbatim".into(),
+            ),
+        ),
+    };
+
+    Ok(serde_json::json!({
+        "branchUuid": branch_uuid,
+        "stagedText": staged_text,
+        "offendingTurn": down.offending_turn,
+        "note": note,
+    }))
+}
+
+/// The `message.content` text of the user turn with `uuid` in the JSONL at `path`.
+fn user_turn_text(path: &Path, uuid: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        // IMPORTANT: a non-JSON / opaque line must be SKIPPED, not abort the scan.
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if v.get("uuid").and_then(|x| x.as_str()) == Some(uuid) {
+            let content = v.get("message").and_then(|m| m.get("content"))?;
+            if let Some(s) = content.as_str() {
+                return Some(s.to_string());
+            }
+            return content.as_array().map(|bs| {
+                bs.iter()
+                    .filter_map(|b| b.get("text").and_then(|x| x.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("")
+            });
+        }
+    }
+    None
 }
 
 /// Resolve, read, and parse a session's JSONL into a [`Session`].
