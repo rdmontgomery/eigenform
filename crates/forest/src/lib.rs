@@ -230,6 +230,8 @@ pub struct LiveSession {
     pub state: SessionState,
     /// Per-turn output-token counts (the activity sparkline). Empty until metrics exist.
     pub spark: Vec<u32>,
+    /// Present iff a Fable→Opus guardrail downgrade was detected in this session.
+    pub downgrade: Option<Downgrade>,
 }
 
 /// A detected Fable→Opus **guardrail** downgrade in a session transcript.
@@ -249,7 +251,7 @@ pub struct Downgrade {
 /// synthetics were observed). Capture the true string from the first live
 /// occurrence and replace this one line, recording it with `claude --version` in
 /// a new spike. Matching is a substring test, so a stable fragment is enough.
-const GUARDRAIL_MARKER: &str = "switched this session to a safer model"; // PLACEHOLDER
+pub const GUARDRAIL_MARKER: &str = "switched this session to a safer model"; // PLACEHOLDER
 
 /// Scan a session JSONL for the first guardrail downgrade. Returns the offending
 /// user turn, or `None`. Pure: reads the file, no side effects.
@@ -400,6 +402,42 @@ pub fn cached_spark(state_dir: &Path, session_id: &str, jsonl_path: &Path) -> Ve
     spark
 }
 
+/// [`detect_downgrade`] cached to `state_dir/<session_id>.downgrade.json`, keyed by the
+/// JSONL's (mtime, len) — the same on-change discipline as [`cached_spark`]. A downgrade is
+/// an immutable property of a transcript's content, so once the file stops changing the full
+/// scan runs at most once. Avoids re-reading every transcript on every forest snapshot.
+pub fn cached_downgrade(state_dir: &Path, session_id: &str, jsonl_path: &Path) -> Option<Downgrade> {
+    let stamp = mtime_millis(jsonl_path);
+    let state_path = state_dir.join(format!("{session_id}.downgrade.json"));
+
+    if let Some((mtime, len)) = stamp {
+        if let Ok(text) = fs::read_to_string(&state_path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let same = v.get("source_mtime").and_then(|x| x.as_i64()) == Some(mtime)
+                    && v.get("source_len").and_then(|x| x.as_u64()) == Some(len);
+                if same {
+                    // Cached: `offending_turn` is a string when a downgrade was found, null otherwise.
+                    return v.get("offending_turn")
+                        .and_then(|x| x.as_str())
+                        .map(|s| Downgrade { offending_turn: s.to_string() });
+                }
+            }
+        }
+    }
+
+    let found = detect_downgrade(jsonl_path);
+    if let Some((mtime, len)) = stamp {
+        let _ = fs::create_dir_all(state_dir);
+        let doc = serde_json::json!({
+            "source_mtime": mtime,
+            "source_len": len,
+            "offending_turn": found.as_ref().map(|d| d.offending_turn.clone()),
+        });
+        let _ = fs::write(&state_path, doc.to_string());
+    }
+    found
+}
+
 /// The live Forest: corroborate `~/.claude/sessions/<pid>.json` (process liveness) with
 /// the project JSONLs (state, title, recency). The source of truth is the filesystem —
 /// reconstructed on demand — so it survives a daemon that wasn't running when sessions
@@ -465,6 +503,7 @@ pub fn live_forest_with(
             live: is_live,
             state,
             spark: cached_spark(state_dir, &r.uuid, &r.path),
+            downgrade: cached_downgrade(state_dir, &r.uuid, &r.path),
         });
     }
     // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
@@ -480,6 +519,7 @@ pub fn live_forest_with(
             live: true,
             state: SessionState::Working,
             spark: Vec::new(),
+            downgrade: None,
         });
     }
 
@@ -681,6 +721,43 @@ mod downgrade_tests {
         ].join("\n") + "\n";
         let f = tmp_jsonl(&body);
         assert!(detect_downgrade(f.path()).is_none());
+    }
+
+    #[test]
+    fn cached_downgrade_caches_a_hit_and_writes_state_file() {
+        let f = tmp_jsonl(&guardrail_fixture());
+        let state = tempfile::tempdir().unwrap();
+        let id = "sess-hit";
+
+        let first = cached_downgrade(state.path(), id, f.path());
+        assert_eq!(first.unwrap().offending_turn, "u2");
+        assert!(
+            state.path().join(format!("{id}.downgrade.json")).exists(),
+            "cache state file must be written"
+        );
+        // Second call (now served from the state file) yields the same result.
+        let second = cached_downgrade(state.path(), id, f.path());
+        assert_eq!(second.unwrap().offending_turn, "u2");
+    }
+
+    #[test]
+    fn cached_downgrade_caches_a_miss_as_null() {
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#,
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#,
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        let state = tempfile::tempdir().unwrap();
+        let id = "sess-clean";
+
+        assert!(cached_downgrade(state.path(), id, f.path()).is_none());
+        let state_file = state.path().join(format!("{id}.downgrade.json"));
+        assert!(state_file.exists(), "a miss must still write the cache file");
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&state_file).unwrap()).unwrap();
+        assert!(doc["offending_turn"].is_null(), "a miss caches null");
+        // Second call still None (served from cache).
+        assert!(cached_downgrade(state.path(), id, f.path()).is_none());
     }
 
     #[test]

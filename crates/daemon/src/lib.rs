@@ -395,6 +395,9 @@ fn forest_json(cfg: &Config) -> String {
                     "live": s.live,
                     "state": s.state.as_str(),
                     "spark": s.spark,
+                    "downgrade": s.downgrade.as_ref().map(|d| serde_json::json!({
+                        "offendingTurn": d.offending_turn,
+                    })),
                 })
             })
             .collect();
