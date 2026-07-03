@@ -10,20 +10,19 @@ const DOWNGRADED_UUID: &str = "dddd4444-0000-4000-8000-000000000004";
 
 /// A downgraded session (Task 1's `guardrail_fixture()` shape, mirrored from
 /// `forest_route.rs`): u1 → a1(fable) → sys1(turn_duration boundary) → u2(offending)
-/// → synth(marker) → a2(opus). The completed-turn boundary before u2 lets
-/// `fork_before` truncate to a resumable Fable branch.
+/// → a2(opus). The silent model-field flip fable→opus at a2 is the guardrail (no
+/// `<synthetic>` notice is written for a real downgrade). The completed-turn boundary
+/// before u2 lets `fork_before` truncate to a resumable Fable branch.
 fn downgrade_fixture(rephrase_cmd: Vec<String>) -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let proj = tempfile::tempdir().unwrap();
     let pdir = proj.path().join("-home-me-p");
     std::fs::create_dir_all(&pdir).unwrap();
 
-    let marker = eigenform_forest::GUARDRAIL_MARKER;
     let downgraded = [
         r#"{"type":"user","isSidechain":false,"uuid":"u1","timestamp":"2026-06-06T10:00:00Z","sessionId":"s","message":{"role":"user","content":"benign question"}}"#.to_string(),
         r#"{"type":"assistant","isSidechain":false,"uuid":"a1","timestamp":"2026-06-06T10:00:01Z","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]}}"#.to_string(),
         r#"{"type":"system","subtype":"turn_duration","uuid":"sys1","timestamp":"2026-06-06T10:00:01.5Z"}"#.to_string(),
         r#"{"type":"user","isSidechain":false,"uuid":"u2","timestamp":"2026-06-06T10:00:02Z","sessionId":"s","message":{"role":"user","content":"the offending prompt"}}"#.to_string(),
-        format!(r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","timestamp":"2026-06-06T10:00:03Z","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{marker}"}}]}}}}"#),
         r#"{"type":"assistant","isSidechain":false,"uuid":"a2","timestamp":"2026-06-06T10:00:04Z","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]}}"#.to_string(),
     ].join("\n") + "\n";
     std::fs::write(pdir.join(format!("{DOWNGRADED_UUID}.jsonl")), downgraded).unwrap();

@@ -380,7 +380,7 @@ fn user_turn_text(path: &Path, uuid: &str) -> Option<String> {
                 bs.iter()
                     .filter_map(|b| b.get("text").and_then(|x| x.as_str()))
                     .collect::<Vec<_>>()
-                    // Space-join to match forest's `synthetic_text`, so a multi-block
+                    // Space-join to match forest's `user_text`, so a multi-block
                     // user turn doesn't fuse words (user content is usually a plain string).
                     .join(" ")
             });

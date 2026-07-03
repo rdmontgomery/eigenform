@@ -90,14 +90,12 @@ fn downgrade_fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempD
     let pdir = proj.path().join("-home-me-p");
     std::fs::create_dir_all(&pdir).unwrap();
 
-    // Downgraded transcript: u2 (offending) → <synthetic> guardrail notice → opus.
-    // Pinned to the production marker so a Task-7 swap can't leave a stale false-green.
-    let marker = eigenform_forest::GUARDRAIL_MARKER;
+    // Downgraded transcript: u2 (offending) → silent fable→opus model flip (no synthetic
+    // notice — that's the real guardrail shape).
     let downgraded = [
         r#"{"type":"user","isSidechain":false,"uuid":"u1","timestamp":"2026-06-06T10:00:00Z","sessionId":"s","message":{"role":"user","content":"benign question"}}"#.to_string(),
         r#"{"type":"assistant","isSidechain":false,"uuid":"a1","timestamp":"2026-06-06T10:00:01Z","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]}}"#.to_string(),
         r#"{"type":"user","isSidechain":false,"uuid":"u2","timestamp":"2026-06-06T10:00:02Z","sessionId":"s","message":{"role":"user","content":"the offending prompt"}}"#.to_string(),
-        format!(r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","timestamp":"2026-06-06T10:00:03Z","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{marker}"}}]}}}}"#),
         r#"{"type":"assistant","isSidechain":false,"uuid":"a2","timestamp":"2026-06-06T10:00:04Z","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]}}"#.to_string(),
     ].join("\n") + "\n";
     std::fs::write(pdir.join(format!("{DOWNGRADED_UUID}.jsonl")), downgraded).unwrap();

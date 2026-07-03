@@ -243,27 +243,36 @@ pub struct Downgrade {
     pub offending_turn: String,
 }
 
-/// The guardrail-downgrade notice string Claude Code writes as a `<synthetic>`
-/// assistant turn.
+/// Scan a session JSONL for the first Fable→Opus **guardrail downgrade**. Returns the
+/// offending user turn's uuid, or `None`. Pure: reads the file, no side effects.
 ///
-/// ⚠ SCRUBBED IN. No real guardrail sample exists in local transcripts yet — see
-/// `notes/spikes/10-resume-model-derivation.md` (only session-limit + API-error
-/// synthetics were observed). Capture the true string from the first live
-/// occurrence and replace this one line, recording it with `claude --version` in
-/// a new spike. Matching is a substring test, so a stable fragment is enough.
-pub const GUARDRAIL_MARKER: &str = "switched this session to a safer model"; // PLACEHOLDER
-
-/// Scan a session JSONL for the first guardrail downgrade. Returns the offending
-/// user turn, or `None`. Pure: reads the file, no side effects.
+/// The real signature — confirmed from a live capture (see
+/// `notes/spikes/12-guardrail-marker.md`) — is a **silent model-field transition**:
+/// a main-chain (`isSidechain:false`) `assistant` row on `claude-fable-5`, followed later by a
+/// main-chain `assistant` row on a *non-Fable* model, with **no** user `/model` command in
+/// between. Claude Code writes **no** `<synthetic>` notice for a guardrail swap (only for
+/// session-limit and API-error events), so there is no marker string to match — the model
+/// field is the entire tell. (The prior implementation hunted for a placeholder synthetic
+/// notice that never appears in practice, and so never fired in the field.)
 ///
-/// A downgrade notice is a **main-chain** (`isSidechain:false`) `assistant` row
-/// whose `message.model == "<synthetic>"` and whose text contains
-/// [`GUARDRAIL_MARKER`]. Sidechain (subagent) turns are ignored — an Opus
-/// subagent is benign, not a downgrade of your thread. The offending turn is the
-/// last main-chain `user` turn *before* that notice.
+/// Excluded, so they never false-fire:
+/// - **Manual `/model` switches** — a `<command-name>/model…` user row before the transition
+///   arms a one-shot bypass; the user chose the model, so it isn't a guardrail.
+/// - **Session-limit / API-error downgrades** — these *also* flip Fable→Opus (see
+///   `notes/spikes/10-resume-model-derivation.md`), but they are announced by a `<synthetic>`
+///   notice immediately before the flipped turn. The safety guardrail is **silent** — no
+///   notice — so a transition preceded by a synthetic notice is suppressed. This is the one
+///   feature that separates the two, so it must not be dropped.
+/// - **Sidechain turns** — an Opus subagent is benign, not a downgrade of your thread.
+///
+/// The offending turn is the last main-chain, non-meta `user` prompt before the transition —
+/// forking before it drops the prompt that tripped the guardrail.
 pub fn detect_downgrade(jsonl_path: &Path) -> Option<Downgrade> {
     let text = fs::read_to_string(jsonl_path).ok()?;
     let mut last_user: Option<String> = None;
+    let mut prev_model: Option<String> = None;
+    let mut manual_switch_armed = false;
+    let mut notice_pending = false;
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
         if v.get("isSidechain").and_then(|b| b.as_bool()).unwrap_or(false) {
@@ -271,16 +280,41 @@ pub fn detect_downgrade(jsonl_path: &Path) -> Option<Downgrade> {
         }
         match v.get("type").and_then(|t| t.as_str()) {
             Some("user") => {
-                if let Some(uuid) = v.get("uuid").and_then(|x| x.as_str()) {
+                if is_tool_result(&v) {
+                    continue; // a tool-result carrier row, not a human prompt
+                }
+                let body = user_text(&v);
+                let trimmed = body.trim_start();
+                if trimmed.starts_with("<command-name>") {
+                    if body.contains("/model") {
+                        manual_switch_armed = true; // the next model change is the user's doing
+                    }
+                } else if trimmed.starts_with("<local-command") || trimmed.starts_with("<command-") {
+                    // command caveat / stdout echo — metadata, not a prompt
+                } else if let Some(uuid) = v.get("uuid").and_then(|x| x.as_str()) {
                     last_user = Some(uuid.to_string());
                 }
             }
             Some("assistant") => {
-                let msg = v.get("message");
-                let model = msg.and_then(|m| m.get("model")).and_then(|x| x.as_str());
-                if model == Some("<synthetic>") && synthetic_text(msg).contains(GUARDRAIL_MARKER) {
+                let Some(model) = v.get("message").and_then(|m| m.get("model")).and_then(|x| x.as_str())
+                else {
+                    continue;
+                };
+                if model == "<synthetic>" {
+                    // A notice (session limit, API error), not a model state. It doesn't reset
+                    // the Fable tracking, but it *does* mark any following flip as announced —
+                    // i.e. not the silent safety guardrail.
+                    notice_pending = true;
+                    continue;
+                }
+                let was_fable = prev_model.as_deref().is_some_and(is_fable_model);
+                if was_fable && !is_fable_model(model) && !manual_switch_armed && !notice_pending {
+                    // Silent Fable → non-Fable, no user /model in between: the guardrail fired.
                     return last_user.map(|offending_turn| Downgrade { offending_turn });
                 }
+                prev_model = Some(model.to_string());
+                manual_switch_armed = false; // a real assistant turn consumes any pending switch
+                notice_pending = false;
             }
             _ => {}
         }
@@ -288,9 +322,16 @@ pub fn detect_downgrade(jsonl_path: &Path) -> Option<Downgrade> {
     None
 }
 
-/// Concatenate the text blocks of an assistant `message.content` (string or array form).
-fn synthetic_text(msg: Option<&serde_json::Value>) -> String {
-    let Some(content) = msg.and_then(|m| m.get("content")) else { return String::new() };
+/// A Fable model id — the guardrail's *source* state, e.g. `claude-fable-5`.
+fn is_fable_model(model: &str) -> bool {
+    model.starts_with("claude-fable")
+}
+
+/// The text of a `user` row's `message.content` (string or array-of-blocks form).
+fn user_text(v: &serde_json::Value) -> String {
+    let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+        return String::new();
+    };
     if let Some(s) = content.as_str() {
         return s.to_string();
     }
@@ -304,6 +345,22 @@ fn synthetic_text(msg: Option<&serde_json::Value>) -> String {
                 .join(" ")
         })
         .unwrap_or_default()
+}
+
+/// Whether a `user` row carries a tool result (part of an assistant turn) rather than a human
+/// prompt — those must never be mistaken for the offending turn.
+fn is_tool_result(v: &serde_json::Value) -> bool {
+    if v.get("toolUseResult").is_some() {
+        return true;
+    }
+    v.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+        .is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_result"))
+        })
 }
 
 /// Is a process alive? `/proc/<pid>` on Linux/WSL (this project's target).
@@ -659,31 +716,82 @@ mod downgrade_tests {
         f
     }
 
-    // user(offending) -> synthetic guardrail notice -> opus assistant
+    // Silent guardrail downgrade: fable turn -> completed-turn boundary -> user(offending)
+    // -> opus turn, with NO synthetic notice and NO marker string (the real-world shape,
+    // per notes/spikes/12-guardrail-marker.md).
     fn guardrail_fixture() -> String {
         [
             r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"benign question"},"sessionId":"s"}"#.to_string(),
             r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#.to_string(),
             r#"{"type":"system","isSidechain":false,"subtype":"turn_duration","uuid":"sys1","sessionId":"s"}"#.to_string(),
             r#"{"type":"user","isSidechain":false,"uuid":"u2","message":{"role":"user","content":"the offending prompt"},"sessionId":"s"}"#.to_string(),
-            format!(r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#),
             r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#.to_string(),
         ].join("\n") + "\n"
     }
 
     #[test]
-    fn fires_on_guardrail_marker_targeting_offending_user_turn() {
+    fn fires_on_silent_fable_to_opus_transition() {
         let f = tmp_jsonl(&guardrail_fixture());
         let d = detect_downgrade(f.path()).expect("should fire");
-        assert_eq!(d.offending_turn, "u2"); // last main-chain user turn before the marker
+        assert_eq!(d.offending_turn, "u2"); // last main-chain user turn before the transition
     }
 
     #[test]
-    fn session_limit_fallback_does_not_fire() {
+    fn manual_model_command_switch_does_not_fire() {
+        // The user typing /model to move off Fable is a choice, not a guardrail. The
+        // <command-name>/model row must suppress the very next transition.
         let body = [
-            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#,
-            r#"{"type":"assistant","isSidechain":false,"uuid":"synth","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 4pm"}]},"sessionId":"s"}"#,
-            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#,
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":false,"uuid":"cmd","message":{"role":"user","content":"<command-name>/model</command-name> <command-args>opus</command-args>"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":false,"uuid":"out","message":{"role":"user","content":"<local-command-stdout>Set model to Opus</local-command-stdout>"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#.to_string(),
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert!(detect_downgrade(f.path()).is_none());
+    }
+
+    #[test]
+    fn guardrail_after_a_manual_switch_still_fires() {
+        // Manual opus->fable via /model, THEN a real guardrail fable->opus. The /model arm
+        // is consumed by the first transition; the later guardrail must still fire on u3.
+        let body = [
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a0","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"hi"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":false,"uuid":"cmd","message":{"role":"user","content":"<command-name>/model</command-name> <command-args>fable</command-args>"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":false,"uuid":"u2","message":{"role":"user","content":"work"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":false,"uuid":"u3","message":{"role":"user","content":"the offending prompt"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#.to_string(),
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert_eq!(detect_downgrade(f.path()).unwrap().offending_turn, "u3");
+    }
+
+    #[test]
+    fn synthetic_notice_between_fable_turns_does_not_fire_or_mask() {
+        // An API-error / session-limit <synthetic> is not a model state: it neither fires on
+        // its own nor resets the Fable tracking. Here the thread stays Fable throughout.
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"synth","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Connection closed mid-response."}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"more"}]},"sessionId":"s"}"#.to_string(),
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert!(detect_downgrade(f.path()).is_none());
+    }
+
+    #[test]
+    fn session_limit_downgrade_does_not_fire() {
+        // A session-limit / API-error downgrade ALSO flips fable→opus, but it is announced by
+        // a <synthetic> notice right before the opus turn. The safety guardrail is silent, so
+        // this announced transition must be suppressed (spike 10). This is the single feature
+        // separating the two — dropping it reintroduces the false positive.
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"synth","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 4pm"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#.to_string(),
         ].join("\n") + "\n";
         let f = tmp_jsonl(&body);
         assert!(detect_downgrade(f.path()).is_none());
@@ -691,26 +799,30 @@ mod downgrade_tests {
 
     #[test]
     fn opus_subagent_sidechain_does_not_fire() {
-        // A guardrail-marker synthetic on a SIDECHAIN must be ignored: it's a
-        // subagent's notice, not a downgrade of the main thread. Deleting the
-        // isSidechain guard would make this fire — so it genuinely pins it.
+        // An Opus subagent turn on a SIDECHAIN must be ignored: it's a subagent, not a
+        // downgrade of the main thread, which stays on Fable. Deleting the isSidechain guard
+        // would make this fire — so it genuinely pins it.
         let body = [
             r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#.to_string(),
-            format!(r#"{{"type":"assistant","isSidechain":true,"uuid":"synthsub","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":true,"uuid":"sub","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"subagent work"}]},"sessionId":"s"}"#.to_string(),
         ].join("\n") + "\n";
         let f = tmp_jsonl(&body);
         assert!(detect_downgrade(f.path()).is_none());
     }
 
     #[test]
-    fn sidechain_user_turn_is_not_the_offending_turn() {
+    fn tool_result_row_is_not_the_offending_turn() {
+        // The user prompt is u2; a tool_result carrier row sits between it and the fable turn.
+        // The offending turn must be u2, not the tool-result row.
         let body = [
-            r#"{"type":"user","isSidechain":false,"uuid":"real","message":{"role":"user","content":"the real prompt"},"sessionId":"s"}"#.to_string(),
-            r#"{"type":"user","isSidechain":true,"uuid":"subuser","message":{"role":"user","content":"subagent prompt"},"sessionId":"s"}"#.to_string(),
-            format!(r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#),
+            r#"{"type":"user","isSidechain":false,"uuid":"u2","message":{"role":"user","content":"the real prompt"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":false,"uuid":"tr","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"out"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#.to_string(),
         ].join("\n") + "\n";
         let f = tmp_jsonl(&body);
-        assert_eq!(detect_downgrade(f.path()).unwrap().offending_turn, "real");
+        assert_eq!(detect_downgrade(f.path()).unwrap().offending_turn, "u2");
     }
 
     #[test]
@@ -718,6 +830,16 @@ mod downgrade_tests {
         let body = [
             r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#,
             r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#,
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert!(detect_downgrade(f.path()).is_none());
+    }
+
+    #[test]
+    fn always_fable_session_does_not_fire() {
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#,
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#,
         ].join("\n") + "\n";
         let f = tmp_jsonl(&body);
         assert!(detect_downgrade(f.path()).is_none());
@@ -761,10 +883,13 @@ mod downgrade_tests {
     }
 
     #[test]
-    fn marker_with_no_prior_user_turn_does_not_fire() {
-        let body = format!(
-            r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#
-        ) + "\n";
+    fn transition_with_no_prior_user_turn_does_not_fire() {
+        // A fable->opus transition with no preceding main-chain user prompt has no offending
+        // turn to fork before, so there is nothing to recover — don't fire.
+        let body = [
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#,
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#,
+        ].join("\n") + "\n";
         let f = tmp_jsonl(&body);
         assert!(detect_downgrade(f.path()).is_none());
     }
