@@ -343,6 +343,9 @@ fn recover_downgrade(
 
     // Pull the offending prompt's text for the rephraser and the verbatim fallback.
     let offending_text = user_turn_text(&src_path, &down.offending_turn).unwrap_or_default();
+    // Nominal cwd: the transcript's storage dir (`~/.claude/projects/<enc>`), not the
+    // session's real project cwd. A "restate this prompt" call needs no repo context, so
+    // this is immaterial; if it were ever empty the spawn fails and we fall back to verbatim.
     let cwd = src_path.parent().map(Path::to_path_buf).unwrap_or_default();
     let (staged_text, note) = match rephrase_prompt(&cfg.rephrase_cmd, &cwd, &offending_text) {
         Ok(t) => (t, serde_json::Value::Null),
@@ -377,7 +380,9 @@ fn user_turn_text(path: &Path, uuid: &str) -> Option<String> {
                 bs.iter()
                     .filter_map(|b| b.get("text").and_then(|x| x.as_str()))
                     .collect::<Vec<_>>()
-                    .join("")
+                    // Space-join to match forest's `synthetic_text`, so a multi-block
+                    // user turn doesn't fuse words (user content is usually a plain string).
+                    .join(" ")
             });
         }
     }
