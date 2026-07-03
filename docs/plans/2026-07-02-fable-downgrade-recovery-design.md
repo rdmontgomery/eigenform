@@ -38,11 +38,19 @@ genuinely loaded prompt, that is the system working, and we surface the refusal.
 Runs on the same transcript parse the daemon already does as each session's JSONL
 grows.
 
-- **Primary signal: signature text.** Match the literal downgrade-notice string
-  Claude Code writes into the transcript (small regex tolerated). Captured from a
-  real downgraded transcript in a spike and pinned to a single named constant
-  with a comment pointing at the spike doc + `claude --version`. Updating it when
-  Anthropic shifts is a one-line change.
+- **Primary signal: signature text on a synthetic turn.** The downgrade notice is
+  delivered as an `assistant` turn with `message.model == "<synthetic>"` carrying
+  a human-readable string (confirmed by enumerating local transcripts — spike 10).
+  Match the guardrail string against a single named constant (small regex
+  tolerated). **Scrubbed in for now:** no guardrail-safety string exists in local
+  history yet (only session-limit and API-error synthetics were observed), so the
+  constant is a placeholder captured from the first live occurrence, pinned with
+  its `claude --version`. Updating it when Anthropic shifts is a one-line change.
+- **Session-limit fallback is NOT a guardrail downgrade.** Hitting the Fable
+  session limit *also* produces a `<synthetic>` notice and a Fable→Opus
+  transition (`You've hit your session limit · resets …`). The detector must match
+  the specific guardrail wording, not the transition — confirming the
+  signature-over-inference choice.
 - **Main chain only.** Filter out subagent/sidechain turns (`isSidechain: true`)
   before matching, so Fable spawning an Opus subagent for grunt work never fires
   — that's an intended benign Opus, not a downgrade of *your* thread.
@@ -70,11 +78,15 @@ On a `DowngradeEvent` the daemon does three things:
    daemon already only ever runs `claude` — stays key-free and offline-friendly.
    On decline/error: stage the verbatim prompt + the refusal note; the fork still
    works.
-3. **Force Fable on resume.** The existing fork route resumes via
-   `claude --resume`, which inherits the (now Opus) model. Add a model override so
-   the branch resumes on `--model fable` (exact flag verified in the spike). This
-   is the one bit that *must* work — a branch that resumes back on Opus is
-   pointless — so it is **spike-gated before any UI is built.**
+3. **Resume lands on Fable for free (spike 10).** Resume derives its model from
+   the transcript's **last recorded assistant turn**, not sticky session state.
+   Since `fork_before` truncates to a completed Fable turn before the offending
+   prompt, `claude --resume` continues on Fable with **no flag needed** — this was
+   the earlier "must force `--model fable`" gate, now dissolved. We keep passing
+   `--model fable` as a cheap belt-and-suspenders (explicit intent; robustness if
+   Anthropic changes resume-model derivation), but it is not required for
+   correctness. Verified against `claude 2.1.199` in
+   `notes/spikes/10-resume-model-derivation.md`.
 
 The rephrase rides the existing fork contract: delivered into the input as staged
 `text`, **never written to the branch file, never auto-sent.**
@@ -106,7 +118,8 @@ Each failure degrades instead of breaking:
 - **Marker not found / wording changed** → detector never fires. No crash, no
   false branch. Signature constant + spike doc is where you look.
 - **Rephraser declines/errors** → stage verbatim prompt + note; fork still works.
-- **Fable pin fails** → spike gate; if it can't hold, we don't ship the auto-fork.
+- **Fable pin** → not a failure mode: resume follows the truncated transcript onto
+  Fable on its own (spike 10); `--model fable` is a redundant guard.
 - **`fork_before` fails** (offending turn isn't a completed boundary) → badge with
   "couldn't stage a retry," no auto-open.
 
@@ -133,6 +146,7 @@ JSONL watcher.
 `claude -p` rephrase step; the `--model fable` resume override; the
 `downgrade_recovered` control message + `fable-retry` badge + auto-open handling.
 
-**Spikes gating the build:** (1) exact downgrade-notice marker string; (2)
-`claude --resume --model fable` pins the model. Both recorded per the
+**Spikes:** (1) resume-model derivation + `--model` pinning — **DONE**, spike 10,
+which dissolved the Fable-pin gate. (2) exact guardrail marker string — scrubbed
+in for now; capture from the first live occurrence and record per the
 `vetting-claude-internals` habit.
