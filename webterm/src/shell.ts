@@ -1414,6 +1414,13 @@ export function mountShell(appEl: HTMLElement): void {
       live.textContent = "· live";
       meta.append(live);
     }
+    if (row.downgrade) {
+      const downgrade = el("span", "rail-downgrade");
+      downgrade.textContent = "fable→opus";
+      downgrade.title =
+        "Guardrail downgraded this session to Opus — a Fable retry can be staged";
+      meta.append(downgrade);
+    }
     body.append(labelEl, meta);
 
     const recencyEl = el("span", "rail-row-recency");

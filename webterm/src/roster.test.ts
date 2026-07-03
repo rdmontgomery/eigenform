@@ -111,6 +111,24 @@ test("live-only row with no forest match has no msgCount", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildRoster — downgrade (Fable→Opus guardrail marker)
+// ---------------------------------------------------------------------------
+
+test("forest row with a downgrade threads the offendingTurn onto the roster row", () => {
+  const rows = buildRoster(
+    [],
+    [forest({ uuid: "aaa", downgrade: { offendingTurn: "u2" } })],
+    {},
+  );
+  assert.equal(rows[0]!.downgrade?.offendingTurn, "u2");
+});
+
+test("forest row without a downgrade yields a nullish downgrade", () => {
+  const rows = buildRoster([], [forest({ uuid: "aaa" })], {});
+  assert.ok(!rows[0]!.downgrade);
+});
+
+// ---------------------------------------------------------------------------
 // buildRoster — ordering
 // ---------------------------------------------------------------------------
 

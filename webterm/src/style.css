@@ -348,6 +348,18 @@ button { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 
+/* Fable→Opus guardrail-downgrade chip — a quiet warning tint in the meta line */
+.rail-downgrade {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--warn, #d08770);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
 /* selected row: focus/preview state, a ring distinct from --active's wash */
 .rail-row--selected {
   background: var(--raised-2);
