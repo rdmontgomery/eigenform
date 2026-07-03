@@ -18,6 +18,108 @@
 
 ---
 
+## Task 0: Teach surgery the snake_case `session_id` (claude 2.1.199+) — unblocks the fork path
+
+**Why this is first:** `claude 2.1.199` (the version in use) started writing a second,
+snake_case `session_id` field on assistant rows alongside the existing camelCase
+`sessionId`. `surgery::rewrite_session_fields` only treats `sessionId` as an id-bearing key;
+any *other* key whose value equals the session id is flagged as a stray and the rewrite
+**refuses** (spike-07 guard). So `fork_before → finish → rewrite_session_id` now errors on any
+2.1.199 session — breaking the existing per-turn fork **and** this feature's `recover-downgrade`
+route (both share that path). The corpus property test already fails on this. Fix it before
+building anything on top of the fork.
+
+**Files:**
+- Modify: `crates/surgery/src/lib.rs` (`rewrite_session_fields`, ~line 83 — the key check)
+- Test: inline `#[cfg(test)]` unit test in `crates/surgery/src/lib.rs`; the corpus test
+  (`crates/surgery/tests/corpus.rs`) greens automatically once fixed.
+- Create: `notes/spikes/11-session-id-snake-case.md` (record the version + field change).
+
+**Step 1: Write the failing unit test**
+
+Add to the surgery crate's tests (match the existing test-module style in the file):
+
+```rust
+#[test]
+fn rewrites_both_camel_and_snake_session_id() {
+    // claude 2.1.199 assistant rows carry BOTH keys with the same value.
+    let line = r#"{"type":"assistant","uuid":"a1","session_id":"OLD","sessionId":"OLD"}"#;
+    let out = rewrite_session_id(line, "OLD", "NEW").expect("must not flag a stray");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.get("sessionId").unwrap(), "NEW");
+    assert_eq!(v.get("session_id").unwrap(), "NEW");
+}
+
+#[test]
+fn still_flags_a_genuinely_stray_occurrence() {
+    // A non-id key whose value equals the session id must STILL be refused (spike-07 guard).
+    let line = r#"{"type":"assistant","uuid":"a1","sessionId":"OLD","note":"OLD"}"#;
+    assert!(rewrite_session_id(line, "OLD", "NEW").is_err());
+}
+
+#[test]
+fn pre_2_1_199_rows_with_only_sessionid_still_rewrite() {
+    // BACKWARDS COMPAT: older sessions (no snake_case field) must be unaffected — the
+    // widened key set adds a case, it never removes the sessionId case.
+    let line = r#"{"type":"assistant","uuid":"a1","sessionId":"OLD"}"#;
+    let out = rewrite_session_id(line, "OLD", "NEW").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.get("sessionId").unwrap(), "NEW");
+}
+```
+
+**Backwards compatibility:** the fix only *widens* the set of id-bearing keys (adds
+`session_id` alongside `sessionId`); it removes nothing. A pre-2.1.199 transcript has no
+snake_case field, so the new case never fires on it and behaviour is identical. This is
+guaranteed live by the corpus test, which runs the guarded swap over sessions spanning every
+local version (2.1.138 → 2.1.199) — a regression on old transcripts would fail it. The
+`pre_2_1_199_…` unit test pins the same guarantee in isolation.
+
+**Step 2: Run to verify it fails**
+
+Run: `cargo test -p eigenform-surgery rewrites_both_camel_and_snake`
+Expected: FAIL — `StrayOccurrence` for the `session_id` key.
+
+**Step 3: Minimal implementation**
+
+In `rewrite_session_fields` (crates/surgery/src/lib.rs), widen the swappable-key check from a
+single `"sessionId"` to both spellings:
+
+```rust
+        Value::String(s) => {
+            if s == old {
+                if key == Some("sessionId") || key == Some("session_id") {
+                    *s = new.to_string();
+                } else {
+                    *stray = true;
+                }
+            }
+        }
+```
+
+Update the doc-comment on `rewrite_session_id` / `rewrite_session_fields` to note both keys are
+rewritten (claude 2.1.199+ writes snake_case `session_id` too).
+
+**Step 4: Run to verify pass + baseline green**
+
+Run: `cargo test -p eigenform-surgery`
+Expected: the two new unit tests PASS **and** `corpus_round_trips_and_guards_cleanly_across_versions`
+PASS (it was failing on this exact row).
+
+**Step 5: Spike note + commit**
+
+Write `notes/spikes/11-session-id-snake-case.md`: Status CONFIRMED, `claude --version` 2.1.199,
+Date 2026-07-02. Claim: 2.1.199 adds a snake_case `session_id` on assistant rows alongside
+`sessionId`; surgery must rewrite both or forks of 2.1.199 sessions fail. Evidence: only 2.1.199
+carries it across the local corpus (all prior versions back to 2.1.138 have `sessionId` only).
+
+```bash
+git add crates/surgery/src/lib.rs notes/spikes/11-session-id-snake-case.md
+git commit -m "surgery: rewrite snake_case session_id too (claude 2.1.199); greens corpus + fork"
+```
+
+---
+
 ## Task 1: Pure downgrade detector (forest crate)
 
 **Files:**
