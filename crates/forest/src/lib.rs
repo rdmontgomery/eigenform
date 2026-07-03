@@ -232,6 +232,78 @@ pub struct LiveSession {
     pub spark: Vec<u32>,
 }
 
+/// A detected Fable→Opus **guardrail** downgrade in a session transcript.
+#[derive(Debug, Clone)]
+pub struct Downgrade {
+    /// The main-chain user turn whose response tripped the guardrail — the
+    /// `fork_before` target. Forking before it drops the offending prompt so the
+    /// user can restate it on a fresh Fable branch.
+    pub offending_turn: String,
+}
+
+/// The guardrail-downgrade notice string Claude Code writes as a `<synthetic>`
+/// assistant turn.
+///
+/// ⚠ SCRUBBED IN. No real guardrail sample exists in local transcripts yet — see
+/// `notes/spikes/10-resume-model-derivation.md` (only session-limit + API-error
+/// synthetics were observed). Capture the true string from the first live
+/// occurrence and replace this one line, recording it with `claude --version` in
+/// a new spike. Matching is a substring test, so a stable fragment is enough.
+const GUARDRAIL_MARKER: &str = "switched this session to a safer model"; // PLACEHOLDER
+
+/// Scan a session JSONL for the first guardrail downgrade. Returns the offending
+/// user turn, or `None`. Pure: reads the file, no side effects.
+///
+/// A downgrade notice is a **main-chain** (`isSidechain:false`) `assistant` row
+/// whose `message.model == "<synthetic>"` and whose text contains
+/// [`GUARDRAIL_MARKER`]. Sidechain (subagent) turns are ignored — an Opus
+/// subagent is benign, not a downgrade of your thread. The offending turn is the
+/// last main-chain `user` turn *before* that notice.
+pub fn detect_downgrade(jsonl_path: &Path) -> Option<Downgrade> {
+    let text = fs::read_to_string(jsonl_path).ok()?;
+    let mut last_user: Option<String> = None;
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if v.get("isSidechain").and_then(|b| b.as_bool()).unwrap_or(false) {
+            continue; // subagent / sidechain — never a downgrade of the main thread
+        }
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("user") => {
+                if let Some(uuid) = v.get("uuid").and_then(|x| x.as_str()) {
+                    last_user = Some(uuid.to_string());
+                }
+            }
+            Some("assistant") => {
+                let msg = v.get("message");
+                let model = msg.and_then(|m| m.get("model")).and_then(|x| x.as_str());
+                if model == Some("<synthetic>") && synthetic_text(msg).contains(GUARDRAIL_MARKER) {
+                    return last_user.map(|offending_turn| Downgrade { offending_turn });
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Concatenate the text blocks of an assistant `message.content` (string or array form).
+fn synthetic_text(msg: Option<&serde_json::Value>) -> String {
+    let Some(content) = msg.and_then(|m| m.get("content")) else { return String::new() };
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    content
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(|x| x.as_str()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
 /// Is a process alive? `/proc/<pid>` on Linux/WSL (this project's target).
 pub fn is_pid_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
@@ -534,4 +606,89 @@ fn mtime_of(path: &Path) -> DateTime<Utc> {
 /// containing `-`; only used when a project's cwd couldn't be recovered from its JSONLs.
 fn decode_dir_name(dir_name: &str) -> PathBuf {
     PathBuf::from(dir_name.replace('-', "/"))
+}
+
+#[cfg(test)]
+mod downgrade_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn tmp_jsonl(body: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        f
+    }
+
+    // user(offending) -> synthetic guardrail notice -> opus assistant
+    fn guardrail_fixture() -> String {
+        [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"benign question"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"system","isSidechain":false,"subtype":"turn_duration","uuid":"sys1","sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":false,"uuid":"u2","message":{"role":"user","content":"the offending prompt"},"sessionId":"s"}"#.to_string(),
+            format!(r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#),
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#.to_string(),
+        ].join("\n") + "\n"
+    }
+
+    #[test]
+    fn fires_on_guardrail_marker_targeting_offending_user_turn() {
+        let f = tmp_jsonl(&guardrail_fixture());
+        let d = detect_downgrade(f.path()).expect("should fire");
+        assert_eq!(d.offending_turn, "u2"); // last main-chain user turn before the marker
+    }
+
+    #[test]
+    fn session_limit_fallback_does_not_fire() {
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#,
+            r#"{"type":"assistant","isSidechain":false,"uuid":"synth","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 4pm"}]},"sessionId":"s"}"#,
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a2","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#,
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert!(detect_downgrade(f.path()).is_none());
+    }
+
+    #[test]
+    fn opus_subagent_sidechain_does_not_fire() {
+        // A guardrail-marker synthetic on a SIDECHAIN must be ignored: it's a
+        // subagent's notice, not a downgrade of the main thread. Deleting the
+        // isSidechain guard would make this fire — so it genuinely pins it.
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#.to_string(),
+            format!(r#"{{"type":"assistant","isSidechain":true,"uuid":"synthsub","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#),
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert!(detect_downgrade(f.path()).is_none());
+    }
+
+    #[test]
+    fn sidechain_user_turn_is_not_the_offending_turn() {
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"real","message":{"role":"user","content":"the real prompt"},"sessionId":"s"}"#.to_string(),
+            r#"{"type":"user","isSidechain":true,"uuid":"subuser","message":{"role":"user","content":"subagent prompt"},"sessionId":"s"}"#.to_string(),
+            format!(r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#),
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert_eq!(detect_downgrade(f.path()).unwrap().offending_turn, "real");
+    }
+
+    #[test]
+    fn always_opus_session_does_not_fire() {
+        let body = [
+            r#"{"type":"user","isSidechain":false,"uuid":"u1","message":{"role":"user","content":"go"},"sessionId":"s"}"#,
+            r#"{"type":"assistant","isSidechain":false,"uuid":"a1","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]},"sessionId":"s"}"#,
+        ].join("\n") + "\n";
+        let f = tmp_jsonl(&body);
+        assert!(detect_downgrade(f.path()).is_none());
+    }
+
+    #[test]
+    fn marker_with_no_prior_user_turn_does_not_fire() {
+        let body = format!(
+            r#"{{"type":"assistant","isSidechain":false,"uuid":"synth","message":{{"model":"<synthetic>","role":"assistant","content":[{{"type":"text","text":"{GUARDRAIL_MARKER}"}}]}},"sessionId":"s"}}"#
+        ) + "\n";
+        let f = tmp_jsonl(&body);
+        assert!(detect_downgrade(f.path()).is_none());
+    }
 }
