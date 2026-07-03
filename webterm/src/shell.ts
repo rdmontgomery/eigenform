@@ -54,6 +54,7 @@ import {
   type TabDescriptor,
   type TabReconcileAction,
 } from "./shell-helpers.ts";
+import { shouldAutoRecover } from "./downgrade.ts";
 import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
@@ -395,12 +396,25 @@ export function mountShell(appEl: HTMLElement): void {
   const tabs: TabEntry[] = [];
   let activeTabId: string | null = null;
 
+  // Auto-recover state (see downgrade.ts + the forest poll below).
+  // lastInputAt: epoch ms of the user's last keystroke into the ACTIVE tab —
+  //   guards against yanking focus / eating a keypress mid-sentence.
+  // recovered: source session uuids we've already auto-staged a retry for
+  //   (fires at most once per session, even across polls).
+  let lastInputAt = 0;
+  const recovered = new Set<string>();
+
   function activeTab(): TabEntry | null {
     return tabs.find((t) => t.id === activeTabId) ?? null;
   }
 
   function saveTabs() {
-    const descriptors: TabDescriptor[] = tabs.map((t) => t.descriptor);
+    // Strip seedInput: a staged prompt must never survive a reload (it would be
+    // re-injected into a resumed pty on boot). It lives only in memory.
+    const descriptors: TabDescriptor[] = tabs.map(({ descriptor }) => {
+      const { seedInput: _seedInput, ...persisted } = descriptor;
+      return persisted;
+    });
     localStorage.setItem(LS_KEY, JSON.stringify(descriptors));
   }
 
@@ -976,6 +990,13 @@ export function mountShell(appEl: HTMLElement): void {
       reconnectTimer: null,
     };
 
+    // Track the user's last keystroke into the ACTIVE tab so the auto-recover
+    // gate never fires mid-sentence (see the forest poll's shouldAutoRecover).
+    // Compares entry.id (mutated in place by onPtyId) so it survives id renumber.
+    handle.term.onData(() => {
+      if (entry.id === activeTabId) lastInputAt = Date.now();
+    });
+
     connectEntry(entry, query, desc.ptyId);
     tabs.push(entry);
     saveTabs();
@@ -1021,6 +1042,16 @@ export function mountShell(appEl: HTMLElement): void {
         // The active tab just gained a transcript — swap the placeholder out.
         if (entry.id === activeTabId) {
           syncDock();
+        }
+        // Seed a staged prompt into the resumed branch WITHOUT submitting (no
+        // "\n"). One-shot: clear it before sending so a reconnect can't re-inject.
+        if (entry.descriptor.seedInput) {
+          const seed = entry.descriptor.seedInput;
+          entry.descriptor = { ...entry.descriptor, seedInput: undefined };
+          // Small settle so claude's --resume has painted its input line before
+          // we type. 500ms is a tunable heuristic (needs on-device verification).
+          // NO trailing newline — this stages the text, it must never send.
+          setTimeout(() => entry.ptyHandle?.sendInput(seed), 500);
         }
       },
       onExit() {
@@ -1483,11 +1514,64 @@ export function mountShell(appEl: HTMLElement): void {
     railFoot.append(dot, label, total);
   }
 
+  /**
+   * If the ACTIVE session shows a Fable→Opus downgrade (and the user isn't
+   * mid-keystroke), POST for a forked retry, open the branch, and stage the
+   * rephrased prompt into it WITHOUT submitting. Fires at most once per source
+   * session. `forest` is the raw snapshot from the poll (ForestItem carries uuid
+   * + downgrade, so it satisfies DowngradeCandidate structurally).
+   */
+  async function maybeAutoRecover(forest: ForestItem[]) {
+    const hit = shouldAutoRecover({
+      activeUuid: activeTab()?.descriptor.uuid ?? null,
+      rows: forest,
+      handled: recovered,
+      lastInputAt,
+      now: Date.now(),
+      recentInputMs: 1500,
+    });
+    if (!hit) return;
+    // Mark handled BEFORE the await so a slow POST can't double-fire on the next
+    // 3s poll. Left handled on failure too, so it doesn't spin.
+    recovered.add(hit.uuid);
+    try {
+      const res = await fetch(
+        "/api/session/" + encodeURIComponent(hit.uuid) + "/recover-downgrade",
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        console.warn(`recover-downgrade failed (${res.status}) for ${hit.uuid}`);
+        return;
+      }
+      const { branchUuid, stagedText, note } = (await res.json()) as {
+        branchUuid: string;
+        stagedText: string;
+        offendingTurn: string;
+        note: string | null;
+      };
+      // note != null → the rephraser fell back to verbatim; surface it on the
+      // tab label (no toast system to reuse) and warn.
+      const label = note ? `fable-retry (${note})` : "fable-retry";
+      if (note) console.warn(`fable retry rephrase note for ${hit.uuid}: ${note}`);
+      openTabWithQuery("?session=" + encodeURIComponent(branchUuid), {
+        uuid: branchUuid,
+        label,
+        seedInput: stagedText,
+      });
+      void refreshRoster();
+    } catch (err) {
+      console.warn(`recover-downgrade errored for ${hit.uuid}:`, err);
+    }
+  }
+
   async function refreshRoster() {
     try {
       const { ptys, forest } = await fetchRosterData();
       lastRows = buildRoster(ptys, forest, overrides);
       renderRail();
+
+      // Auto-stage a Fable retry for the active downgraded session (once each).
+      void maybeAutoRecover(forest);
 
       // Update tab state badges + cwd + uuid from live pty data.
       for (const t of tabs) {

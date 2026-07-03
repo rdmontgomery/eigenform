@@ -167,6 +167,13 @@ export interface TabDescriptor {
   label: string;
   /** Full cwd path when known — drives the terminal-header breadcrumb. */
   cwd?: string;
+  /**
+   * A staged prompt to type into the resumed pty ONCE, without submitting (no
+   * trailing newline). Set for auto-staged Fable retries. Deliberately transient:
+   * never persisted to localStorage (see saveTabs) and cleared after the first
+   * send so a reconnect can't re-inject it.
+   */
+  seedInput?: string;
 }
 
 /** The outcome of reconciling a saved tab against current live ptys. */
