@@ -40,6 +40,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Config) {
         state_dir: None,
         workspace_root: Some(workspace.path().to_path_buf()),
         dev: false,
+        log_file: None,
     };
     (workspace, projects, cfg)
 }
@@ -95,6 +96,7 @@ async fn candidates_empty_when_nothing_configured() {
         state_dir: None,
         workspace_root: None,
         dev: false,
+        log_file: None,
     };
     let base = start(cfg).await;
     let body = helpers::http_get(&base, "/api/candidates").await;

@@ -34,6 +34,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir, Config
         state_dir: Some(state.path().to_path_buf()),
         workspace_root: None,
         dev: false,
+        log_file: None,
     };
     (proj, sess, state, cfg)
 }
