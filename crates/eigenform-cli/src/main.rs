@@ -94,6 +94,10 @@ enum Cmd {
         /// open the app in a browser once the daemon is up
         #[arg(long)]
         open: bool,
+        /// append each structured observability event as one JSON line to this file
+        /// (best-effort; a write failure never crashes or blocks the daemon)
+        #[arg(long)]
+        log_file: Option<PathBuf>,
     },
     /// stop the running background daemon (and the sessions it hosts)
     Stop {
@@ -258,7 +262,7 @@ fn main() -> Result<()> {
         Cmd::Surgery { action } => surgery(action),
         Cmd::Ptys { port } => ptys_list(port),
         Cmd::Candidates { workspace } => candidates_list(workspace),
-        Cmd::Daemon { port, cmd, web, term, workspace, dev, open } => daemon(port, cmd, web, term, workspace, dev, open),
+        Cmd::Daemon { port, cmd, web, term, workspace, dev, open, log_file } => daemon(port, cmd, web, term, workspace, dev, open, log_file),
         Cmd::Stop { port } => stop(port),
         Cmd::Status { port } => status(port),
         Cmd::Sessions { action } => match action {
@@ -579,6 +583,7 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn daemon(
     port: u16,
     cmd: Option<String>,
@@ -587,6 +592,7 @@ fn daemon(
     workspace: Option<PathBuf>,
     dev: bool,
     open: bool,
+    log_file: Option<PathBuf>,
 ) -> Result<()> {
     let cwd = env::current_dir().context("could not read current dir")?;
 
@@ -601,6 +607,8 @@ fn daemon(
     let web = web.map(|p| absolutize(&cwd, p));
     let term = term.map(|p| absolutize(&cwd, p));
     let workspace = workspace.map(|p| absolutize(&cwd, p));
+    // Absolutize so the event log resolves against the launch cwd, not the daemon's.
+    let log_file = log_file.map(|p| absolutize(&cwd, p));
 
     // eigenform (the root app): explicit --term, else ./webterm if built. When neither
     // exists, term_dir stays None and the daemon serves the build baked into the binary
@@ -648,6 +656,7 @@ fn daemon(
         state_dir: Some(state_dir()?),
         workspace_root,
         dev,
+        log_file,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let url = format!("http://{addr}");
