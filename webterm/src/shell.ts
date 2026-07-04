@@ -50,6 +50,8 @@ import {
   DRAWER_DEFAULT_W,
   splitHeightFromPointer,
   REACH_DEFAULT_H,
+  seedDue,
+  type SeedTiming,
   type AgeGroup,
   type TabDescriptor,
   type TabReconcileAction,
@@ -572,15 +574,18 @@ export function mountShell(appEl: HTMLElement): void {
         drawerCurrent?.handle.close();
         // onFork: open the forked session as a new tab + refresh the roster so
         // the rail shows it immediately (copy-on-fork — source tab stays open).
+        // seedInput stages the edited prompt into the resumed branch, unsent —
+        // the daemon never writes it to the branch file.
         drawerCurrent = {
           uuid,
           handle: mountDrawer(
             transcriptRegion,
             uuid,
-            (newUuid) => {
+            (newUuid, text) => {
               openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
                 uuid: newUuid,
                 label: "fork",
+                seedInput: text,
               });
               void refreshRoster();
             },
@@ -1018,7 +1023,35 @@ export function mountShell(appEl: HTMLElement): void {
    * announced id should become the tab's stable identity).
    */
   function connectEntry(entry: TabEntry, query: string, hadPtyId?: string) {
+    // Staged-seed delivery (fable-retry rephrases, fork-edited prompts): type the
+    // seed into the pty once its output has settled — NOT on the daemon's session
+    // frame. claude ≥2.1.200 resumes keep the session id and announce nothing at
+    // startup (spike 13), so output quiescence is the only startup signal that
+    // survives claude-internals churn. One-shot by construction: seedInput is
+    // cleared at arm time, so a reconnect (which re-runs connectEntry) or reload
+    // can never re-inject it. NO trailing newline — stage, never send.
+    const seed = entry.descriptor.seedInput;
+    let seedTiming: SeedTiming | null = null;
+    let seedTimer: number | null = null;
+    const disarmSeed = () => {
+      if (seedTimer !== null) window.clearInterval(seedTimer);
+      seedTimer = null;
+      seedTiming = null;
+    };
+    if (seed) {
+      entry.descriptor = { ...entry.descriptor, seedInput: undefined };
+      seedTiming = { armedAt: Date.now(), lastOutputAt: null };
+      seedTimer = window.setInterval(() => {
+        if (seedTiming && seedDue(seedTiming, Date.now())) {
+          disarmSeed();
+          entry.ptyHandle?.sendInput(seed);
+        }
+      }, 100);
+    }
     entry.ptyHandle = connectPty(query, entry.handle.term, {
+      onOutput() {
+        if (seedTiming) seedTiming.lastOutputAt = Date.now();
+      },
       onPtyId(id) {
         // First frame after a (re)attach: the socket is live again.
         clearReconnect(entry);
@@ -1043,22 +1076,10 @@ export function mountShell(appEl: HTMLElement): void {
         if (entry.id === activeTabId) {
           syncDock();
         }
-        // Seed a staged prompt into the resumed branch WITHOUT submitting (no
-        // "\n"). One-shot: clear it before sending so a reconnect can't re-inject.
-        // If the pty reconnects within this settle window the seed is dropped by
-        // design — clearing seedInput eagerly is what guarantees it's never
-        // re-injected on reconnect/reload.
-        if (entry.descriptor.seedInput) {
-          const seed = entry.descriptor.seedInput;
-          entry.descriptor = { ...entry.descriptor, seedInput: undefined };
-          // Small settle so claude's --resume has painted its input line before
-          // we type. 500ms is a tunable heuristic (needs on-device verification).
-          // NO trailing newline — this stages the text, it must never send.
-          setTimeout(() => entry.ptyHandle?.sendInput(seed), 500);
-        }
       },
       onExit() {
         // The child genuinely exited — not a transport drop. Don't reconnect.
+        disarmSeed(); // never type a seed into a dead pty
         clearReconnect(entry);
         entry.state = "exited";
         entry.dead = true;
@@ -1066,6 +1087,9 @@ export function mountShell(appEl: HTMLElement): void {
         if (entry.id === activeTabId) renderTermHeader();
       },
       onClose(reason) {
+        // A dropped socket loses the seed by design (clearing at arm time is what
+        // guarantees no re-injection); stop the timer before any reconnect path.
+        disarmSeed();
         if (entry.disposed) return; // tab being closed by the user.
         const attachMiss = reason === "no live pty with that id";
         if (attachMiss && !entry.descriptor.uuid) {
@@ -1253,10 +1277,11 @@ export function mountShell(appEl: HTMLElement): void {
       launchRow(row);
       preview.hide();
     },
-    onFork: (newUuid) => {
+    onFork: (newUuid, text) => {
       openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
         uuid: newUuid,
         label: "fork",
+        seedInput: text,
       });
       void refreshRoster();
     },

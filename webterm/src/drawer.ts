@@ -129,7 +129,10 @@ export interface DrawerActions {
  *
  * @param hostEl   The .term-host element — the drawer overlays it absolutely.
  * @param uuid     Session uuid for /api/session/:uuid/json + /api/watch/:uuid
- * @param onFork   Called with the new session uuid when a fork succeeds.
+ * @param onFork   Called with the new session uuid and the edited prompt text when a
+ *                 fork succeeds. The daemon never writes `text` into the branch file
+ *                 (the fork must end on a completed turn to be resumable) — the caller
+ *                 stages it into the resumed branch's input via seedInput, unsent.
  *                 Kept decoupled from shell internals — drawer doesn't know what
  *                 openTabWithQuery or refreshRoster are.
  * @param actions  Optional quick-action callbacks (see DrawerActions).
@@ -138,7 +141,7 @@ export interface DrawerActions {
 export function mountDrawer(
   hostEl: HTMLElement,
   uuid: string,
-  onFork: (newUuid: string) => void = () => {},
+  onFork: (newUuid: string, text: string) => void = () => {},
   actions: DrawerActions = {},
 ): DrawerHandle {
   // ------------------------------------------------------------------
@@ -783,7 +786,7 @@ export function mountDrawer(
         return;
       }
       editingTurnNumber = null;
-      onFork(newUuid);
+      onFork(newUuid, text);
       render(currentGroups);
     }
 
