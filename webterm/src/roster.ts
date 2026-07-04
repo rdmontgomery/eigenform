@@ -108,6 +108,8 @@ export interface RosterRow {
    *  with no matching forest item (no transcript on disk yet). Rendered as
    *  `~N` to signal it is approximate, not the exact grouped-exchange count. */
   msgCount?: number;
+  /** Present iff a Fable→Opus guardrail downgrade was detected for this session. */
+  downgrade?: { offendingTurn: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,12 +268,14 @@ export function buildRoster(
     let aiTitle: string | null = null;
     let forestCwd: string | null = null;
     let sparkCount: number | null = null;
+    let downgrade: { offendingTurn: string } | null = null;
     if (resolvedUuid !== null) {
       const fi = forestByUuid.get(resolvedUuid);
       if (fi) {
         aiTitle = fi.title;
         forestCwd = fi.cwd;
         sparkCount = fi.spark.length;
+        downgrade = fi.downgrade ?? null;
         mergedForestUuids.add(resolvedUuid);
       }
     }
@@ -312,6 +316,9 @@ export function buildRoster(
     }
     if (sparkCount !== null) {
       row.msgCount = sparkCount;
+    }
+    if (downgrade !== null) {
+      row.downgrade = downgrade;
     }
 
     liveRows.push(row);
@@ -355,6 +362,7 @@ export function buildRoster(
       uuid: fi.uuid,
       recency: fi.recency,
       msgCount: fi.spark.length,
+      downgrade: fi.downgrade ?? null,
     });
   }
 

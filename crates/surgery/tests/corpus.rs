@@ -76,7 +76,7 @@ fn corpus_round_trips_and_guards_cleanly_across_versions() {
         eprintln!("corpus test skipped: no .jsonl sessions under {dir:?}");
         return;
     }
-    sessions.sort_by(|a, b| b.2.cmp(&a.2)); // newest first
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.2)); // newest first
 
     let cap = if std::env::var("EIGENFORM_CORPUS_FULL").is_ok() {
         usize::MAX

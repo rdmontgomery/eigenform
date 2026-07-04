@@ -167,6 +167,13 @@ export interface TabDescriptor {
   label: string;
   /** Full cwd path when known — drives the terminal-header breadcrumb. */
   cwd?: string;
+  /**
+   * A staged prompt to type into the resumed pty ONCE, without submitting (no
+   * trailing newline). Set for auto-staged Fable retries. Deliberately transient:
+   * never persisted to localStorage (see saveTabs) and cleared after the first
+   * send so a reconnect can't re-inject it.
+   */
+  seedInput?: string;
 }
 
 /** The outcome of reconciling a saved tab against current live ptys. */
@@ -267,4 +274,41 @@ export const RECONNECT_CAP_MS = 3000;
 export function reconnectDelay(attempt: number): number {
   const n = Math.max(0, attempt);
   return Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** n);
+}
+
+/**
+ * Output silence that counts as "the TUI has settled", in ms. Staged seeds type
+ * into the pty only after claude's resume paint stops streaming — typing mid-paint
+ * can interleave with escape sequences. One quiet gap is enough: an idle claude
+ * input box emits (almost) nothing.
+ */
+export const SEED_QUIET_MS = 400;
+/**
+ * Deliver the seed anyway this long after connect, in ms. A pty that never goes
+ * quiet (a spinner repainting forever) or never outputs must not hold the staged
+ * prompt hostage — worst case the text lands mid-paint, which is recoverable by
+ * hand; silently dropping it is not.
+ */
+export const SEED_HARD_CAP_MS = 15000;
+
+/** Timing state for one staged-seed delivery. Epoch ms throughout. */
+export interface SeedTiming {
+  /** When the tab connected and the seed was armed. */
+  armedAt: number;
+  /** Last binary pty frame seen; null until the first output arrives. */
+  lastOutputAt: number | null;
+}
+
+/**
+ * Should the staged seed be typed into the pty now? True once output has been
+ * quiet for {@link SEED_QUIET_MS} (claude has painted and settled), or
+ * unconditionally at {@link SEED_HARD_CAP_MS} after arming. Deliberately NOT
+ * keyed on any daemon control frame: claude ≥2.1.200 resumes keep the session
+ * id and announce nothing at startup (spike 13), so pty output is the only
+ * signal that survives claude-internals churn.
+ */
+export function seedDue(t: SeedTiming, now: number): boolean {
+  if (now - t.armedAt >= SEED_HARD_CAP_MS) return true;
+  if (t.lastOutputAt === null) return false; // nothing painted yet
+  return now - t.lastOutputAt >= SEED_QUIET_MS;
 }

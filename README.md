@@ -6,6 +6,14 @@ A control surface over Claude Code (and imported Claude Chat) that performs cont
 
 The binary is `eigenform`; alias it to taste (`alias ef=eigenform`). Dual-licensed [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE).
 
+## The mulligan
+
+Sometimes the bigger model (Fable) decides a prompt is risky and quietly drops your live session to a smaller one, mid-conversation. Usually it's a false read — a benign security question, a dual-use tool, a CTF box — and the session just got dumber without asking you.
+
+eigenform catches the drop as it lands. It forks a fresh Fable branch rewound to the turn *before* the one that tripped the wire, drafts a cleaner way to ask, and stages it in your input — **never sent.** You read it, edit it, decide. One keystroke and you're back on the model you started with.
+
+If the ask was genuinely over the line, the draft says so instead of helping — this is recovery from *wrong* downgrades, not a way around right ones. It's the [fork operation](#what-this-is) pointed at one specific, annoying failure: copy-on-write, so the original thread is never touched, and nothing leaves your machine.
+
 ## Install & run
 
 eigenform is a single local daemon that serves a browser app and hosts your Claude Code pty sessions. Install it once and the app is baked into the binary — no Node, no build step, no flags:
@@ -69,6 +77,8 @@ In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so 
 ## Status
 
 Early but running. The browser app — a full-fidelity terminal centerpiece with a session host, launcher, and transcript drawer — is implemented and self-contained via `just install`. The context-surgery, forest, render, skills, memory, and inspect crates are built and tested; the eigenform graph is still ahead. The original design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md), and spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
+
+The [mulligan](#the-mulligan) (Fable→Opus downgrade recovery) is wired end-to-end and tested. It arms once the guardrail's exact notice string is pinned from a live occurrence — until then it's dormant by design (detection is a signature match, and the marker is a documented placeholder). Design: [`docs/plans/2026-07-02-fable-downgrade-recovery-design.md`](docs/plans/2026-07-02-fable-downgrade-recovery-design.md).
 
 ## What this is
 

@@ -50,10 +50,13 @@ import {
   DRAWER_DEFAULT_W,
   splitHeightFromPointer,
   REACH_DEFAULT_H,
+  seedDue,
+  type SeedTiming,
   type AgeGroup,
   type TabDescriptor,
   type TabReconcileAction,
 } from "./shell-helpers.ts";
+import { shouldAutoRecover } from "./downgrade.ts";
 import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
@@ -436,12 +439,25 @@ export function mountShell(appEl: HTMLElement): void {
   const tabs: TabEntry[] = [];
   let activeTabId: string | null = null;
 
+  // Auto-recover state (see downgrade.ts + the forest poll below).
+  // lastInputAt: epoch ms of the user's last keystroke into the ACTIVE tab —
+  //   guards against yanking focus / eating a keypress mid-sentence.
+  // recovered: source session uuids we've already auto-staged a retry for
+  //   (fires at most once per session, even across polls).
+  let lastInputAt = 0;
+  const recovered = new Set<string>();
+
   function activeTab(): TabEntry | null {
     return tabs.find((t) => t.id === activeTabId) ?? null;
   }
 
   function saveTabs() {
-    const descriptors: TabDescriptor[] = tabs.map((t) => t.descriptor);
+    // Strip seedInput: a staged prompt must never survive a reload (it would be
+    // re-injected into a resumed pty on boot). It lives only in memory.
+    const descriptors: TabDescriptor[] = tabs.map(({ descriptor }) => {
+      const { seedInput: _seedInput, ...persisted } = descriptor;
+      return persisted;
+    });
     localStorage.setItem(LS_KEY, JSON.stringify(descriptors));
   }
 
@@ -608,15 +624,18 @@ export function mountShell(appEl: HTMLElement): void {
         drawerCurrent?.handle.close();
         // onFork: open the forked session as a new tab + refresh the roster so
         // the rail shows it immediately (copy-on-fork — source tab stays open).
+        // seedInput stages the edited prompt into the resumed branch, unsent —
+        // the daemon never writes it to the branch file.
         drawerCurrent = {
           uuid,
           handle: mountDrawer(
             transcriptRegion,
             uuid,
-            (newUuid) => {
+            (newUuid, text) => {
               openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
                 uuid: newUuid,
                 label: "fork",
+                seedInput: text,
               });
               void refreshRoster();
             },
@@ -1040,6 +1059,13 @@ export function mountShell(appEl: HTMLElement): void {
       reconnectTimer: null,
     };
 
+    // Track the user's last keystroke into the ACTIVE tab so the auto-recover
+    // gate never fires mid-sentence (see the forest poll's shouldAutoRecover).
+    // Compares entry.id (mutated in place by onPtyId) so it survives id renumber.
+    handle.term.onData(() => {
+      if (entry.id === activeTabId) lastInputAt = Date.now();
+    });
+
     connectEntry(entry, query, desc.ptyId);
     tabs.push(entry);
     saveTabs();
@@ -1061,7 +1087,35 @@ export function mountShell(appEl: HTMLElement): void {
    * announced id should become the tab's stable identity).
    */
   function connectEntry(entry: TabEntry, query: string, hadPtyId?: string) {
+    // Staged-seed delivery (fable-retry rephrases, fork-edited prompts): type the
+    // seed into the pty once its output has settled — NOT on the daemon's session
+    // frame. claude ≥2.1.200 resumes keep the session id and announce nothing at
+    // startup (spike 13), so output quiescence is the only startup signal that
+    // survives claude-internals churn. One-shot by construction: seedInput is
+    // cleared at arm time, so a reconnect (which re-runs connectEntry) or reload
+    // can never re-inject it. NO trailing newline — stage, never send.
+    const seed = entry.descriptor.seedInput;
+    let seedTiming: SeedTiming | null = null;
+    let seedTimer: number | null = null;
+    const disarmSeed = () => {
+      if (seedTimer !== null) window.clearInterval(seedTimer);
+      seedTimer = null;
+      seedTiming = null;
+    };
+    if (seed) {
+      entry.descriptor = { ...entry.descriptor, seedInput: undefined };
+      seedTiming = { armedAt: Date.now(), lastOutputAt: null };
+      seedTimer = window.setInterval(() => {
+        if (seedTiming && seedDue(seedTiming, Date.now())) {
+          disarmSeed();
+          entry.ptyHandle?.sendInput(seed);
+        }
+      }, 100);
+    }
     entry.ptyHandle = connectPty(query, entry.handle.term, {
+      onOutput() {
+        if (seedTiming) seedTiming.lastOutputAt = Date.now();
+      },
       onPtyId(id) {
         // First frame after a (re)attach: the socket is live again.
         clearReconnect(entry);
@@ -1089,6 +1143,7 @@ export function mountShell(appEl: HTMLElement): void {
       },
       onExit() {
         // The child genuinely exited — not a transport drop. Don't reconnect.
+        disarmSeed(); // never type a seed into a dead pty
         clearReconnect(entry);
         entry.state = "exited";
         entry.dead = true;
@@ -1096,6 +1151,9 @@ export function mountShell(appEl: HTMLElement): void {
         if (entry.id === activeTabId) renderTermHeader();
       },
       onClose(reason) {
+        // A dropped socket loses the seed by design (clearing at arm time is what
+        // guarantees no re-injection); stop the timer before any reconnect path.
+        disarmSeed();
         if (entry.disposed) return; // tab being closed by the user.
         const attachMiss = reason === "no live pty with that id";
         if (attachMiss && !entry.descriptor.uuid) {
@@ -1283,10 +1341,11 @@ export function mountShell(appEl: HTMLElement): void {
       launchRow(row);
       preview.hide();
     },
-    onFork: (newUuid) => {
+    onFork: (newUuid, text) => {
       openTabWithQuery(`?session=${encodeURIComponent(newUuid)}`, {
         uuid: newUuid,
         label: "fork",
+        seedInput: text,
       });
       void refreshRoster();
     },
@@ -1483,6 +1542,13 @@ export function mountShell(appEl: HTMLElement): void {
       live.title = dotTitle(row.activity, row.liveness);
       meta.append(live);
     }
+    if (row.downgrade) {
+      const downgrade = el("span", "rail-downgrade");
+      downgrade.textContent = "fable→opus";
+      downgrade.title =
+        "Guardrail downgraded this session to Opus — a Fable retry can be staged";
+      meta.append(downgrade);
+    }
     body.append(labelEl, meta);
 
     const recencyEl = el("span", "rail-row-recency");
@@ -1548,11 +1614,69 @@ export function mountShell(appEl: HTMLElement): void {
     railFoot.append(dot, label, total);
   }
 
+  /**
+   * If the ACTIVE session shows a Fable→Opus downgrade (and the user isn't
+   * mid-keystroke), POST for a forked retry, open the branch, and stage the
+   * rephrased prompt into it WITHOUT submitting. Fires at most once per source
+   * session. `forest` is the raw snapshot from the poll (ForestItem carries uuid
+   * + downgrade, so it satisfies DowngradeCandidate structurally).
+   */
+  async function maybeAutoRecover(forest: ForestItem[]) {
+    const hit = shouldAutoRecover({
+      activeUuid: activeTab()?.descriptor.uuid ?? null,
+      rows: forest,
+      handled: recovered,
+      lastInputAt,
+      now: Date.now(),
+      recentInputMs: 1500,
+    });
+    if (!hit) return;
+    // Mark handled BEFORE the await so a slow POST can't double-fire on the next
+    // 3s poll. Left handled on failure too, so it doesn't spin.
+    recovered.add(hit.uuid);
+    try {
+      const res = await fetch(
+        "/api/session/" + encodeURIComponent(hit.uuid) + "/recover-downgrade",
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        // Deliberate non-ok (4xx/5xx): keep it handled so we don't spin.
+        console.warn(`recover-downgrade failed (${res.status}) for ${hit.uuid}`);
+        return;
+      }
+      const { branchUuid, stagedText, note } = (await res.json()) as {
+        branchUuid: string;
+        stagedText: string;
+        offendingTurn: string;
+        note: string | null;
+      };
+      // note != null → the rephraser fell back to verbatim. Surface it WITHOUT
+      // baking it into the persisted label (label is saved by saveTabs, so a
+      // one-shot note must not become a permanent tab name). No toast to reuse,
+      // and TabDescriptor has no per-tab title channel — so just warn.
+      if (note) console.warn(`fable retry rephrase note for ${hit.uuid}: ${note}`);
+      openTabWithQuery("?session=" + encodeURIComponent(branchUuid), {
+        uuid: branchUuid,
+        label: "fable-retry",
+        seedInput: stagedText,
+      });
+      void refreshRoster();
+    } catch (err) {
+      // Network blip → allow one retry next poll; a deliberate non-ok stays
+      // handled to avoid spinning.
+      recovered.delete(hit.uuid);
+      console.warn(`recover-downgrade errored for ${hit.uuid}:`, err);
+    }
+  }
+
   async function refreshRoster() {
     try {
       const { ptys, forest } = await fetchRosterData();
       lastRows = buildRoster(ptys, forest, overrides);
       renderRail();
+
+      // Auto-stage a Fable retry for the active downgraded session (once each).
+      void maybeAutoRecover(forest);
 
       // Update tab state badges + cwd + uuid from live pty data.
       for (const t of tabs) {

@@ -26,7 +26,7 @@ fn convo() -> String {
 fn fixture() -> String {
     [
         format!(r#"{{"type":"mode","mode":"normal","sessionId":"{SID}"}}"#),
-        format!(r#"{{"type":"file-history-snapshot","messageId":"m1","snapshot":{{}}}}"#),
+        r#"{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}"#.to_string(),
         format!(r#"{{"type":"user","uuid":"00000000-0000-4000-8000-0000000000u1","parentUuid":null,"isSidechain":false,"sessionId":"{SID}","message":{{"role":"user","content":"hi"}}}}"#),
     ]
     .join("\n")

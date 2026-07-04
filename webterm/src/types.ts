@@ -46,6 +46,8 @@ export interface ForestItem {
   live: boolean;
   state: string;
   spark: number[];
+  /** Present iff a Fable→Opus guardrail downgrade was detected. */
+  downgrade?: { offendingTurn: string } | null;
 }
 
 /**

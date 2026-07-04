@@ -91,6 +91,9 @@ export interface PtyEvents {
   onPtyId(id: string): void;
   /** Fires when the daemon sends {"type":"session","uuid":"<uuid>"} — session born. */
   onSessionUuid(uuid: string): void;
+  /** Fires on every binary (pty output) frame. Optional: used by the staged-seed
+   *  delivery to detect output quiescence (claude's paint settling). */
+  onOutput?(): void;
   /** Fires when the daemon sends {"type":"exit"} — the child process exited. */
   onExit(): void;
   /**
@@ -173,6 +176,7 @@ export function connectPty(
   sock.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
       term.write(new Uint8Array(event.data));
+      ev.onOutput?.();
       return;
     }
     // String frame — JSON control message.

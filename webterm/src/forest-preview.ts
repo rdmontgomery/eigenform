@@ -19,8 +19,9 @@ import type { RosterRow } from "./roster.ts";
 export interface ForestPreviewOptions {
   /** Commit: launch/resume the previewed session. */
   onLaunch: (row: RosterRow) => void;
-  /** Open a fork of the previewed session (newUuid) as a tab. Optional. */
-  onFork?: (newUuid: string) => void;
+  /** Open a fork of the previewed session (newUuid) as a tab, staging the edited
+   *  prompt text into its input (never sent). Optional. */
+  onFork?: (newUuid: string, text: string) => void;
 }
 
 export interface ForestPreviewHandle {
@@ -120,7 +121,7 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
       drawer = mountDrawer(
         bodyHost,
         uuid,
-        (newUuid) => opts.onFork?.(newUuid),
+        (newUuid, text) => opts.onFork?.(newUuid, text),
         { live: false },
       );
       // Model needs the JSON payload; fetch async and fill in if still current.

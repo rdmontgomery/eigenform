@@ -40,6 +40,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Config) {
         state_dir: None,
         workspace_root: Some(workspace.path().to_path_buf()),
         dev: false,
+        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         log_file: None,
     };
     (workspace, projects, cfg)
@@ -96,6 +97,7 @@ async fn candidates_empty_when_nothing_configured() {
         state_dir: None,
         workspace_root: None,
         dev: false,
+        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         log_file: None,
     };
     let base = start(cfg).await;

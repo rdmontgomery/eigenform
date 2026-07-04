@@ -22,6 +22,9 @@ import {
   splitHeightFromPointer,
   REACH_MIN_H,
   TRANSCRIPT_MIN_H,
+  seedDue,
+  SEED_QUIET_MS,
+  SEED_HARD_CAP_MS,
 } from "./shell-helpers.ts";
 import type { PtyInfo } from "./types.ts";
 
@@ -362,4 +365,39 @@ test("reconcileTabs: tab with uuid only and matching pty exists → attach using
   const actions = reconcileTabs(saved, ptys);
   assert.equal(actions[0]!.action, "attach");
   assert.equal(actions[0]!.descriptor.ptyId, "99");
+});
+
+// ---------------------------------------------------------------------------
+// seedDue — staged-input delivery timing (output quiescence, not daemon frames)
+// ---------------------------------------------------------------------------
+
+test("seedDue: not due before any pty output has arrived", () => {
+  const t = { armedAt: 1000, lastOutputAt: null };
+  assert.equal(seedDue(t, 1000 + SEED_QUIET_MS * 3), false);
+});
+
+test("seedDue: not due while output is still streaming", () => {
+  // Last frame 100ms ago — claude is mid-paint; typing now could interleave.
+  const now = 5000;
+  const t = { armedAt: 1000, lastOutputAt: now - 100 };
+  assert.equal(seedDue(t, now), false);
+});
+
+test("seedDue: due once output has been quiet for SEED_QUIET_MS", () => {
+  const now = 5000;
+  const t = { armedAt: 1000, lastOutputAt: now - SEED_QUIET_MS };
+  assert.equal(seedDue(t, now), true);
+});
+
+test("seedDue: hard cap delivers even with no output at all", () => {
+  // A silent or pathologically busy pty must never hold the seed hostage.
+  const t = { armedAt: 1000, lastOutputAt: null };
+  assert.equal(seedDue(t, 1000 + SEED_HARD_CAP_MS), true);
+});
+
+test("seedDue: hard cap delivers even while output never quiesces", () => {
+  const armedAt = 1000;
+  const now = armedAt + SEED_HARD_CAP_MS;
+  const t = { armedAt, lastOutputAt: now - 50 };
+  assert.equal(seedDue(t, now), true);
 });
