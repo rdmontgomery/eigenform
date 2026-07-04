@@ -19,6 +19,7 @@ clap           = { workspace = true }
 eigenform-skills   = { path = "../skills" }
 eigenform-projects = { path = "../projects" }
 eigenform-memory   = { path = "../memory" }
+eigenform-inspect  = { path = "../inspect" }
 eigenform-surgery  = { path = "../surgery" }
 eigenform-render   = { path = "../render" }
 eigenform-forest   = { path = "../forest" }

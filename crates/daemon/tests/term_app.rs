@@ -30,6 +30,7 @@ fn cfg(web: std::path::PathBuf, term: std::path::PathBuf) -> Config {
         workspace_root: None,
         dev: false,
         rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
+        log_file: None,
     }
 }
 

@@ -76,7 +76,7 @@ In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so 
 
 ## Status
 
-Early but running. The browser app — a full-fidelity terminal centerpiece with a session host, launcher, and transcript drawer — is implemented and self-contained via `just install`. The context-surgery, forest, render, skills, and memory crates are built and tested; the eigenform graph is still ahead. The original design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md), and spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
+Early but running. The browser app — a full-fidelity terminal centerpiece with a session host, launcher, and transcript drawer — is implemented and self-contained via `just install`. The context-surgery, forest, render, skills, memory, and inspect crates are built and tested; the eigenform graph is still ahead. The original design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md), and spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
 
 The [mulligan](#the-mulligan) (Fable→Opus downgrade recovery) is wired end-to-end and tested. It arms once the guardrail's exact notice string is pinned from a live occurrence — until then it's dormant by design (detection is a signature match, and the marker is a documented placeholder). Design: [`docs/plans/2026-07-02-fable-downgrade-recovery-design.md`](docs/plans/2026-07-02-fable-downgrade-recovery-design.md).
 

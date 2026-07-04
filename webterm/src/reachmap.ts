@@ -24,6 +24,17 @@ import { buildReach } from "./reach.ts";
 import type { ReachModel, ReachNode, ReachKind } from "./reach.ts";
 import type { Exchange } from "./turns.ts";
 import { icon } from "./icons.ts";
+import { subscribeWatch } from "./watch.ts";
+import { renderBands } from "./reachviews.ts";
+import type { ReachViewCtx } from "./reachviews.ts";
+
+/** The selectable reach renderings, cycled from the header. */
+type ReachView = "web" | "bands";
+const MODES: ReachView[] = ["web", "bands"];
+const MODE_LABEL: Record<ReachView, string> = {
+  web: "spiderweb",
+  bands: "bands",
+};
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -31,10 +42,16 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // Geometry + palette
 // ---------------------------------------------------------------------------
 
-const VIEW = 1000;
-const CX = VIEW / 2;
-const CY = VIEW / 2;
-const RAD = 430;
+// The viewBox height is fixed; its width tracks the scene's aspect ratio so the map
+// *fills* a landscape frame instead of being scaled to the height and letterboxed with
+// big side gutters (the old square 1000×1000 viewBox looked small and over-centered).
+// Nodes lay out on an ellipse (rx, ry) that spans the viewBox minus a label margin.
+const VH = 1000; // viewBox height — the vertical reference; node sizes stay constant in these units
+const PAD = 78; // breathing room for discs + labels inside the viewBox, in user units
+const MAX_ASPECT = 1.85; // cap so a very wide frame doesn't stretch the web into a thin ellipse
+let vbW = VH; // current viewBox width (updated by the ResizeObserver below)
+let CX = vbW / 2;
+const CY = VH / 2;
 
 /** Distance-from-home ring per kind (1 = inside the workspace, 4 = off-box). */
 const RING: Record<ReachKind, number> = {
@@ -45,10 +62,22 @@ const RING: Record<ReachKind, number> = {
   external: 3,
   mcp: 3,
   secret: 3,
+  loopback: 3,
   web: 4,
   comms: 4,
 };
-const RING_FRAC: Record<number, number> = { 1: 0.3, 2: 0.52, 3: 0.74, 4: 0.93 };
+// Fraction of the ellipse radius per ring. The outer ring reaches the full radius (the
+// PAD margin already keeps labels off the edge), so the web spreads wide inside the frame.
+const RING_FRAC: Record<number, number> = { 1: 0.34, 2: 0.58, 3: 0.8, 4: 1 };
+
+// Trust zone per ring — drawn as concentric guides so the web reads like the
+// bands view: inner = home, outer = off the box. Ring 4 is the egress signal.
+const RING_LABEL: Record<number, string> = {
+  1: "workspace",
+  2: "local",
+  3: "this machine",
+  4: "off-box",
+};
 
 /** Kind → CSS color token. Secret/comms are alarm red (the exfil surfaces). */
 const COLOR: Record<ReachKind, string> = {
@@ -56,6 +85,7 @@ const COLOR: Record<ReachKind, string> = {
   repo: "var(--ink-olive)",
   external: "var(--ink-slate)",
   web: "var(--ink-ochre)",
+  loopback: "var(--tx-2)",
   mcp: "var(--ink-plum)",
   agent: "var(--ink-clay)",
   shell: "var(--tx-3)",
@@ -68,6 +98,7 @@ const KIND_LABEL: Record<ReachKind, string> = {
   repo: "sibling repo",
   external: "elsewhere on disk",
   web: "web host",
+  loopback: "localhost",
   mcp: "MCP server",
   agent: "subagent / skill",
   shell: "shell",
@@ -150,17 +181,27 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   // ── Structure: backdrop + panel ──────────────────────────────────────────
   const root = el("div", "reachmap");
 
+  // The header doubles as a collapse toggle: click "Reach" to fold the map away
+  // so the transcript below fills the whole dock (a caret shows the state).
   const head = el("div", "reachmap-head");
+  head.setAttribute("role", "button");
+  head.setAttribute("aria-expanded", "true");
+  head.tabIndex = 0;
+  const caret = el("span", "reachmap-caret");
+  caret.append(icon("chevron", 13));
   const titleWrap = el("div", "reachmap-titlewrap");
   const title = el("span", "reachmap-title");
   title.textContent = "Reach";
   const summary = el("span", "reachmap-summary");
   titleWrap.append(title, summary);
 
+  // View cycler: clicking flips between the spiderweb and the bands view.
+  const modeBtn = el("button", "reachmap-mode");
+
   const closeBtn = el("button", "reachmap-close");
   closeBtn.title = "Close (Esc)";
   closeBtn.append(icon("x", 15));
-  head.append(titleWrap);
+  head.append(caret, titleWrap, modeBtn);
   // The close button / Esc / backdrop only make sense for the standalone overlay
   // (an `onClose` is wired). Docked inside the drawer there's nothing to close to,
   // so we omit them — and crucially don't let a docked map swallow global Esc.
@@ -168,18 +209,21 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
 
   // The scene: SVG graph + a flagged-exfil banner.
   const scene = el("div", "reachmap-scene");
-  const canvas = svg("svg", { viewBox: `0 0 ${VIEW} ${VIEW}`, class: "reachmap-svg" });
+  const canvas = svg("svg", { viewBox: `0 0 ${vbW} ${VH}`, class: "reachmap-svg" });
   canvas.setAttribute("preserveAspectRatio", "xMidYMid meet");
+  const gRings = svg("g");
   const gEdges = svg("g");
   const gExfil = svg("g");
   const gNodes = svg("g");
   const gHub = svg("g");
-  canvas.append(gEdges, gExfil, gNodes, gHub);
+  canvas.append(gRings, gEdges, gExfil, gNodes, gHub);
   const banner = el("div", "reachmap-banner");
   const tooltip = el("div", "reachmap-tooltip");
   const empty = el("div", "reachmap-empty");
   empty.textContent = "no reach yet — the agent hasn't used any tools";
-  scene.append(canvas, banner, tooltip, empty);
+  // HTML layer for the non-web views (crisp, non-scaling text); hidden in web mode.
+  const altLayer = el("div", "reachmap-alt");
+  scene.append(canvas, altLayer, banner, tooltip, empty);
 
   // Controls: legend + scrubber + play.
   const controls = el("div", "reachmap-controls");
@@ -196,8 +240,28 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   root.append(head, scene, controls);
   hostEl.append(root);
 
+  // ── Collapse toggle ───────────────────────────────────────────────────────
+  // Clicking the header folds the map to just this bar; CSS (:has) shrinks the
+  // dock's reach-region and hides the splitter so the transcript fills the rest.
+  let collapsed = false;
+  function setCollapsed(c: boolean) {
+    collapsed = c;
+    root.classList.toggle("reachmap--collapsed", c);
+    head.setAttribute("aria-expanded", String(!c));
+    head.title = c ? "Show reach map" : "Hide reach map";
+    if (c) stop(); // no point animating a hidden map
+  }
+  head.addEventListener("click", () => setCollapsed(!collapsed));
+  head.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setCollapsed(!collapsed);
+    }
+  });
+
   // ── State ────────────────────────────────────────────────────────────────
   let model: ReachModel | null = null;
+  let mode: ReachView = "web";
   let positions = new Map<string, Pos>();
   let cursor = 0; // number of events revealed
   let playing = false;
@@ -213,14 +277,16 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       list.push(n);
       byRing.set(d, list);
     }
+    const rx = vbW / 2 - PAD;
+    const ry = VH / 2 - PAD;
     for (const [d, list] of byRing) {
       list.sort((a, b) => a.firstSeq - b.firstSeq);
-      const r = (RING_FRAC[d] ?? 0.93) * RAD;
+      const fr = RING_FRAC[d] ?? 1;
       const phase = d * 0.7; // per-ring twist so spokes don't stack
       const n = list.length;
       list.forEach((node, i) => {
         const a = phase + (i / Math.max(1, n)) * Math.PI * 2;
-        positions.set(node.id, { x: CX + r * Math.cos(a), y: CY + r * Math.sin(a) });
+        positions.set(node.id, { x: CX + fr * rx * Math.cos(a), y: CY + fr * ry * Math.sin(a) });
       });
     }
   }
@@ -240,6 +306,36 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       lab.textContent = KIND_LABEL[k];
       item.append(dot, lab);
       legend.append(item);
+    }
+  }
+
+  // ── Trust-zone rings ──────────────────────────────────────────────────────
+  // Concentric guides at each ring's radius, labelled by zone, so the web reads
+  // like the bands view. The outer (off-box) ring is dashed + alarm-tinted.
+  function drawRings() {
+    gRings.innerHTML = "";
+    const rx = vbW / 2 - PAD;
+    const ry = VH / 2 - PAD;
+    for (let ring = 1; ring <= 4; ring++) {
+      const fr = RING_FRAC[ring] ?? 1;
+      const off = ring === 4;
+      gRings.append(
+        svg("ellipse", {
+          cx: CX,
+          cy: CY,
+          rx: fr * rx,
+          ry: fr * ry,
+          class: "reachmap-ring" + (off ? " reachmap-ring--off" : ""),
+        }),
+      );
+      const label = svg("text", {
+        x: CX,
+        y: CY - fr * ry + 26,
+        class: "reachmap-ring-label" + (off ? " reachmap-ring-label--off" : ""),
+        "text-anchor": "middle",
+      });
+      label.textContent = RING_LABEL[ring] ?? "";
+      gRings.append(label);
     }
   }
 
@@ -272,6 +368,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   function draw() {
     if (!model) return;
     const m = model;
+    drawRings();
     gEdges.innerHTML = "";
     gNodes.innerHTML = "";
     gExfil.innerHTML = "";
@@ -290,7 +387,10 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       const isActive = node.id === activeNode;
 
       // edge: dashed when the node is an egress surface (leaving the box).
-      const egress = node.kind === "web" || node.kind === "comms" || node.actions.includes("network") || node.actions.includes("write");
+      // Loopback (localhost) is on-machine, not an egress surface.
+      const egress =
+        node.kind !== "loopback" &&
+        (node.kind === "web" || node.kind === "comms" || node.actions.includes("network") || node.actions.includes("write"));
       const edge = svg("line", {
         x1: CX,
         y1: CY,
@@ -334,12 +434,21 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     }
 
     drawExfil(m, live);
+    updateBanner(m, live);
     updateReadout(m, revealed.length);
   }
 
-  // ── Exfil arc + banner ────────────────────────────────────────────────────
-  function drawExfil(m: ReachModel, live: Map<string, number>) {
+  // The exfil warning banner — shown in every view once both ends are revealed.
+  function updateBanner(m: ReachModel, live: Map<string, number>) {
     banner.classList.remove("reachmap-banner--on");
+    if (!m.exfil) return;
+    if (!live.get(m.exfil.from) || !live.get(m.exfil.to)) return;
+    banner.textContent = `⚠ possible exfil — secret read (turn ${m.exfil.fromTurn}) then egress (turn ${m.exfil.toTurn})`;
+    banner.classList.add("reachmap-banner--on");
+  }
+
+  // ── Exfil arc (web view only) ─────────────────────────────────────────────
+  function drawExfil(m: ReachModel, live: Map<string, number>) {
     if (!m.exfil) return;
     // Only once both ends are revealed.
     if (!live.get(m.exfil.from) || !live.get(m.exfil.to)) return;
@@ -357,9 +466,41 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       });
       gExfil.append(path);
     }
-    banner.textContent = `⚠ possible exfil — secret read (turn ${m.exfil.fromTurn}) then egress (turn ${m.exfil.toTurn})`;
-    banner.classList.add("reachmap-banner--on");
   }
+
+  // ── View dispatch ─────────────────────────────────────────────────────────
+  // Show the web SVG or the HTML alt-layer per `mode`, and render into it. The
+  // alt views share the scrubber: `live` is the per-node count up to the cursor.
+  function render() {
+    if (!model) return;
+    const isWeb = mode === "web";
+    canvas.style.display = isWeb ? "" : "none";
+    altLayer.style.display = isWeb ? "none" : "";
+    if (isWeb) {
+      draw();
+      return;
+    }
+    const revealed = model.events.slice(0, cursor);
+    const live = new Map<string, number>();
+    for (const e of revealed) live.set(e.node, (live.get(e.node) ?? 0) + 1);
+    altLayer.innerHTML = "";
+    const ctx: ReachViewCtx = { color: COLOR, ring: RING, trunc };
+    renderBands(altLayer, model, live, ctx);
+    updateBanner(model, live);
+    updateReadout(model, revealed.length);
+  }
+
+  function renderModeBtn() {
+    modeBtn.textContent = MODE_LABEL[mode];
+    modeBtn.title = "Switch reach view (spiderweb ⇄ bands)";
+  }
+  modeBtn.addEventListener("click", (e) => {
+    e.stopPropagation(); // don't toggle the header's collapse
+    mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length] ?? "web";
+    renderModeBtn();
+    render();
+  });
+  renderModeBtn();
 
   function updateReadout(m: ReachModel, shown: number) {
     const activeTurn = cursor > 0 ? (m.events[cursor - 1]?.turn ?? 0) : 0;
@@ -372,7 +513,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     if (!model) return;
     cursor = Math.max(0, Math.min(model.events.length, c));
     scrub.value = String(cursor);
-    draw();
+    render();
     if (cursor >= model.events.length) stop();
   }
 
@@ -390,7 +531,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     if (cursor >= model.events.length) cursor = 0; // replay from the top
     playing = true;
     renderPlayBtn();
-    timer = window.setInterval(tick, 650);
+    timer = window.setInterval(tick, 300);
   }
   function stop() {
     playing = false;
@@ -427,7 +568,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     // Default: show the whole map; scrubbing rewinds time.
     cursor = m.events.length;
     scrub.value = String(cursor);
-    draw();
+    render();
   }
 
   async function load() {
@@ -442,31 +583,27 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   void load();
 
   // ── SSE live updates ──────────────────────────────────────────────────────
-  // EventSource only auto-reconnects after an *established* (2xx) stream drops.
-  // A non-2xx response — notably the 404 the daemon returns for a session whose
-  // JSONL hasn't been flushed to disk yet (brand-new session) — is a hard
-  // failure: the browser fires onerror, sets readyState=CLOSED, and never
-  // retries. So we reconnect manually until the file lands.
-  let es: EventSource | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  function connect() {
-    if (closed) return;
-    es = new EventSource(`/api/watch/${encodeURIComponent(uuid)}`);
-    es.onmessage = () => void load();
-    es.addEventListener("change", () => void load());
-    es.onerror = () => {
-      if (closed) return;
-      es?.close();
-      es = null;
-      if (reconnectTimer === null) {
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          connect();
-        }, 1500);
-      }
-    };
+  // Follow the session through the shared watch hub: one EventSource per uuid
+  // across the reach map + drawer, reconnecting on the pre-flush 404 (watch.ts).
+  const unsubscribe = subscribeWatch(uuid, () => void load());
+
+  // ── Responsive viewBox ────────────────────────────────────────────────────
+  // Track the scene's aspect ratio so the web fills the frame's width instead of
+  // being letterboxed inside a square. Re-layout + redraw on every resize.
+  function resize() {
+    const w = scene.clientWidth || VH;
+    const h = scene.clientHeight || VH;
+    const aspect = Math.min(MAX_ASPECT, Math.max(1, w / h));
+    vbW = Math.round(VH * aspect);
+    CX = vbW / 2;
+    canvas.setAttribute("viewBox", `0 0 ${vbW} ${VH}`);
+    if (model) {
+      layout(model);
+      render(); // re-lays out the dial too (it reads the scene's pixel size)
+    }
   }
-  connect();
+  const ro = new ResizeObserver(resize);
+  ro.observe(scene);
 
   // ── Dismiss affordances (standalone overlay only) ─────────────────────────
   function dismiss() {
@@ -479,7 +616,10 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
     }
   }
   if (opts.onClose) {
-    closeBtn.addEventListener("click", dismiss);
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // don't also toggle the header's collapse
+      dismiss();
+    });
     root.addEventListener("mousedown", (e) => {
       if (e.target === root) dismiss(); // backdrop click
     });
@@ -494,9 +634,8 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
       if (closed) return;
       closed = true;
       stop();
-      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-      es?.close();
-      es = null;
+      unsubscribe();
+      ro.disconnect();
       document.removeEventListener("keydown", onKey);
       root.remove();
     },

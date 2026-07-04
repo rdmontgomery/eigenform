@@ -41,6 +41,7 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Config) {
         workspace_root: Some(workspace.path().to_path_buf()),
         dev: false,
         rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
+        log_file: None,
     };
     (workspace, projects, cfg)
 }
@@ -97,6 +98,7 @@ async fn candidates_empty_when_nothing_configured() {
         workspace_root: None,
         dev: false,
         rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
+        log_file: None,
     };
     let base = start(cfg).await;
     let body = helpers::http_get(&base, "/api/candidates").await;

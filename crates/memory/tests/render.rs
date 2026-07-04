@@ -8,6 +8,8 @@ fn entry(name: &str, kind: MemoryKind, path: &str, desc: &str) -> MemoryEntry {
         description: desc.into(),
         kind,
         source_path: PathBuf::from(path),
+        size: 0,
+        tokens: 0,
     }
 }
 

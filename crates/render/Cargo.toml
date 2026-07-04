@@ -9,3 +9,4 @@ serde_json    = { workspace = true }
 chrono        = { workspace = true }
 eigenform-surgery = { path = "../surgery" }
 eigenform-forest  = { path = "../forest" }
+eigenform-inspect = { path = "../inspect" }

@@ -34,8 +34,8 @@ import type { FontSettings } from "./pty.ts";
 import { SCHEMES, DEFAULT_SCHEME_ID, schemeById } from "./themes/schemes.ts";
 import type { Scheme } from "./themes/schemes.ts";
 import { deriveChrome } from "./themes/derive.ts";
-import { buildRoster } from "./roster.ts";
-import type { RosterRow } from "./roster.ts";
+import { buildRoster, ptyActivity } from "./roster.ts";
+import type { RosterRow, Liveness, Activity } from "./roster.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
 import {
   relativeRecency,
@@ -62,9 +62,12 @@ import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
 import { mountReachMap } from "./reachmap.ts";
 import type { ReachHandle } from "./reachmap.ts";
+import { mountEvents } from "./events.ts";
+import type { EventsHandle } from "./events.ts";
 import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { icon } from "./icons.ts";
+import { openInspect } from "./inspect.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -134,11 +137,45 @@ function loadFont(): FontSettings {
   }
 }
 
-const KNOWN_STATES = new Set(["working", "waiting", "idle", "exited"]);
+const KNOWN_ACTIVITY = new Set(["working", "waiting", "idle"]);
 
-/** CSS dot modifier for a state string; unknown forest states render idle. */
-function dotClass(state: string): string {
-  return `dot dot--${KNOWN_STATES.has(state) ? state : "idle"}`;
+/**
+ * CSS classes for a status dot across the two orthogonal channels:
+ *   activity → color + glow (`dot--working|waiting|idle`)
+ *   liveness → fill        (`dot--eigenform|external|dead`)
+ * Only live provenances (eigenform/external) animate; dead never glows.
+ */
+function dotClasses(activity: string, liveness: Liveness): string {
+  const act = KNOWN_ACTIVITY.has(activity) ? activity : "idle";
+  const prov = liveness === "eigenform" ? "eigenform" : liveness === "external" ? "external" : "dead";
+  return `dot dot--${act} dot--${prov}`;
+}
+
+/** Short turn-state tag for a live row's meta line; null for dead rows.
+ *  External (live outside eigenform) rows are prefixed so provenance reads at a
+ *  glance without hovering, complementing the hollow-ring dot. */
+function livenessTag(activity: Activity, liveness: Liveness): string | null {
+  if (liveness === "none") return null;
+  const turn = activity === "working" ? "running" : activity === "waiting" ? "your turn" : "live";
+  return liveness === "external" ? `· ext · ${turn}` : `· ${turn}`;
+}
+
+/** Full hover explanation of a dot's combined state. */
+function dotTitle(activity: Activity, liveness: Liveness): string {
+  const where =
+    liveness === "eigenform"
+      ? "eigenform session"
+      : liveness === "external"
+        ? "running outside eigenform — can't attach"
+        : "no live process";
+  if (liveness === "none") return where;
+  const turn =
+    activity === "working"
+      ? "assistant running"
+      : activity === "waiting"
+        ? "waiting for your input"
+        : "idle at prompt";
+  return `${turn} — ${where}`;
 }
 
 /** The session's ink hue CSS value, from its most durable key. */
@@ -308,7 +345,11 @@ export function mountShell(appEl: HTMLElement): void {
   const dockVsplit = el("div", "dock-vsplit");
   dockVsplit.title = "drag to resize the reach map / transcript split";
   const transcriptRegion = el("div", "transcript-region");
-  drawerDock.append(reachRegion, dockVsplit, transcriptRegion);
+  // Events pane: a collapsible accordion at the dock's foot. Unlike the reach map
+  // + transcript (which are uuid-bound), it's global, so it has no vertical split —
+  // it self-collapses to just its header when folded.
+  const eventsRegion = el("div", "events-region");
+  drawerDock.append(reachRegion, dockVsplit, transcriptRegion, eventsRegion);
   termHost.append(termStack, dockResizer, drawerDock);
   termArea.append(termHeader, termHost);
 
@@ -502,6 +543,9 @@ export function mountShell(appEl: HTMLElement): void {
   let drawerCurrent: { uuid: string; handle: DrawerHandle } | null = null;
   /** Mounted reach map (uuid-bound), or null. */
   let reachCurrent: { uuid: string; handle: ReachHandle } | null = null;
+  /** Mounted events pane (global — not uuid-bound), or null. Lives while the dock
+   *  is open, independent of the active tab. */
+  let eventsCurrent: EventsHandle | null = null;
   /** Placeholder shown when the dock is open but the active tab has no uuid. */
   let dockPlaceholder: HTMLElement | null = null;
 
@@ -545,9 +589,15 @@ export function mountShell(appEl: HTMLElement): void {
       reachCurrent = null;
       drawerCurrent?.handle.close();
       drawerCurrent = null;
+      eventsCurrent?.close();
+      eventsCurrent = null;
       renderControls();
       return;
     }
+
+    // The events pane is global (not uuid-bound) — mount it once while the dock is
+    // open, before the per-uuid reach/transcript wiring below.
+    if (!eventsCurrent) eventsCurrent = mountEvents(eventsRegion);
 
     const uuid = activeTab()?.descriptor.uuid ?? null;
 
@@ -695,6 +745,15 @@ export function mountShell(appEl: HTMLElement): void {
     fontBtn.append(icon("type", 16));
     fontBtn.addEventListener("click", () => toggleFontPopover(fontBtn));
 
+    // Config inventory — skills + memory across resolution layers, token-budgeted.
+    // Scoped to the active tab's cwd when one is known, else machine-wide.
+    const configBtn = el("button", "icon-btn config-btn");
+    configBtn.title = "Config inventory (skills · memory)";
+    configBtn.append(icon("sliders", 16));
+    configBtn.addEventListener("click", () =>
+      openInspect({ cwd: activeTab()?.descriptor.cwd ?? undefined }),
+    );
+
     const sep = el("div", "topbar-sep");
 
     // Single "inspect" toggle — opens the docked panel (reach map + transcript).
@@ -703,7 +762,7 @@ export function mountShell(appEl: HTMLElement): void {
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, fontBtn, sep, drawerBtn);
+    controls.append(themeBtn, fontBtn, configBtn, sep, drawerBtn);
   }
 
   // ------------------------------------------------------------------
@@ -891,7 +950,12 @@ export function mountShell(appEl: HTMLElement): void {
       }
       if (t.dead) tab.classList.add("tab--dead");
 
-      const badge = el("span", dotClass(t.state));
+      // Tabs are always eigenform-spawned (you can only open a tab on an
+      // attachable pty); a dead/exited pty has no live process.
+      const tabLiveness: Liveness = t.dead || t.state === "exited" ? "none" : "eigenform";
+      const tabActivity = ptyActivity(t.state);
+      const badge = el("span", dotClasses(tabActivity, tabLiveness));
+      badge.title = dotTitle(tabActivity, tabLiveness);
 
       const labelEl = el("span", "tab-label");
       labelEl.textContent = t.descriptor.label;
@@ -1454,7 +1518,9 @@ export function mountShell(appEl: HTMLElement): void {
     if (isActiveRow(row)) item.classList.add("rail-row--active");
 
     const dotWrap = el("span", "rail-row-dot");
-    dotWrap.append(el("span", dotClass(row.state)));
+    const dot = el("span", dotClasses(row.activity, row.liveness));
+    dot.title = dotTitle(row.activity, row.liveness);
+    dotWrap.append(dot);
 
     const body = el("span", "rail-row-body");
     const labelEl = el("span", "rail-row-label");
@@ -1468,9 +1534,12 @@ export function mountShell(appEl: HTMLElement): void {
       count.textContent = `~${row.msgCount}`;
       meta.append(count);
     }
-    if (row.live) {
+    const tag = livenessTag(row.activity, row.liveness);
+    if (tag) {
       const live = el("span", "rail-row-live");
-      live.textContent = "· live";
+      if (row.liveness === "external") live.classList.add("rail-row-live--external");
+      live.textContent = tag;
+      live.title = dotTitle(row.activity, row.liveness);
       meta.append(live);
     }
     if (row.downgrade) {
@@ -1533,8 +1602,11 @@ export function mountShell(appEl: HTMLElement): void {
 
   function renderRailFoot() {
     railFoot.innerHTML = "";
-    const working = lastRows.filter((r) => r.live && r.state === "working").length;
-    const dot = el("span", working > 0 ? "dot dot--working" : "dot dot--idle");
+    const working = lastRows.filter((r) => r.liveness !== "none" && r.activity === "working").length;
+    const dot = el(
+      "span",
+      working > 0 ? dotClasses("working", "eigenform") : dotClasses("idle", "eigenform"),
+    );
     const label = el("span");
     label.textContent = `${working} working`;
     const total = el("span", "rail-foot-total");

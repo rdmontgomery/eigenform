@@ -39,6 +39,7 @@ fn downgrade_fixture(rephrase_cmd: Vec<String>) -> (tempfile::TempDir, std::path
         workspace_root: None,
         dev: false,
         rephrase_cmd,
+        log_file: None,
     };
     (proj, pdir, cfg)
 }

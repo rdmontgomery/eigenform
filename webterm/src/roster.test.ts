@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import {
   buildRoster,
   deriveLabel,
+  ptyActivity,
+  forestActivity,
 } from "./roster.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
 
@@ -301,4 +303,67 @@ test("every row has a unique key", () => {
   const keys = rows.map((r) => r.key);
   const unique = new Set(keys);
   assert.equal(unique.size, keys.length, "all keys must be unique");
+});
+
+// ---------------------------------------------------------------------------
+// liveness + activity — the two display channels
+// ---------------------------------------------------------------------------
+
+test("ptyActivity maps registry states (exited → idle)", () => {
+  assert.equal(ptyActivity("working"), "working");
+  assert.equal(ptyActivity("waiting"), "waiting");
+  assert.equal(ptyActivity("idle"), "idle");
+  assert.equal(ptyActivity("exited"), "idle");
+});
+
+test("forestActivity maps forest states (ready → waiting, recent → idle)", () => {
+  assert.equal(forestActivity("working"), "working");
+  assert.equal(forestActivity("ready"), "waiting");
+  assert.equal(forestActivity("recent"), "idle");
+});
+
+test("registry rows are eigenform provenance; exited pty is dead", () => {
+  const rows = buildRoster(
+    [
+      pty({ id: "1", state: "working" }),
+      pty({ id: "2", state: "waiting" }),
+      pty({ id: "3", state: "idle" }),
+      pty({ id: "4", state: "exited" }),
+    ],
+    [],
+    {},
+  );
+  const byId = new Map(rows.map((r) => [r.ptyId, r]));
+  assert.equal(byId.get("1")!.liveness, "eigenform");
+  assert.equal(byId.get("1")!.activity, "working");
+  assert.equal(byId.get("2")!.liveness, "eigenform");
+  assert.equal(byId.get("2")!.activity, "waiting");
+  assert.equal(byId.get("3")!.liveness, "eigenform");
+  assert.equal(byId.get("3")!.activity, "idle");
+  // exited pty: still a live=true registry row, but no live process → dead dot.
+  assert.equal(byId.get("4")!.live, true);
+  assert.equal(byId.get("4")!.liveness, "none");
+  assert.equal(byId.get("4")!.activity, "idle");
+});
+
+test("forest row running outside eigenform is external, not dead", () => {
+  const rows = buildRoster(
+    [],
+    [
+      forest({ uuid: "ext-run", live: true, state: "working" }),
+      forest({ uuid: "ext-ready", live: true, state: "ready" }),
+      forest({ uuid: "dead", live: false, state: "recent" }),
+    ],
+    {},
+  );
+  const byUuid = new Map(rows.map((r) => [r.uuid, r]));
+  // live-outside sessions: not attachable (live=false) but external provenance.
+  assert.equal(byUuid.get("ext-run")!.live, false);
+  assert.equal(byUuid.get("ext-run")!.liveness, "external");
+  assert.equal(byUuid.get("ext-run")!.activity, "working");
+  assert.equal(byUuid.get("ext-ready")!.liveness, "external");
+  assert.equal(byUuid.get("ext-ready")!.activity, "waiting");
+  // recent (not live) → dead.
+  assert.equal(byUuid.get("dead")!.liveness, "none");
+  assert.equal(byUuid.get("dead")!.activity, "idle");
 });

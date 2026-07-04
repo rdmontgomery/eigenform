@@ -49,3 +49,19 @@ export interface ForestItem {
   /** Present iff a Fable→Opus guardrail downgrade was detected. */
   downgrade?: { offendingTurn: string } | null;
 }
+
+/**
+ * One structured observability event from `GET /api/events` and the
+ * `/api/events/stream` SSE. Mirrors the daemon `events::Event` serde shape.
+ * - `seq`: monotonic sequence number (1-based) — dedup + `?since=<seq>` paging.
+ * - `at`: ISO-8601 UTC timestamp.
+ * - `kind`: kebab-case event kind, deliberately open-ended (future branches add
+ *   new kinds without a schema change), so treat it as an arbitrary string.
+ * - `data`: arbitrary payload, usually carrying `ptyId` and/or session `uuid`.
+ */
+export interface EventRecord {
+  seq: number;
+  at: string;
+  kind: string;
+  data: Record<string, unknown>;
+}

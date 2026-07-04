@@ -35,6 +35,7 @@ export type ReachKind =
   | "repo" //      a sibling directory under the root's parent (another repo/org dir)
   | "external" //  a local path outside both root and its parent
   | "web" //       an external http(s) host (WebFetch/WebSearch or a shell egress)
+  | "loopback" //  a localhost / 127.x / ::1 host — on this machine, not off-box
   | "mcp" //       a generic MCP server
   | "secret" //    an MCP server / tool that looks like a secret manager or vault
   | "comms" //     an MCP server / tool that looks like a messaging / exfil surface
@@ -171,6 +172,34 @@ function egressHost(cmd: string): string | null {
   return m && m[1] ? m[1].toLowerCase() : null;
 }
 
+/**
+ * Is this host on the local machine (loopback)? Accepts an optional :port and
+ * bracketed IPv6. Loopback reach is not off-box and is not an egress surface, so
+ * hitting 127.0.0.1 after reading a secret is not exfil.
+ */
+function isLoopback(hostPort: string): boolean {
+  let h = hostPort.trim().toLowerCase();
+  const br = /^\[([^\]]+)\](?::\d+)?$/.exec(h); // [::1]:4317 → ::1
+  if (br && br[1]) h = br[1];
+  else if ((h.match(/:/g) || []).length === 1) h = h.replace(/:\d+$/, ""); // host:port (v4/name)
+  return (
+    h === "localhost" ||
+    h === "0.0.0.0" ||
+    h === "::1" ||
+    h === "::" ||
+    h.endsWith(".localhost") ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
+  );
+}
+
+/** A network host → a loopback node (local) or a web node (off-box). */
+function hostTarget(host: string, detail: string): Target {
+  if (isLoopback(host)) {
+    return { id: "local:" + host, label: host, detail, kind: "loopback", action: "network", sensitive: false };
+  }
+  return { id: "web:" + host, label: host, detail, kind: "web", action: "network", sensitive: false };
+}
+
 // ---------------------------------------------------------------------------
 // Input accessors (mirror toolview.ts's defensive shape)
 // ---------------------------------------------------------------------------
@@ -283,7 +312,7 @@ export function targetOf(tool: Tool, ctx: Ctx): Target | null {
   if (k === "webfetch" || k === "fetch") {
     const url = str(input?.["url"]);
     const host = url ? hostOf(url) : null;
-    if (host) return { id: "web:" + host, label: host, detail: url ?? host, kind: "web", action: "network", sensitive: false };
+    if (host) return hostTarget(host, url ?? host);
     return { id: "web:fetch", label: "web", detail: url ?? "web fetch", kind: "web", action: "network", sensitive: false };
   }
   if (k === "websearch") {
@@ -294,7 +323,7 @@ export function targetOf(tool: Tool, ctx: Ctx): Target | null {
   if (k === "bash" || k === "shell") {
     const cmd = str(input?.["command"]) ?? "";
     const host = egressHost(cmd);
-    if (host) return { id: "web:" + host, label: host, detail: host + " (via shell)", kind: "web", action: "network", sensitive: false };
+    if (host) return hostTarget(host, host + " (via shell)");
     return { id: "shell", label: "shell", detail: "bash exec", kind: "shell", action: "exec", sensitive: false };
   }
 

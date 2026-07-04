@@ -39,6 +39,30 @@
 import type { PtyInfo, ForestItem } from "./types.ts";
 
 // ---------------------------------------------------------------------------
+// Two orthogonal display channels (see docs/plans/2026-07-02-live-session-clarity)
+// ---------------------------------------------------------------------------
+
+/** Provenance of a row's live process — drives the dot's *fill*:
+ *  eigenform = solid (attachable), external = hollow ring (live outside
+ *  eigenform, not attachable), none = faint flat (no live process). */
+export type Liveness = "eigenform" | "external" | "none";
+
+/** Turn state — drives the dot's *color + animation*: working = assistant
+ *  running (glows), waiting = your turn (pulses), idle = live but quiet. */
+export type Activity = "working" | "waiting" | "idle";
+
+/** Registry PtyState → activity. exited maps to idle (its liveness is none). */
+export function ptyActivity(state: string): Activity {
+  return state === "working" ? "working" : state === "waiting" ? "waiting" : "idle";
+}
+
+/** Forest SessionState → activity. ready = turn complete → "your turn"
+ *  (waiting); recent is not live → idle (its liveness is none). */
+export function forestActivity(state: string): Activity {
+  return state === "working" ? "working" : state === "ready" ? "waiting" : "idle";
+}
+
+// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -55,8 +79,16 @@ export interface RosterRow {
    *  string. Kept as string (not a union) to stay honest about provenance. */
   state: string;
   /** True when this row is backed by a live registry pty. Forest-only rows with
-   *  forest.live=true are NOT promoted — they remain live=false in the roster. */
+   *  forest.live=true are NOT promoted — they remain live=false in the roster.
+   *  This governs attach/launch eligibility; for the *display* provenance
+   *  (eigenform vs external vs dead) use `liveness` instead. */
   live: boolean;
+  /** Display provenance for the status dot's fill. eigenform = attachable pty,
+   *  external = claude running outside eigenform, none = no live process. */
+  liveness: Liveness;
+  /** Display turn-state for the status dot's color + glow. Normalised from the
+   *  registry PtyState or the forest SessionState (mismatched vocabularies). */
+  activity: Activity;
   ptyId?: string;
   /**
    * Session uuid, if known. Absent (undefined) when the pty has not yet been
@@ -269,6 +301,10 @@ export function buildRoster(
       cwdChip: cwdChip(effectiveCwd),
       state: p.state,
       live: true,
+      // An exited pty has no live process → dead provenance; otherwise it is an
+      // attachable eigenform session.
+      liveness: p.state === "exited" ? "none" : "eigenform",
+      activity: ptyActivity(p.state),
       ptyId: p.id,
       recency: p.lastActivity,
     };
@@ -317,8 +353,12 @@ export function buildRoster(
       cwd: fi.cwd,
       state: fi.state,
       // NOTE: forest.live=true here means claude is running outside our
-      // registry. We cannot attach, so this row is live=false in the roster.
+      // registry. We cannot attach, so this row is live=false in the roster —
+      // but for display it is a distinct "external" provenance (a live process
+      // we don't own), not dead. `recent` (forest.live=false) is truly dead.
       live: false,
+      liveness: fi.live ? "external" : "none",
+      activity: forestActivity(fi.state),
       uuid: fi.uuid,
       recency: fi.recency,
       msgCount: fi.spark.length,

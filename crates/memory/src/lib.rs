@@ -41,6 +41,26 @@ pub struct MemoryEntry {
     pub description: String,
     pub kind: MemoryKind,
     pub source_path: PathBuf,
+    /// Size of the source file in bytes.
+    pub size: usize,
+    /// Rough token estimate for the source file (see [`estimate_tokens`]).
+    pub tokens: usize,
+}
+
+/// A coarse token estimate: ~4 bytes/token, the rule of thumb for English text
+/// under the Claude tokenizer. Deliberately cheap and dependency-free — a
+/// budgeting aid, not a billing oracle. Mirrors `eigenform_skills::estimate_tokens`.
+pub fn estimate_tokens(text: &str) -> usize {
+    text.len().div_ceil(4)
+}
+
+/// Format a token count for display: `~N tok` under 1k, `~N.Nk tok` above.
+pub fn fmt_tokens(tokens: usize) -> String {
+    if tokens >= 1000 {
+        format!("~{:.1}k tok", tokens as f64 / 1000.0)
+    } else {
+        format!("~{tokens} tok")
+    }
 }
 
 #[derive(Debug, Error)]
@@ -95,6 +115,8 @@ pub fn scan_memory_dir(dir: &Path) -> Result<Vec<MemoryEntry>> {
             name: fm.name,
             description: fm.description,
             kind: classify(&fm.kind),
+            size: body.len(),
+            tokens: estimate_tokens(&body),
             source_path: path,
         });
     }
@@ -128,14 +150,18 @@ pub fn render_memory_tree(entries: &[MemoryEntry]) -> String {
         out.push_str("(no memory entries found)\n");
         return out;
     }
+    let total: usize = entries.iter().map(|e| e.tokens).sum();
+    let _ = writeln!(out, "{} entr{}, {}", entries.len(), if entries.len() == 1 { "y" } else { "ies" }, fmt_tokens(total));
+    out.push('\n');
     let mut groups: BTreeMap<&MemoryKind, Vec<&MemoryEntry>> = BTreeMap::new();
     for e in entries {
         groups.entry(&e.kind).or_default().push(e);
     }
     for (kind, items) in &groups {
-        let _ = writeln!(out, "[{}]", kind.as_tag());
+        let group_tokens: usize = items.iter().map(|e| e.tokens).sum();
+        let _ = writeln!(out, "[{}]  {}", kind.as_tag(), fmt_tokens(group_tokens));
         for e in items {
-            let _ = writeln!(out, "  {}", e.name);
+            let _ = writeln!(out, "  {}  {}", e.name, fmt_tokens(e.tokens));
             let _ = writeln!(out, "    {}", e.description);
         }
         out.push('\n');
