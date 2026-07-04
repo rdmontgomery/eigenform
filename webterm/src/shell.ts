@@ -59,6 +59,8 @@ import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
 import { mountReachMap } from "./reachmap.ts";
 import type { ReachHandle } from "./reachmap.ts";
+import { mountEvents } from "./events.ts";
+import type { EventsHandle } from "./events.ts";
 import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { icon } from "./icons.ts";
@@ -340,7 +342,11 @@ export function mountShell(appEl: HTMLElement): void {
   const dockVsplit = el("div", "dock-vsplit");
   dockVsplit.title = "drag to resize the reach map / transcript split";
   const transcriptRegion = el("div", "transcript-region");
-  drawerDock.append(reachRegion, dockVsplit, transcriptRegion);
+  // Events pane: a collapsible accordion at the dock's foot. Unlike the reach map
+  // + transcript (which are uuid-bound), it's global, so it has no vertical split —
+  // it self-collapses to just its header when folded.
+  const eventsRegion = el("div", "events-region");
+  drawerDock.append(reachRegion, dockVsplit, transcriptRegion, eventsRegion);
   termHost.append(termStack, dockResizer, drawerDock);
   termArea.append(termHeader, termHost);
 
@@ -521,6 +527,9 @@ export function mountShell(appEl: HTMLElement): void {
   let drawerCurrent: { uuid: string; handle: DrawerHandle } | null = null;
   /** Mounted reach map (uuid-bound), or null. */
   let reachCurrent: { uuid: string; handle: ReachHandle } | null = null;
+  /** Mounted events pane (global — not uuid-bound), or null. Lives while the dock
+   *  is open, independent of the active tab. */
+  let eventsCurrent: EventsHandle | null = null;
   /** Placeholder shown when the dock is open but the active tab has no uuid. */
   let dockPlaceholder: HTMLElement | null = null;
 
@@ -564,9 +573,15 @@ export function mountShell(appEl: HTMLElement): void {
       reachCurrent = null;
       drawerCurrent?.handle.close();
       drawerCurrent = null;
+      eventsCurrent?.close();
+      eventsCurrent = null;
       renderControls();
       return;
     }
+
+    // The events pane is global (not uuid-bound) — mount it once while the dock is
+    // open, before the per-uuid reach/transcript wiring below.
+    if (!eventsCurrent) eventsCurrent = mountEvents(eventsRegion);
 
     const uuid = activeTab()?.descriptor.uuid ?? null;
 
