@@ -29,6 +29,7 @@ fn fixture() -> (tempfile::TempDir, Config) {
         state_dir: None,
         workspace_root: None,
         dev: false,
+        log_file: None,
     };
     (dir, cfg)
 }

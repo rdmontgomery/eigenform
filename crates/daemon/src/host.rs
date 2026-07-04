@@ -229,9 +229,28 @@ pub type PtyId = u64;
 pub struct SessionHost {
     inner: Mutex<HashMap<PtyId, Arc<LivePty>>>,
     next_id: AtomicU64,
+    /// Observability bus, when wired by `app()`. `None` in the registry-semantics unit
+    /// tests (which never build a bus); event recording is skipped in that case.
+    events: Option<Arc<crate::events::EventBus>>,
 }
 
 impl SessionHost {
+    /// Build a host that records lifecycle events (pty spawn/exit, uuid adoption) to
+    /// `events`. The default host (unit tests) carries no bus and records nothing.
+    pub fn with_events(events: Arc<crate::events::EventBus>) -> Self {
+        Self {
+            events: Some(events),
+            ..Self::default()
+        }
+    }
+
+    /// Record an event on the bus if one is wired; a no-op otherwise.
+    fn record(&self, kind: &str, data: serde_json::Value) {
+        if let Some(events) = &self.events {
+            events.record(kind, data);
+        }
+    }
+
     /// Allocate a fresh id, build the `LivePty` around it, store it, and return the
     /// stored `Arc` so the caller (Task 1.4's `spawn`) can downgrade to a `Weak` for
     /// the pump without a redundant `get(id).unwrap()`.
@@ -270,7 +289,18 @@ impl SessionHost {
         let cwd_buf = cwd.map(Path::to_path_buf);
         let live = self.insert(|id| LivePty::new(id, pty, cwd_buf, size));
         let id = live.id;
+        self.record(
+            "pty-spawned",
+            serde_json::json!({
+                "id": id.to_string(),
+                "program": program,
+                "cwd": cwd.map(|c| c.display().to_string()),
+            }),
+        );
         let weak = Arc::downgrade(&live);
+        // The pump records `pty-exited` at reader EOF; hand it a bus clone (the pump
+        // holds only a Weak<LivePty>, so it can't reach back through `self`).
+        let events = self.events.clone();
 
         // Named so a pump panic is attributable in logs. If `model.feed()` (the
         // third-party vt100 parser) panics, this thread dies — visibly, by name —
@@ -310,6 +340,11 @@ impl SessionHost {
                 // free to acquire them in canonical order.
                 if let Some(live) = weak.upgrade() {
                     live.mark_exited();
+                    // The child closed the master (self-exit); an explicit kill removes the
+                    // entry first, so this only fires for a genuine exit — recorded once.
+                    if let Some(events) = &events {
+                        events.record("pty-exited", serde_json::json!({ "id": id.to_string() }));
+                    }
                 }
             })
             .expect("spawn pty-pump thread");
@@ -464,6 +499,14 @@ impl SessionHost {
             }
             if let Some(sid) = by_pid.get(&pid) {
                 live.set_uuid(sid.clone());
+                self.record(
+                    "session-uuid-adopted",
+                    serde_json::json!({
+                        "ptyId": live.id.to_string(),
+                        "uuid": sid,
+                        "source": "reconcile",
+                    }),
+                );
             }
         }
     }
