@@ -16,7 +16,7 @@
  * PURE: no DOM, no fetch — tested with node --test (toolview.test.ts).
  */
 
-import type { Tool } from "./turns.ts";
+import type { Exchange, Tool } from "./turns.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,6 +45,7 @@ export type ToolBody =
   | { kind: "matches"; lines: string[] }
   | { kind: "todos"; items: { text: string; s: "done" | "doing" | "todo" }[] }
   | { kind: "inset"; label: string; text: string }
+  | { kind: "subagent"; agentType: string | null; description: string | null; exchanges: Exchange[] }
   | { kind: "raw" };
 
 export interface DiffLine {
@@ -325,6 +326,18 @@ export function toolView(tool: Tool): ToolView {
       const headline = input
         ? (str(input.subject) ?? str(input.description) ?? tool.arg)
         : tool.arg;
+      if (tool.subagent) {
+        return {
+          ...base,
+          headline,
+          body: {
+            kind: "subagent",
+            agentType: tool.subagent.agentType,
+            description: tool.subagent.description,
+            exchanges: tool.subagent.exchanges,
+          },
+        };
+      }
       return { ...base, headline };
     }
 

@@ -661,6 +661,32 @@ export function mountDrawer(
       return [i.wrap];
     }
 
+    if (b.kind === "subagent") {
+      const label = b.description ?? b.agentType ?? "subagent";
+      const wrap = el("div", "tool-subagent");
+      const header = el("div", "tool-subagent-label");
+      header.textContent = b.agentType ? `${label} (${b.agentType})` : label;
+      wrap.append(header);
+      for (const ex of b.exchanges) {
+        if (ex.user) {
+          const row = el("div", "tool-subagent-turn tool-subagent-turn--user");
+          row.textContent = ex.user;
+          wrap.append(row);
+        }
+        if (ex.assistant) {
+          const row = el("div", "tool-subagent-turn tool-subagent-turn--assistant");
+          row.textContent = ex.assistant;
+          wrap.append(row);
+        }
+        if (ex.tool) {
+          const row = el("div", "tool-subagent-turn tool-subagent-turn--tool");
+          row.textContent = `${ex.tool.kind} ${ex.tool.arg}`.trim();
+          wrap.append(row);
+        }
+      }
+      return [wrap];
+    }
+
     // raw — the honest fallback: full input JSON + output/detail.
     return [renderRawDetail(tool)];
   }

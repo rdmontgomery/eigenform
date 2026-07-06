@@ -114,6 +114,36 @@ test("toolView: malformed input (string where object expected) degrades to arg +
 });
 
 // ---------------------------------------------------------------------------
+// subagent (Agent tool launches)
+// ---------------------------------------------------------------------------
+
+test("toolView: a resolved subagent surfaces its nested exchanges as a subagent body", () => {
+  const v = toolView(tool({
+    kind: "Agent",
+    arg: "Survey branches",
+    input: { description: "Survey branches" },
+    subagent: {
+      agentType: "general-purpose",
+      description: "Survey branches for PR candidates",
+      exchanges: [{ n: 1, tok: 0, user: "survey the branches", assistant: "three branches have PRs" }],
+    },
+  }));
+  assert.equal(v.type, "task");
+  assert.equal(v.body.kind, "subagent");
+  if (v.body.kind === "subagent") {
+    assert.equal(v.body.agentType, "general-purpose");
+    assert.equal(v.body.exchanges.length, 1);
+    assert.equal(v.body.exchanges[0]!.assistant, "three branches have PRs");
+  }
+});
+
+test("toolView: an Agent launch without a resolved subagent keeps the raw fallback body", () => {
+  const v = toolView(tool({ kind: "Agent", arg: "still running", input: { description: "still running" } }));
+  assert.equal(v.type, "task");
+  assert.equal(v.body.kind, "raw");
+});
+
+// ---------------------------------------------------------------------------
 // miniDiff
 // ---------------------------------------------------------------------------
 

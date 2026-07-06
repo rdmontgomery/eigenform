@@ -114,6 +114,65 @@ pub fn enumerate_session_stubs(projects_dir: &Path) -> Result<Vec<SessionStub>> 
     Ok(out)
 }
 
+/// A discovered async subagent transcript, spawned from a parent session via the Agent
+/// tool. `agent_type`/`description` come from the sibling `.meta.json` when present and
+/// parseable — their absence degrades gracefully rather than hiding the transcript.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentStub {
+    pub agent_id: String,
+    pub path: PathBuf,
+    pub agent_type: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Enumerate the subagent transcripts a session spawned, from
+/// `<session_path stem>/subagents/agent-<id>.jsonl` (+ sibling `.meta.json`). Reads no
+/// jsonl contents. Returns empty if the subagents dir doesn't exist.
+pub fn enumerate_subagents(session_path: &Path) -> Vec<SubagentStub> {
+    let Some(stem) = session_path.file_stem().and_then(|s| s.to_str()) else {
+        return Vec::new();
+    };
+    let subagents_dir = session_path.with_file_name(stem).join("subagents");
+    let Ok(entries) = fs::read_dir(&subagents_dir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some(agent_id) = file_stem.strip_prefix("agent-") else {
+            continue;
+        };
+
+        let meta_path = subagents_dir.join(format!("agent-{agent_id}.meta.json"));
+        let meta: Option<serde_json::Value> = fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+
+        out.push(SubagentStub {
+            agent_id: agent_id.to_string(),
+            path,
+            agent_type: meta
+                .as_ref()
+                .and_then(|m| m.get("agentType"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            description: meta
+                .as_ref()
+                .and_then(|m| m.get("description"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
+    }
+    out
+}
+
 /// Resolve a session `query` (full uuid or unique prefix) to its path, machine-wide.
 pub fn resolve(projects_dir: &Path, query: &str) -> std::result::Result<PathBuf, ResolveError> {
     Ok(resolve_stub(projects_dir, query)?.path)

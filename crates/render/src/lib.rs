@@ -4,6 +4,7 @@
 //! ships the `text` projection only; json/html land when a consumer exists (browser
 //! play, daemon). See `docs/plans/2026-06-03-render-crate-design.md`.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use chrono::{DateTime, Utc};
@@ -197,12 +198,32 @@ pub fn session_html(session: &Session) -> String {
     out
 }
 
+/// An async subagent transcript resolved and handed to render for attachment — render
+/// itself never fetches these (no disk I/O here); the caller (daemon/CLI, backed by
+/// `eigenform_forest::enumerate_subagents`) does the discovery and parsing.
+pub struct ResolvedSubagent {
+    pub session: Session,
+    pub agent_type: Option<String>,
+    pub description: Option<String>,
+}
+
 /// The session transcript as structured JSON for woland's Manuscript: exchanges (a user
 /// turn grouped with its assistant + system replies), plus a trailing `leaf` the UI
 /// renders as the live input. This is ground-truth *content* only — per-turn token/cost
 /// fields are left to the client's (currently stubbed) cache model. The shape matches the
 /// frontend `Session` type so it can be consumed without mapping.
 pub fn session_json(session: &Session) -> String {
+    session_json_with_subagents(session, &HashMap::new())
+}
+
+/// [`session_json`], additionally attaching a resolved subagent transcript (keyed by
+/// `agentId`) to any `Agent` tool call whose async launch resolved to one — see
+/// [`ResolvedSubagent`]. An `Agent` tool whose `agentId` isn't in `subagents` (still
+/// running, or not yet discovered) renders exactly as [`session_json`] would.
+pub fn session_json_with_subagents(
+    session: &Session,
+    subagents: &HashMap<String, ResolvedSubagent>,
+) -> String {
     let visible = visible_turns(session);
 
     // Group like session_html: a user turn opens an exchange; assistant/system attach to
@@ -229,7 +250,7 @@ pub fn session_json(session: &Session) -> String {
                 // own `{user:"", tool}` exchange so the drawer's `toolExchanges` and the reach
                 // map see the whole reach — not just the first call. tool_result user rows are
                 // invisible, so without this all of a turn's calls would collapse onto one.
-                for tool in extract_tools(turn, session) {
+                for tool in extract_tools(turn, session, subagents) {
                     let needs_new = exchanges
                         .last()
                         .map(|e| e.get("tool").is_some())
@@ -287,7 +308,14 @@ fn tool_use_blocks(turn: &Turn) -> Vec<(String, String, serde_json::Value)> {
     };
     blocks
         .iter()
-        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        // advisor() calls emit `server_tool_use` (not `tool_use`) — same id/name/input
+        // shape, so they ride the same tool-call pipeline.
+        .filter(|b| {
+            matches!(
+                b.get("type").and_then(|t| t.as_str()),
+                Some("tool_use") | Some("server_tool_use")
+            )
+        })
         .filter_map(|b| {
             let id = b.get("id")?.as_str()?.to_string();
             let name = b.get("name")?.as_str()?.to_string();
@@ -295,6 +323,23 @@ fn tool_use_blocks(turn: &Turn) -> Vec<(String, String, serde_json::Value)> {
             Some((id, name, input))
         })
         .collect()
+}
+
+/// The advisor_tool_result's text for a given `tool_use_id`, if this turn carries one.
+/// Unlike ordinary tool_result blocks (which live on a separate user-role turn),
+/// advisor_tool_result lives on the SAME assistant turn as its server_tool_use call.
+fn advisor_result_text(turn: &Turn, tool_use_id: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
+    let blocks = value["message"]["content"].as_array()?;
+    blocks.iter().find_map(|b| {
+        if b.get("type").and_then(|t| t.as_str()) != Some("advisor_tool_result") {
+            return None;
+        }
+        if b.get("tool_use_id").and_then(|t| t.as_str()) != Some(tool_use_id) {
+            return None;
+        }
+        b["content"]["text"].as_str().map(|s| s.to_string())
+    })
 }
 
 /// The model id the session ran on, read from assistant turns' `message.model`.
@@ -349,6 +394,28 @@ fn tool_result_output(session: &Session, tool_use_id: &str) -> Option<String> {
     None
 }
 
+/// The `agentId` an async `Agent` tool launch resolved to, read from the matching
+/// tool_result turn's `toolUseResult.agentId` (sibling of `message`, not inside it).
+fn tool_result_agent_id(session: &Session, tool_use_id: &str) -> Option<String> {
+    for turn in session.turns() {
+        if turn.role != Role::User {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
+        let Some(blocks) = value["message"]["content"].as_array() else {
+            continue;
+        };
+        let matches = blocks.iter().any(|block| {
+            block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                && block.get("tool_use_id").and_then(|t| t.as_str()) == Some(tool_use_id)
+        });
+        if matches {
+            return value["toolUseResult"]["agentId"].as_str().map(str::to_string);
+        }
+    }
+    None
+}
+
 /// Truncate a string to at most `TOOL_CONTENT_BYTES` bytes (on a char boundary).
 /// Returns `(truncated_string, was_truncated)`.
 fn truncate_tool_content(s: &str) -> (&str, bool) {
@@ -370,15 +437,26 @@ fn truncate_tool_content(s: &str) -> (&str, bool) {
 /// Field naming asymmetry (historical-compat): `truncated` applies to OUTPUT (pre-existing
 /// field name consumed by woland), while `inputTruncated` applies to INPUT (added in 4.1).
 /// Do not normalise these without a simultaneous woland update.
-fn extract_tools(turn: &Turn, session: &Session) -> Vec<serde_json::Value> {
+fn extract_tools(
+    turn: &Turn,
+    session: &Session,
+    subagents: &HashMap<String, ResolvedSubagent>,
+) -> Vec<serde_json::Value> {
     tool_use_blocks(turn)
         .into_iter()
-        .map(|(id, name, input)| build_tool(id, name, input, session))
+        .map(|(id, name, input)| build_tool(id, name, input, turn, session, subagents))
         .collect()
 }
 
 /// Build one `tool` JSON object from a single tool_use block, pairing it with its result.
-fn build_tool(id: String, name: String, input: serde_json::Value, session: &Session) -> serde_json::Value {
+fn build_tool(
+    id: String,
+    name: String,
+    input: serde_json::Value,
+    turn: &Turn,
+    session: &Session,
+    subagents: &HashMap<String, ResolvedSubagent>,
+) -> serde_json::Value {
     // Truncate input if serialized form exceeds the cap.
     let input_str = serde_json::to_string(&input).unwrap_or_default();
     let (input_val, input_truncated) = if input_str.len() <= TOOL_CONTENT_BYTES {
@@ -412,12 +490,30 @@ fn build_tool(id: String, name: String, input: serde_json::Value, session: &Sess
         tool["inputTruncated"] = json!(true);
     }
 
-    // Attach output if a matching tool_result exists in the session.
-    if let Some(output_raw) = tool_result_output(session, &id) {
+    // Attach output: an advisor call's result lives on this same turn; every other
+    // tool's result lives on a separate tool_result turn found via session-wide scan.
+    let output = advisor_result_text(turn, &id).or_else(|| tool_result_output(session, &id));
+    if let Some(output_raw) = output {
         let (out, out_truncated) = truncate_tool_content(&output_raw);
         tool["output"] = json!(out);
         if out_truncated {
             tool["truncated"] = json!(true);
+        }
+    }
+
+    // Attach a resolved subagent transcript for an Agent tool launch, if the caller gave
+    // us one (render never fetches these itself — see [`ResolvedSubagent`]).
+    if name == "Agent" {
+        if let Some(agent_id) = tool_result_agent_id(session, &id) {
+            if let Some(resolved) = subagents.get(&agent_id) {
+                let sub_json: serde_json::Value =
+                    serde_json::from_str(&session_json(&resolved.session)).unwrap_or_default();
+                tool["subagent"] = json!({
+                    "agentType": resolved.agent_type,
+                    "description": resolved.description,
+                    "exchanges": sub_json["exchanges"],
+                });
+            }
         }
     }
 
@@ -673,15 +769,19 @@ fn is_visible(turn: &Turn) -> bool {
     }
 }
 
-/// Whether an assistant turn contains at least one tool_use content block.
+/// Whether an assistant turn contains at least one tool_use (or advisor server_tool_use)
+/// content block.
 fn has_tool_use(turn: &Turn) -> bool {
     let value: serde_json::Value = serde_json::from_str(turn.raw()).unwrap_or_default();
     value["message"]["content"]
         .as_array()
         .map(|blocks| {
-            blocks
-                .iter()
-                .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+            blocks.iter().any(|b| {
+                matches!(
+                    b.get("type").and_then(|t| t.as_str()),
+                    Some("tool_use") | Some("server_tool_use")
+                )
+            })
         })
         .unwrap_or(false)
 }
@@ -1123,5 +1223,161 @@ mod session_json_tests {
             .filter_map(|e| e["tool"]["output"].as_str())
             .collect();
         assert_eq!(outputs, vec!["contents a", "contents b"]);
+    }
+
+    // ── advisor consult tests ────────────────────────────────────────────────
+
+    /// Build an assistant turn shaped like a live advisor() call: a `server_tool_use`
+    /// block (name "advisor") paired with an `advisor_tool_result` block carrying the
+    /// consult text — both on the SAME turn, unlike ordinary tool_use/tool_result which
+    /// span an assistant turn and a separate user tool_result turn.
+    fn assistant_with_advisor(uuid: &str, tool_id: &str, advisor_text: &str) -> String {
+        serde_json::to_string(&json!({
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": "abc12345-0000",
+            "message": { "role": "assistant", "content": [
+                { "type": "server_tool_use", "id": tool_id, "name": "advisor", "input": {} },
+                { "type": "advisor_tool_result", "tool_use_id": tool_id, "content": {
+                    "type": "advisor_result", "text": advisor_text
+                }}
+            ]}
+        })).unwrap()
+    }
+
+    #[test]
+    fn advisor_consult_is_attached_as_a_tool() {
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"is this design sound?"}}"#,
+            &assistant_with_advisor("a1", "srvtoolu_01", "Looks solid, ship it."),
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        let tool = &doc["exchanges"][0]["tool"];
+
+        assert_eq!(tool["kind"], "advisor");
+        assert_eq!(tool["output"], "Looks solid, ship it.");
+    }
+
+    #[test]
+    fn advisor_consult_output_does_not_require_a_separate_tool_result_turn() {
+        // Real advisor rows never produce a user-role tool_result turn — the whole
+        // exchange lives inside one assistant turn. Confirm no other turns are needed.
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"check this"}}"#,
+            &assistant_with_advisor("a1", "srvtoolu_02", "Reshape items 2/3 as injection."),
+        ]);
+        assert_eq!(session.turns().len(), 2, "no extra tool_result turn was added");
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        assert_eq!(doc["exchanges"][0]["tool"]["output"], "Reshape items 2/3 as injection.");
+    }
+
+    // ── subagent injection tests ─────────────────────────────────────────────
+
+    /// A user turn that is entirely a tool_result carrying an async Agent launch's
+    /// `toolUseResult` metadata — the real on-disk shape (see the potnuse capture).
+    fn agent_launch_result_turn(uuid: &str, tool_id: &str, agent_id: &str) -> String {
+        serde_json::to_string(&json!({
+            "type": "user",
+            "uuid": uuid,
+            "sessionId": "abc12345-0000",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": [{ "type": "text", "text": "Async agent launched successfully." }]
+                }]
+            },
+            "toolUseResult": { "isAsync": true, "agentId": agent_id }
+        })).unwrap()
+    }
+
+    fn subagent_session() -> Session {
+        parse(&[
+            r#"{"type":"user","uuid":"su1","sessionId":"sub12345-0000","message":{"role":"user","content":"survey the branches"}}"#,
+            r#"{"type":"assistant","uuid":"sa1","sessionId":"sub12345-0000","message":{"role":"assistant","content":[{"type":"text","text":"three branches have unopened PRs"}]}}"#,
+        ])
+    }
+
+    #[test]
+    fn agent_tool_gets_no_subagent_field_when_unresolved() {
+        // Baseline: plain session_json (no injection) never attaches a subagent, even
+        // for an Agent tool_use — regression guard for existing callers (e.g. the daemon).
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"go survey"}}"#,
+            &assistant_with_tool("a1", "toolu_agent", "Agent", r#"{"description":"Survey branches"}"#, ""),
+            &agent_launch_result_turn("r1", "toolu_agent", "ac884004"),
+        ]);
+
+        let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
+        let tool = &doc["exchanges"][0]["tool"];
+        assert_eq!(tool["kind"], "Agent");
+        assert!(tool.get("subagent").is_none(), "no subagents map given, so nothing attached");
+    }
+
+    #[test]
+    fn resolved_subagent_is_attached_with_its_own_exchanges() {
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"go survey"}}"#,
+            &assistant_with_tool("a1", "toolu_agent", "Agent", r#"{"description":"Survey branches"}"#, ""),
+            &agent_launch_result_turn("r1", "toolu_agent", "ac884004"),
+        ]);
+
+        let mut subagents = std::collections::HashMap::new();
+        subagents.insert(
+            "ac884004".to_string(),
+            ResolvedSubagent {
+                session: subagent_session(),
+                agent_type: Some("general-purpose".to_string()),
+                description: Some("Survey branches for PR candidates".to_string()),
+            },
+        );
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&session_json_with_subagents(&session, &subagents)).unwrap();
+        let tool = &doc["exchanges"][0]["tool"];
+
+        assert_eq!(tool["kind"], "Agent");
+        assert_eq!(tool["subagent"]["agentType"], "general-purpose");
+        assert_eq!(tool["subagent"]["description"], "Survey branches for PR candidates");
+        let sub_exchanges = tool["subagent"]["exchanges"].as_array().expect("exchanges array");
+        assert_eq!(sub_exchanges[0]["user"], "survey the branches");
+        assert_eq!(sub_exchanges[0]["assistant"], "three branches have unopened PRs");
+    }
+
+    #[test]
+    fn unresolved_agent_id_leaves_tool_without_subagent_field() {
+        // The subagents map is keyed by agentId; a launch whose agentId isn't in the map
+        // (still running, or discovery hasn't caught up yet) degrades to no subagent field.
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"go survey"}}"#,
+            &assistant_with_tool("a1", "toolu_agent", "Agent", r#"{"description":"Survey branches"}"#, ""),
+            &agent_launch_result_turn("r1", "toolu_agent", "still-running"),
+        ]);
+        let subagents = std::collections::HashMap::new(); // empty — nothing resolved
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&session_json_with_subagents(&session, &subagents)).unwrap();
+        assert!(doc["exchanges"][0]["tool"].get("subagent").is_none());
+    }
+
+    #[test]
+    fn non_agent_tools_are_unaffected_by_subagent_injection() {
+        let input = r#"{"file_path":"/x","old_string":"a","new_string":"b"}"#;
+        let session = parse(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"edit the file"}}"#,
+            &assistant_with_tool("a1", "toolu_01", "Edit", input, "I'll edit it"),
+            &tool_result_turn("u2", "toolu_01", "ok, done"),
+        ]);
+        let subagents = std::collections::HashMap::new();
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&session_json_with_subagents(&session, &subagents)).unwrap();
+        let tool = &doc["exchanges"][0]["tool"];
+        assert_eq!(tool["kind"], "Edit");
+        assert_eq!(tool["output"], "ok, done");
+        assert!(tool.get("subagent").is_none());
     }
 }
