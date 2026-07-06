@@ -240,3 +240,64 @@ test("tool exchanges carry input, output, truncated, inputTruncated, and detail 
   assert.equal(t.detail!.lines[0]!.c, "add");
   assert.equal(t.detail!.lines[2]!.c, "rem");
 });
+
+// ---------------------------------------------------------------------------
+// items — interleaved text/tool order (the actual bug this fixes)
+// ---------------------------------------------------------------------------
+
+test("assistant text on the group-opening exchange is not dropped", () => {
+  // The Rust emitter's common shape for a plain (no-tool) reply: the assistant's
+  // text lands on the SAME exchange object as the opening user turn, since it's
+  // still `exchanges.last_mut()` when the assistant turn is processed.
+  const exchanges: Exchange[] = [
+    { n: 1, tok: 0, user: "render the transcript", uuid: "u1", assistant: "on it" },
+  ];
+  const groups = groupTurns(exchanges);
+  assert.equal(groups[0]!.assistantText, "on it", "previously dropped entirely");
+  assert.deepEqual(groups[0]!.items, [{ kind: "text", text: "on it" }]);
+});
+
+test("items preserves the true interleaved order of text and tool exchanges", () => {
+  const toolA = { kind: "Read", arg: "a.ts", delta: "" };
+  const toolB = { kind: "Edit", arg: "b.ts", delta: "" };
+  const exchanges: Exchange[] = [
+    // opening exchange: user text + assistant text + a tool, all combined (real shape)
+    { n: 1, tok: 0, user: "go", uuid: "u1", assistant: "first, reading", tool: toolA },
+    // a tool-only exchange (no narration before this one)
+    { n: 2, tok: 0, user: "", tool: toolB },
+    // a text-only exchange (narration with no tool call)
+    { n: 3, tok: 0, user: "", assistant: "done for now" },
+  ];
+  const groups = groupTurns(exchanges);
+  assert.deepEqual(groups[0]!.items, [
+    { kind: "text", text: "first, reading" },
+    { kind: "tool", exchange: exchanges[0], toolIndex: 0 },
+    { kind: "tool", exchange: exchanges[1], toolIndex: 1 },
+    { kind: "text", text: "done for now" },
+  ]);
+});
+
+test("items assigns toolIndex matching the tool's position in toolExchanges", () => {
+  const exchanges: Exchange[] = [
+    user(1, "go"),
+    toolExchange(2, "Read"),
+    toolExchange(3, "Edit"),
+    toolExchange(4, "Bash"),
+  ];
+  const groups = groupTurns(exchanges);
+  const toolItems = groups[0]!.items.filter((i) => i.kind === "tool");
+  assert.deepEqual(toolItems.map((i) => i.toolIndex), [0, 1, 2]);
+  assert.deepEqual(
+    groups[0]!.toolExchanges.map((ex, i) => toolExpandKey(groups[0]!.turnNumber, i)),
+    toolItems.map((i) => toolExpandKey(groups[0]!.turnNumber, i.toolIndex)),
+  );
+});
+
+test("an empty-string assistant field does not produce a spurious text item", () => {
+  const exchanges: Exchange[] = [
+    user(1, "go"),
+    toolExchange(2, "Read"), // toolExchange() sets assistant: "" alongside the tool
+  ];
+  const groups = groupTurns(exchanges);
+  assert.deepEqual(groups[0]!.items, [{ kind: "tool", exchange: exchanges[1], toolIndex: 0 }]);
+});

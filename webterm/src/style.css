@@ -1123,36 +1123,6 @@ button { font: inherit; color: inherit; }
   color: var(--tx-2);
 }
 
-.drawer-actions {
-  display: flex;
-  gap: 6px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.drawer-action {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 30px;
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 500;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  color: var(--tx-2);
-  transition: all 0.12s;
-}
-.drawer-action:hover { background: var(--raised-2); color: var(--tx); }
-.drawer-action--danger:hover {
-  background: color-mix(in oklch, var(--st-error) 14%, transparent);
-  color: var(--st-error);
-}
-.drawer-action--flash { color: var(--st-success); border-color: var(--st-success); }
-
 .drawer-body {
   flex: 1;
   overflow-y: auto;

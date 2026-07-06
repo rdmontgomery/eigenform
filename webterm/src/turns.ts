@@ -77,6 +77,15 @@ export interface Exchange {
 // ---------------------------------------------------------------------------
 
 /**
+ * One narration chunk or tool call, in the exact order they occurred on the wire.
+ * `toolIndex` is the item's 0-based position within the group's `toolExchanges`
+ * (i.e. `toolExpandKey(group.turnNumber, item.toolIndex)` is its expansion key).
+ */
+export type TurnItem =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; exchange: Exchange; toolIndex: number };
+
+/**
  * One group in the transcript drawer:
  *   - a user turn (or the leaf)
  *   - all assistant/tool/system exchanges that followed, up to the next user turn
@@ -84,6 +93,9 @@ export interface Exchange {
  * `toolExchanges` preserves insertion order — Task 4.3 renders them as one-liners.
  * `assistantText` is the concatenation of all `assistant` texts in the group
  * (blank-line joined, matching session_json's append_text behaviour).
+ * `items` carries the SAME content as `assistantText`/`toolExchanges` but as one
+ * ordered sequence — use it to render narration next to the tool call it actually
+ * preceded, instead of all narration first and all tools after.
  */
 export interface TurnGroup {
   /** Exchange `n` of the opening user turn (or leaf). */
@@ -96,6 +108,8 @@ export interface TurnGroup {
   systemText: string;
   /** All tool exchanges belonging to this group, in order. */
   toolExchanges: Exchange[];
+  /** Narration and tool calls, interleaved in true wire order. */
+  items: TurnItem[];
   /** true when this group represents the leaf (live input affordance). */
   isLeaf: boolean;
   /** The user turn's JSONL uuid — fork target for Task 4.4. */
@@ -161,9 +175,32 @@ export function groupTurns(exchanges: Exchange[]): TurnGroup[] {
       assistantText: "",
       systemText: "",
       toolExchanges: [],
+      items: [],
       isLeaf: ex.leaf === true,
       uuid: ex.uuid,
     };
+  }
+
+  // Fold one exchange's assistant/tool/system content into `g`, in wire order.
+  // Runs for the group-opening exchange too: the Rust emitter's common shape is
+  // {user: "...", assistant: "...", tool: {...}} all on ONE exchange (whatever
+  // was still `exchanges.last_mut()` when each turn was processed) — treating
+  // the opening exchange as a special case that skips assistant/tool handling
+  // silently dropped that text/tool, so this is the single accumulation path.
+  function accumulate(g: TurnGroup, ex: Exchange) {
+    if (ex.assistant !== undefined && ex.assistant !== "") {
+      g.assistantText = g.assistantText === ""
+        ? ex.assistant
+        : `${g.assistantText}\n\n${ex.assistant}`;
+      g.items.push({ kind: "text", text: ex.assistant });
+    }
+    if (ex.tool !== undefined) {
+      g.toolExchanges.push(ex);
+      g.items.push({ kind: "tool", exchange: ex, toolIndex: g.toolExchanges.length - 1 });
+    }
+    if (ex.system !== undefined && ex.system !== "") {
+      g.systemText = ex.system;
+    }
   }
 
   for (const ex of exchanges) {
@@ -171,30 +208,14 @@ export function groupTurns(exchanges: Exchange[]): TurnGroup[] {
     if (ex.leaf === true || ex.user !== "") {
       flush();
       current = openGroup(ex);
-      // The Rust emitter may attach a tool to the group-opening exchange
-      // ({user: "...", tool: {...}} is the common shape).  Without this,
-      // the `continue` above would silently drop the tool.
-      if (ex.tool !== undefined) {
-        current.toolExchanges.push(ex);
-      }
+      accumulate(current, ex);
       continue;
     }
 
     // No current group: discard orphaned assistant/tool/system exchanges.
     if (current === null) continue;
 
-    // Accumulate into the current group.
-    if (ex.assistant !== undefined && ex.assistant !== "") {
-      current.assistantText = current.assistantText === ""
-        ? ex.assistant
-        : `${current.assistantText}\n\n${ex.assistant}`;
-    }
-    if (ex.tool !== undefined) {
-      current.toolExchanges.push(ex);
-    }
-    if (ex.system !== undefined && ex.system !== "") {
-      current.systemText = ex.system;
-    }
+    accumulate(current, ex);
   }
 
   flush();
