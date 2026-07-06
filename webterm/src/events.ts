@@ -76,6 +76,12 @@ export function eventSummary(ev: EventRecord): string {
       return `pty ${str("ptyId") ?? "?"} → ${shortId(d.uuid)} (${str("source") ?? "?"})`;
     case "fork-created":
       return `${shortId(d.srcUuid)} → ${shortId(d.branchUuid)} @ ${shortId(d.turn)}`;
+    case "downgrade-recovered":
+      return `${shortId(d.srcUuid)} → ${shortId(d.branchUuid)} · ${
+        d.rephrased ? "rephrased" : "verbatim"
+      }`;
+    case "downgrade-recovery-failed":
+      return [shortId(d.srcUuid), str("reason") ?? "failed"].filter(Boolean).join(" · ");
     case "spawn-refused":
     case "resume-refused": {
       const where = str("cwd") ?? (str("session") ? shortId(d.session) : undefined);

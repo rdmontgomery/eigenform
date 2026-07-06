@@ -343,8 +343,31 @@ async fn recover_downgrade_route(
     State(state): State<AppState>,
 ) -> Response {
     match recover_downgrade(&state.config, &uuid) {
-        Ok(v) => Json(v).into_response(),
-        Err(e) => e.into_response(),
+        Ok(v) => {
+            // Record the outcome so EVERY recovery — the auto-stage on the forest poll
+            // and a manual GUI trigger alike — leaves a trace in the Events pane. `note`
+            // is null when the rephraser succeeded; non-null means we staged verbatim.
+            state.events.record(
+                "downgrade-recovered",
+                serde_json::json!({
+                    "srcUuid": uuid,
+                    "branchUuid": v.get("branchUuid"),
+                    "offendingTurn": v.get("offendingTurn"),
+                    "rephrased": v.get("note").is_some_and(serde_json::Value::is_null),
+                }),
+            );
+            Json(v).into_response()
+        }
+        Err(e) => {
+            // A failed attempt is itself informative — especially a manual trigger on a
+            // session with nothing to recover ("no downgrade detected"). Record why
+            // before returning the error, so the Events pane always shows the result.
+            state.events.record(
+                "downgrade-recovery-failed",
+                serde_json::json!({ "srcUuid": uuid, "reason": e.1 }),
+            );
+            e.into_response()
+        }
     }
 }
 

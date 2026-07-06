@@ -81,6 +81,20 @@ async fn post(url: &str) -> String {
     text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()
 }
 
+/// Minimal HTTP GET over raw TCP; returns the response body (mirrors `post`).
+async fn get(url: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let rest = url.strip_prefix("http://").unwrap();
+    let (host, path) = rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap();
+    let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await.unwrap();
+    let text = String::from_utf8_lossy(&buf);
+    text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()
+}
+
 #[tokio::test]
 async fn recover_downgrade_forks_and_stages_the_rephrased_prompt() {
     let stub = stub_script();
@@ -111,6 +125,48 @@ async fn recover_downgrade_forks_and_stages_the_rephrased_prompt() {
     assert!(
         !branch.contains("the offending prompt"),
         "branch excludes the offending prompt:\n{branch}"
+    );
+
+    // A successful recovery is recorded on the event bus (so the GUI trigger —
+    // and the auto-stage — surfaces in the Events pane).
+    let events_body = get(&format!("{base}/api/events")).await;
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&events_body).unwrap_or_else(|_| panic!("events json:\n{events_body}"));
+    let recovered = events
+        .iter()
+        .find(|e| e["kind"] == serde_json::json!("downgrade-recovered"))
+        .unwrap_or_else(|| panic!("a downgrade-recovered event:\n{events_body}"));
+    assert_eq!(recovered["data"]["srcUuid"], serde_json::json!(DOWNGRADED_UUID));
+    assert_eq!(recovered["data"]["branchUuid"], serde_json::json!(branch_uuid));
+    assert_eq!(recovered["data"]["offendingTurn"], serde_json::json!("u2"));
+    assert_eq!(
+        recovered["data"]["rephrased"], serde_json::json!(true),
+        "the stub rephraser succeeded → rephrased:\n{events_body}"
+    );
+}
+
+#[tokio::test]
+async fn recover_downgrade_records_a_failure_event_when_there_is_nothing_to_recover() {
+    // A request for a session that can't be resolved fails (404), but the attempt
+    // is still recorded — a manual GUI trigger on a session with no downgrade must
+    // leave a legible trace in the Events pane, not vanish silently.
+    let (_proj, _pdir, cfg) = downgrade_fixture(vec!["true".to_string()]);
+    let base = start(cfg).await;
+
+    let missing = "00000000-0000-4000-8000-000000000000";
+    let _ = post(&format!("{base}/api/session/{missing}/recover-downgrade")).await;
+
+    let events_body = get(&format!("{base}/api/events")).await;
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&events_body).unwrap_or_else(|_| panic!("events json:\n{events_body}"));
+    let failed = events
+        .iter()
+        .find(|e| e["kind"] == serde_json::json!("downgrade-recovery-failed"))
+        .unwrap_or_else(|| panic!("a downgrade-recovery-failed event:\n{events_body}"));
+    assert_eq!(failed["data"]["srcUuid"], serde_json::json!(missing));
+    assert!(
+        failed["data"]["reason"].is_string(),
+        "the failure carries a reason:\n{events_body}"
     );
 }
 
