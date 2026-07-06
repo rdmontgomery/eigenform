@@ -32,11 +32,13 @@ export type ToolType =
   | "todo"
   | "skill"
   | "task"
+  | "advisor"
   | "other";
 
 export type ToolAccessory =
   | { kind: "stat"; add: number; del: number }
-  | { kind: "count"; n: number };
+  | { kind: "count"; n: number }
+  | { kind: "subagent"; turns: number };
 
 export type ToolBody =
   | { kind: "command"; command: string; output?: string }
@@ -82,8 +84,9 @@ const META: Record<ToolType, { icon: string; tint: string; verb: string }> = {
   fetch: { icon: "globe",    tint: "slate", verb: "Fetch" },
   todo:  { icon: "list",     tint: "plum",  verb: "Todo" },
   skill: { icon: "skill",    tint: "olive", verb: "Skill" },
-  task:  { icon: "fork",     tint: "plum",  verb: "Task" },
-  other: { icon: "bolt",     tint: "slate", verb: "Tool" },
+  task:    { icon: "fork",  tint: "plum",   verb: "Task" },
+  advisor: { icon: "brain", tint: "violet", verb: "Consult" },
+  other:   { icon: "bolt",  tint: "slate",  verb: "Tool" },
 };
 
 /** kind (as emitted in JSONL, e.g. "Bash", "TodoWrite", "mcp__x__y") → type. */
@@ -98,6 +101,7 @@ function toolType(kind: string): ToolType {
   if (k === "todowrite" || k === "todoread") return "todo";
   if (k === "skill") return "skill";
   if (k === "task" || k === "agent" || k.startsWith("task")) return "task";
+  if (k === "advisor") return "advisor";
   return "other";
 }
 
@@ -330,6 +334,7 @@ export function toolView(tool: Tool): ToolView {
         return {
           ...base,
           headline,
+          accessory: { kind: "subagent", turns: tool.subagent.exchanges.length },
           body: {
             kind: "subagent",
             agentType: tool.subagent.agentType,
@@ -339,6 +344,15 @@ export function toolView(tool: Tool): ToolView {
         };
       }
       return { ...base, headline };
+    }
+
+    case "advisor": {
+      if (tool.output === undefined || tool.output === "") return base;
+      return {
+        ...base,
+        headline: tool.output.split("\n")[0]!,
+        body: { kind: "inset", label: "consult", text: tool.output },
+      };
     }
 
     case "other":

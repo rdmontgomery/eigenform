@@ -530,6 +530,11 @@ export function mountDrawer(
       const acc = el("span", "tool-acc tool-acc--count");
       acc.textContent = String(view.accessory.n);
       side.append(acc);
+    } else if (view.accessory?.kind === "subagent") {
+      const acc = el("span", "tool-acc tool-acc--subagent");
+      const n = view.accessory.turns;
+      acc.textContent = `${n} turn${n === 1 ? "" : "s"}`;
+      side.append(acc);
     }
     if (group.toolExchanges.length > 1) {
       side.append(
