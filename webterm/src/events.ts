@@ -99,10 +99,6 @@ export function eventSummary(ev: EventRecord): string {
 export interface EventsHandle {
   /** Tear down the SSE + timers and remove the DOM. Safe to call twice. */
   close(): void;
-  /** Expand the pane (if collapsed) and stick to the newest row. Idempotent —
-   *  lets a caller (e.g. the manual recover trigger) surface a just-recorded
-   *  event without the user hunting for the collapsed accordion. */
-  reveal(): void;
 }
 
 const LS_EVENTS = "eigenform:term:events:v1"; // "open" | "closed" (default closed)
@@ -271,10 +267,6 @@ export function mountEvents(hostEl: HTMLElement): EventsHandle {
       es?.close();
       es = null;
       panel.remove();
-    },
-    reveal() {
-      if (closed) return;
-      setCollapsed(false); // persists "open" + re-sticks to the newest row
     },
   };
 }
