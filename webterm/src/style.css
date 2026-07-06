@@ -139,7 +139,12 @@ button { font: inherit; color: inherit; }
 /* ── Shell layout ───────────────────────────────────────────────────────── */
 .shell {
   display: flex;
+  /* 100vh measures the *largest* viewport on mobile — the area behind the
+     dynamic browser chrome (address bar) — so the bottom rows (claude's status
+     bar) render below the visible fold. dvh tracks the current visible height;
+     the vh line is the fallback for browsers without dvh. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 

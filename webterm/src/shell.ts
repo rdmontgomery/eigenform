@@ -398,6 +398,25 @@ export function mountShell(appEl: HTMLElement): void {
     });
   }
 
+  // A browser-window or mobile-viewport resize does not reach xterm on its own:
+  // the FitAddon only recomputes cols/rows when we call fit(). Without this the
+  // grid keeps its old dimensions after a resize — claude's multi-line status bar
+  // spills below the viewport and the transcript stops reflowing until an
+  // unrelated re-fit (toggling the drawer) happens to nudge it. Coalesce the
+  // event storm from a drag into one fit per frame. visualViewport catches the
+  // mobile browser-chrome show/hide that a plain window `resize` misses.
+  let refitQueued = false;
+  const scheduleRefit = () => {
+    if (refitQueued) return;
+    refitQueued = true;
+    requestAnimationFrame(() => {
+      refitQueued = false;
+      fitActive();
+    });
+  };
+  window.addEventListener("resize", scheduleRefit);
+  window.visualViewport?.addEventListener("resize", scheduleRefit);
+
   let railDragging = false;
   resizer.addEventListener("mousedown", (e) => {
     railDragging = true;
@@ -1678,13 +1697,15 @@ export function mountShell(appEl: HTMLElement): void {
       // Auto-stage a Fable retry for the active downgraded session (once each).
       void maybeAutoRecover(forest);
 
-      // Update tab state badges + cwd + uuid from live pty data.
+      // Update tab state badges + cwd + uuid + title from live pty / forest data.
       for (const t of tabs) {
-        if (!t.descriptor.ptyId || t.dead) continue;
-        const live = ptys.find((p) => p.id === t.descriptor.ptyId);
+        if (t.dead) continue;
+        let changed = false;
+        const live = t.descriptor.ptyId
+          ? ptys.find((p) => p.id === t.descriptor.ptyId)
+          : undefined;
         if (live) {
           t.state = live.state;
-          let changed = false;
           if (live.cwd && !t.descriptor.cwd) {
             t.descriptor = { ...t.descriptor, cwd: live.cwd };
             changed = true;
@@ -1696,8 +1717,28 @@ export function mountShell(appEl: HTMLElement): void {
             t.descriptor = { ...t.descriptor, uuid: live.uuid };
             changed = true;
           }
-          if (changed) saveTabs();
         }
+        // Prefer a strong title over the tab's bare cwd basename: once the JSONL
+        // yields an AI title (or the user renamed the session in the rail), adopt
+        // it so tabs sharing one cwd stop all reading as "src". We only ever
+        // upgrade to a user override or an AI title — never clobber a good cwd
+        // label with a weaker fallback ("new session"). Override wins over aiTitle,
+        // mirroring deriveLabel's precedence.
+        const uuid = t.descriptor.uuid;
+        const ptyId = t.descriptor.ptyId;
+        const override =
+          (uuid ? overrides[uuid] : undefined) ??
+          (ptyId ? overrides[ptyId] : undefined) ??
+          null;
+        const aiTitle = uuid
+          ? forest.find((f) => f.uuid === uuid)?.title ?? null
+          : null;
+        const strongLabel = override ?? aiTitle;
+        if (strongLabel && strongLabel !== t.descriptor.label) {
+          t.descriptor = { ...t.descriptor, label: strongLabel };
+          changed = true;
+        }
+        if (changed) saveTabs();
       }
       renderTabStrip();
       renderTermHeader();
