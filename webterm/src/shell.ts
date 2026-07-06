@@ -444,8 +444,11 @@ export function mountShell(appEl: HTMLElement): void {
   //   guards against yanking focus / eating a keypress mid-sentence.
   // recovered: source session uuids we've already auto-staged a retry for
   //   (fires at most once per session, even across polls).
+  // downgradedUuids: uuids the latest forest poll flagged as downgraded — drives
+  //   the topbar recover button's "attention" state for the active session.
   let lastInputAt = 0;
   const recovered = new Set<string>();
+  const downgradedUuids = new Set<string>();
 
   function activeTab(): TabEntry | null {
     return tabs.find((t) => t.id === activeTabId) ?? null;
@@ -756,13 +759,30 @@ export function mountShell(appEl: HTMLElement): void {
 
     const sep = el("div", "topbar-sep");
 
+    // Manual Fable→Opus recovery — fork the active session's rewound branch and
+    // stage the retry now (the same mechanism the forest poll auto-fires), with the
+    // outcome recorded in the Events pane. Disabled until the active tab has a uuid;
+    // highlighted (amber "attention") when that session is currently downgraded.
+    const activeUuid = activeTab()?.descriptor.uuid ?? null;
+    const activeDowngraded = activeUuid !== null && downgradedUuids.has(activeUuid);
+    const recoverBtn = el(
+      "button",
+      `icon-btn recover-btn${activeDowngraded ? " icon-btn--attention" : ""}`,
+    );
+    recoverBtn.disabled = activeUuid === null;
+    recoverBtn.title = activeDowngraded
+      ? "Fable downgrade detected — fork & stage a retry (result in Events)"
+      : "Trigger Fable→Opus recovery for this session (result in Events)";
+    recoverBtn.append(icon("fork", 16));
+    recoverBtn.addEventListener("click", () => void triggerRecover());
+
     // Single "inspect" toggle — opens the docked panel (reach map + transcript).
     const drawerBtn = el("button", `icon-btn${drawerOpen ? " icon-btn--active" : ""}`);
     drawerBtn.title = drawerOpen ? "Hide inspect panel" : "Show inspect panel";
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, fontBtn, configBtn, sep, drawerBtn);
+    controls.append(themeBtn, fontBtn, configBtn, sep, recoverBtn, drawerBtn);
   }
 
   // ------------------------------------------------------------------
@@ -1614,10 +1634,56 @@ export function mountShell(appEl: HTMLElement): void {
     railFoot.append(dot, label, total);
   }
 
+  type RecoverOutcome =
+    | { ok: true }
+    | { ok: false; kind: "http"; status: number }
+    | { ok: false; kind: "network" };
+
+  /**
+   * POST the Fable→Opus recovery for one source session: fork a rewound Fable
+   * branch, open it as a tab, and STAGE the (rephrased) prompt into it — never
+   * sent. Shared by the automatic forest-poll path (maybeAutoRecover) and the
+   * manual topbar trigger (triggerRecover). All side effects live here; the
+   * caller owns the retry/gate policy via the returned outcome. The daemon
+   * records a `downgrade-recovered` / `downgrade-recovery-failed` event for
+   * every call, so the Events pane is the source of truth for what happened.
+   */
+  async function recoverDowngrade(uuid: string): Promise<RecoverOutcome> {
+    try {
+      const res = await fetch(
+        "/api/session/" + encodeURIComponent(uuid) + "/recover-downgrade",
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        console.warn(`recover-downgrade failed (${res.status}) for ${uuid}`);
+        return { ok: false, kind: "http", status: res.status };
+      }
+      const { branchUuid, stagedText, note } = (await res.json()) as {
+        branchUuid: string;
+        stagedText: string;
+        offendingTurn: string;
+        note: string | null;
+      };
+      // note != null → the rephraser fell back to verbatim. The Events pane
+      // already shows this (rephrased:false); the console note keeps the old
+      // dev breadcrumb without baking a one-shot note into the persisted label.
+      if (note) console.warn(`fable retry rephrase note for ${uuid}: ${note}`);
+      openTabWithQuery("?session=" + encodeURIComponent(branchUuid), {
+        uuid: branchUuid,
+        label: "fable-retry",
+        seedInput: stagedText,
+      });
+      void refreshRoster();
+      return { ok: true };
+    } catch (err) {
+      console.warn(`recover-downgrade errored for ${uuid}:`, err);
+      return { ok: false, kind: "network" };
+    }
+  }
+
   /**
    * If the ACTIVE session shows a Fable→Opus downgrade (and the user isn't
-   * mid-keystroke), POST for a forked retry, open the branch, and stage the
-   * rephrased prompt into it WITHOUT submitting. Fires at most once per source
+   * mid-keystroke), auto-stage a forked retry. Fires at most once per source
    * session. `forest` is the raw snapshot from the poll (ForestItem carries uuid
    * + downgrade, so it satisfies DowngradeCandidate structurally).
    */
@@ -1632,41 +1698,29 @@ export function mountShell(appEl: HTMLElement): void {
     });
     if (!hit) return;
     // Mark handled BEFORE the await so a slow POST can't double-fire on the next
-    // 3s poll. Left handled on failure too, so it doesn't spin.
+    // 3s poll. Kept handled on a deliberate non-ok too, so it doesn't spin; only
+    // a network blip is retried (clear the mark so the next poll re-attempts).
     recovered.add(hit.uuid);
-    try {
-      const res = await fetch(
-        "/api/session/" + encodeURIComponent(hit.uuid) + "/recover-downgrade",
-        { method: "POST" },
-      );
-      if (!res.ok) {
-        // Deliberate non-ok (4xx/5xx): keep it handled so we don't spin.
-        console.warn(`recover-downgrade failed (${res.status}) for ${hit.uuid}`);
-        return;
-      }
-      const { branchUuid, stagedText, note } = (await res.json()) as {
-        branchUuid: string;
-        stagedText: string;
-        offendingTurn: string;
-        note: string | null;
-      };
-      // note != null → the rephraser fell back to verbatim. Surface it WITHOUT
-      // baking it into the persisted label (label is saved by saveTabs, so a
-      // one-shot note must not become a permanent tab name). No toast to reuse,
-      // and TabDescriptor has no per-tab title channel — so just warn.
-      if (note) console.warn(`fable retry rephrase note for ${hit.uuid}: ${note}`);
-      openTabWithQuery("?session=" + encodeURIComponent(branchUuid), {
-        uuid: branchUuid,
-        label: "fable-retry",
-        seedInput: stagedText,
-      });
-      void refreshRoster();
-    } catch (err) {
-      // Network blip → allow one retry next poll; a deliberate non-ok stays
-      // handled to avoid spinning.
-      recovered.delete(hit.uuid);
-      console.warn(`recover-downgrade errored for ${hit.uuid}:`, err);
-    }
+    const outcome = await recoverDowngrade(hit.uuid);
+    if (!outcome.ok && outcome.kind === "network") recovered.delete(hit.uuid);
+  }
+
+  /**
+   * Manual GUI trigger: recover the ACTIVE session's downgrade on demand and
+   * surface the result in the Events pane. Unlike the auto path it ignores the
+   * once-per-session gate (deliberately re-runnable — this is the "let me test
+   * the mechanism myself" button) but marks the source handled on success so the
+   * forest poll won't also fire for it.
+   */
+  async function triggerRecover() {
+    const uuid = activeTab()?.descriptor.uuid ?? null;
+    if (!uuid) return;
+    // Make the outcome visible: open the dock and expand the Events pane first so
+    // the recorded downgrade-recovered / -failed row lands in view.
+    if (!drawerOpen) setDrawerOpen(true);
+    eventsCurrent?.reveal();
+    const outcome = await recoverDowngrade(uuid);
+    if (outcome.ok) recovered.add(uuid);
   }
 
   async function refreshRoster() {
@@ -1674,6 +1728,11 @@ export function mountShell(appEl: HTMLElement): void {
       const { ptys, forest } = await fetchRosterData();
       lastRows = buildRoster(ptys, forest, overrides);
       renderRail();
+
+      // Track which sessions are currently downgraded (drives the recover button's
+      // attention state; renderControls runs later via syncDock).
+      downgradedUuids.clear();
+      for (const it of forest) if (it.downgrade) downgradedUuids.add(it.uuid);
 
       // Auto-stage a Fable retry for the active downgraded session (once each).
       void maybeAutoRecover(forest);

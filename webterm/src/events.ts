@@ -76,6 +76,12 @@ export function eventSummary(ev: EventRecord): string {
       return `pty ${str("ptyId") ?? "?"} → ${shortId(d.uuid)} (${str("source") ?? "?"})`;
     case "fork-created":
       return `${shortId(d.srcUuid)} → ${shortId(d.branchUuid)} @ ${shortId(d.turn)}`;
+    case "downgrade-recovered":
+      return `${shortId(d.srcUuid)} → ${shortId(d.branchUuid)} · ${
+        d.rephrased ? "rephrased" : "verbatim"
+      }`;
+    case "downgrade-recovery-failed":
+      return [shortId(d.srcUuid), str("reason") ?? "failed"].filter(Boolean).join(" · ");
     case "spawn-refused":
     case "resume-refused": {
       const where = str("cwd") ?? (str("session") ? shortId(d.session) : undefined);
@@ -93,6 +99,10 @@ export function eventSummary(ev: EventRecord): string {
 export interface EventsHandle {
   /** Tear down the SSE + timers and remove the DOM. Safe to call twice. */
   close(): void;
+  /** Expand the pane (if collapsed) and stick to the newest row. Idempotent —
+   *  lets a caller (e.g. the manual recover trigger) surface a just-recorded
+   *  event without the user hunting for the collapsed accordion. */
+  reveal(): void;
 }
 
 const LS_EVENTS = "eigenform:term:events:v1"; // "open" | "closed" (default closed)
@@ -261,6 +271,10 @@ export function mountEvents(hostEl: HTMLElement): EventsHandle {
       es?.close();
       es = null;
       panel.remove();
+    },
+    reveal() {
+      if (closed) return;
+      setCollapsed(false); // persists "open" + re-sticks to the newest row
     },
   };
 }

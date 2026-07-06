@@ -220,6 +220,14 @@ button { font: inherit; color: inherit; }
 .icon-btn:hover { background: var(--raised-2); color: var(--tx); }
 .icon-btn--active { background: var(--accent-wash); color: var(--accent); }
 .icon-btn--boxed { border-color: var(--line); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+/* --st-running: theme-adaptive amber "attention" (same tint as the rail's
+   downgrade chip), so a pending Fable downgrade reads consistently. */
+.icon-btn--attention { color: var(--st-running); }
+.icon-btn--attention:hover {
+  color: var(--st-running);
+  background: color-mix(in oklch, var(--st-running) 16%, transparent);
+}
 
 .rail-search {
   padding: 0 10px 6px;
