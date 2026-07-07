@@ -2,7 +2,7 @@
  * roster.ts — Pure roster data layer: merges registry ptys + forest items into
  * a sorted, labelled list suitable for the sidebar.
  *
- * PURE: no fetch, no DOM, no Date.now(). Recency sorting is lexicographic on
+ * PURE: no fetch, no DOM, no Date.now(). Timestamp sorting is lexicographic on
  * ISO-8601 strings (rfc3339). This is correct because: rfc3339 timestamps are
  * monotonically comparable as ASCII strings when in the same UTC-offset
  * representation. The backend emits +00:00 offsets (not the "Z" short-form),
@@ -97,11 +97,12 @@ export interface RosterRow {
    * use truthiness (`if (row.uuid)`) to guard uuid-dependent actions.
    */
   uuid?: string;
-  /** ISO-8601 string used for within-group sorting (most-recent first).
-   *  For live rows: lastActivity from pty. For disk-only rows: recency from
-   *  forest. Lexicographic comparison within a group is correct because all
-   *  timestamps in the group share the same UTC offset (+00:00 from the backend),
-   *  making byte-order equivalent to chronological order. */
+  /** ISO-8601 string shown as the row's relative-recency text and used for
+   *  age-group bucketing. For live rows: lastActivity from pty (display only —
+   *  live rows sort by spawn order, see buildRoster). For disk-only rows:
+   *  recency from forest, which also sorts the disk group (lexicographic
+   *  comparison is chronological here because all timestamps share the same
+   *  +00:00 UTC offset from the backend). */
   recency: string;
   /** Approximate turn count for at-a-glance triage: the length of the forest
    *  activity spark (one entry per completed turn). Absent for live-only rows
@@ -185,6 +186,13 @@ function cwdChip(cwd: string | null): string {
   return basename(cwd);
 }
 
+/** Descending compare for pty ids — u64s serialized as decimal strings, so
+ *  compare by length before bytes ("10" must sort above "9"). */
+function idDesc(a: string, b: string): number {
+  if (a.length !== b.length) return b.length - a.length;
+  return a > b ? -1 : a < b ? 1 : 0;
+}
+
 // ---------------------------------------------------------------------------
 // buildRoster
 // ---------------------------------------------------------------------------
@@ -193,7 +201,13 @@ function cwdChip(cwd: string | null): string {
  * Build a sorted roster from live registry ptys + disk forest items.
  *
  * Ordering:
- *   1. Live (registry-backed) rows first, sorted by lastActivity DESC.
+ *   1. Live (registry-backed) rows first, sorted by spawnedAt DESC (newest
+ *      session on top), ties broken by pty id DESC. Deliberately NOT
+ *      lastActivity: the daemon stamps that on every pty output chunk, and a
+ *      live claude TUI emits output near-constantly (spinner frames, status
+ *      repaints) — sorting on it made rows leapfrog on every roster poll.
+ *      Spawn order is stable for a session's whole lifetime; the status dots
+ *      carry the activity signal instead.
  *   2. Disk-only (forest) rows second, sorted by recency DESC.
  *
  * Merge: a pty row and a forest row sharing the same uuid are collapsed into
@@ -256,8 +270,18 @@ export function buildRoster(
   const mergedForestUuids = new Set<string>();
 
   // ------------------------------------------------------------------
-  // Step 3: Emit live (registry-backed) rows.
+  // Step 3: Emit live (registry-backed) rows, in stable spawn order (newest
+  // first, ties by id). Sorting the inputs up front keeps the emit loop's
+  // output order canonical — no post-sort on a churning timestamp.
   // ------------------------------------------------------------------
+  mutPtys.sort((a, b) =>
+    a.info.spawnedAt > b.info.spawnedAt
+      ? -1
+      : a.info.spawnedAt < b.info.spawnedAt
+        ? 1
+        : idDesc(a.info.id, b.info.id),
+  );
+
   const liveRows: RosterRow[] = [];
 
   for (const mp of mutPtys) {
@@ -323,11 +347,6 @@ export function buildRoster(
 
     liveRows.push(row);
   }
-
-  // Sort live rows: most-recent lastActivity first.
-  liveRows.sort((a, b) =>
-    a.recency > b.recency ? -1 : a.recency < b.recency ? 1 : 0,
-  );
 
   // ------------------------------------------------------------------
   // Step 4: Emit disk-only (forest) rows.

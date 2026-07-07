@@ -146,16 +146,42 @@ test("live ptys sort above recent forest rows", () => {
   assert.equal(rows[1]!.live, false, "forest-only row should come second");
 });
 
-test("within live group, rows sort by lastActivity most-recent-first", () => {
+test("within live group, rows sort by spawnedAt newest-first — NOT lastActivity", () => {
+  // lastActivity deliberately orders the opposite way: it churns on every pty
+  // output chunk, so sorting on it made live rows leapfrog on each poll.
   const ptys: PtyInfo[] = [
-    pty({ id: "1", uuid: null, lastActivity: "2026-06-11T08:00:00Z" }),
-    pty({ id: "2", uuid: null, lastActivity: "2026-06-11T10:00:00Z" }),
-    pty({ id: "3", uuid: null, lastActivity: "2026-06-11T09:00:00Z" }),
+    pty({ id: "1", uuid: null, spawnedAt: "2026-06-11T08:00:00Z", lastActivity: "2026-06-11T12:00:03Z" }),
+    pty({ id: "2", uuid: null, spawnedAt: "2026-06-11T10:00:00Z", lastActivity: "2026-06-11T12:00:01Z" }),
+    pty({ id: "3", uuid: null, spawnedAt: "2026-06-11T09:00:00Z", lastActivity: "2026-06-11T12:00:02Z" }),
   ];
   const rows = buildRoster(ptys, [], {});
   assert.equal(rows[0]!.ptyId, "2");
   assert.equal(rows[1]!.ptyId, "3");
   assert.equal(rows[2]!.ptyId, "1");
+});
+
+test("live group order is stable when only lastActivity changes between polls", () => {
+  const at = (last1: string, last2: string): PtyInfo[] => [
+    pty({ id: "1", uuid: null, spawnedAt: "2026-06-11T08:00:00Z", lastActivity: last1 }),
+    pty({ id: "2", uuid: null, spawnedAt: "2026-06-11T09:00:00Z", lastActivity: last2 }),
+  ];
+  const poll1 = buildRoster(at("2026-06-11T12:00:00Z", "2026-06-11T12:00:01Z"), [], {});
+  const poll2 = buildRoster(at("2026-06-11T12:00:04Z", "2026-06-11T12:00:03Z"), [], {});
+  assert.deepEqual(
+    poll1.map((r) => r.ptyId),
+    poll2.map((r) => r.ptyId),
+  );
+});
+
+test("live group spawnedAt ties break by pty id, numerically descending", () => {
+  // Same spawn instant; "10" must sort above "9" (length-aware compare, not lex).
+  const ptys: PtyInfo[] = [
+    pty({ id: "9", uuid: null }),
+    pty({ id: "10", uuid: null }),
+  ];
+  const rows = buildRoster(ptys, [], {});
+  assert.equal(rows[0]!.ptyId, "10");
+  assert.equal(rows[1]!.ptyId, "9");
 });
 
 test("within forest group, rows sort by recency most-recent-first", () => {

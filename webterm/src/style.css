@@ -258,12 +258,30 @@ button { font: inherit; color: inherit; }
   min-height: 0;
 }
 
+/* Group header — a button: click folds/unfolds the group's rows. */
 .rail-group-header {
   display: flex;
   align-items: baseline;
   gap: 8px;
   padding: 14px 4px 6px;
+  width: 100%;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
 }
+.rail-group-header:hover .rail-group-label { color: var(--tx-2); }
+.rail-group-header:hover .rail-group-caret { color: var(--tx-3); }
+/* Caret points down when expanded, right when folded. */
+.rail-group-caret {
+  display: inline-flex;
+  align-self: center;
+  color: var(--tx-faint);
+  transform: rotate(90deg);
+  transition: transform 0.12s ease;
+  flex-shrink: 0;
+}
+.rail-group-header--folded .rail-group-caret { transform: rotate(0deg); }
 .rail-group-label {
   font-size: 10.5px;
   font-weight: 600;
