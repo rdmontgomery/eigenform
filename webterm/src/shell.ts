@@ -324,7 +324,6 @@ export function mountShell(appEl: HTMLElement): void {
   const main = el("div", "main");
   const topbar = el("div", "topbar");
   const railBtn = el("button", "icon-btn topbar-rail-btn");
-  railBtn.title = "Show sessions";
   const railBtnIcon = icon("panel", 16);
   railBtnIcon.style.transform = "scaleX(-1)"; // left-panel reading of the icon
   railBtn.append(railBtnIcon);
@@ -361,8 +360,8 @@ export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
   // Rail resize / collapse — woland's splitter pattern: drag sets --rail-w
   // live, state persists on mouseup. Dragging left past the collapse
-  // threshold hides the rail; the topbar button (or dragging back right)
-  // restores it at its previous width.
+  // threshold hides the rail; the topbar button toggles it (re-expanding
+  // restores the previous width), as does dragging back right.
   // ------------------------------------------------------------------
 
   let railW = RAIL_DEFAULT;
@@ -382,6 +381,8 @@ export function mountShell(appEl: HTMLElement): void {
   function applyRail() {
     document.documentElement.style.setProperty("--rail-w", `${railW}px`);
     appEl.classList.toggle("shell--rail-collapsed", railCollapsed);
+    railBtn.title = railCollapsed ? "Show sessions" : "Hide sessions";
+    railBtn.classList.toggle("icon-btn--active", !railCollapsed);
   }
   applyRail();
 
@@ -446,7 +447,7 @@ export function mountShell(appEl: HTMLElement): void {
   });
 
   railBtn.addEventListener("click", () => {
-    railCollapsed = false;
+    railCollapsed = !railCollapsed;
     applyRail();
     saveRail();
     fitActive();

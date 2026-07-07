@@ -34,7 +34,7 @@
   --ink-plum:  oklch(0.68 0.09 330);
 
   --row-pad: 6px;
-  --rail-w: 244px;
+  --rail-w: 300px;
   --topbar-h: 40px;
 
   --radius: 9px;
@@ -179,13 +179,11 @@ button { font: inherit; color: inherit; }
   background: color-mix(in oklch, var(--accent) 30%, transparent);
 }
 
-/* Reopen affordance — leading topbar button, visible only while collapsed. */
+/* Rail toggle — leading topbar button, always visible; shows/hides the forest. */
 .topbar-rail-btn {
-  display: none;
   align-self: center;
   margin: 0 2px 0 6px;
 }
-.shell--rail-collapsed .topbar-rail-btn { display: inline-flex; }
 
 .rail-brand {
   display: flex;
