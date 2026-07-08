@@ -95,6 +95,7 @@ const LS_DRAWER = "eigenform:term:drawer:v1";
 const LS_DOCK_W = "eigenform:term:drawer-w:v1";
 const LS_REACH_H = "eigenform:term:reach-h:v1";
 const LS_RAIL = "eigenform:term:rail:v1";
+const LS_GROUPS = "eigenform:term:rail-groups:v1";
 const LS_FONT = "eigenform:term:font:v1";
 
 /** Terminal typefaces offered in the font popover. macOS-first: "System Mono"
@@ -324,7 +325,6 @@ export function mountShell(appEl: HTMLElement): void {
   const main = el("div", "main");
   const topbar = el("div", "topbar");
   const railBtn = el("button", "icon-btn topbar-rail-btn");
-  railBtn.title = "Show sessions";
   const railBtnIcon = icon("panel", 16);
   railBtnIcon.style.transform = "scaleX(-1)"; // left-panel reading of the icon
   railBtn.append(railBtnIcon);
@@ -361,8 +361,8 @@ export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
   // Rail resize / collapse — woland's splitter pattern: drag sets --rail-w
   // live, state persists on mouseup. Dragging left past the collapse
-  // threshold hides the rail; the topbar button (or dragging back right)
-  // restores it at its previous width.
+  // threshold hides the rail; the topbar button toggles it (re-expanding
+  // restores the previous width), as does dragging back right.
   // ------------------------------------------------------------------
 
   let railW = RAIL_DEFAULT;
@@ -382,6 +382,8 @@ export function mountShell(appEl: HTMLElement): void {
   function applyRail() {
     document.documentElement.style.setProperty("--rail-w", `${railW}px`);
     appEl.classList.toggle("shell--rail-collapsed", railCollapsed);
+    railBtn.title = railCollapsed ? "Show sessions" : "Hide sessions";
+    railBtn.classList.toggle("icon-btn--active", !railCollapsed);
   }
   applyRail();
 
@@ -446,7 +448,7 @@ export function mountShell(appEl: HTMLElement): void {
   });
 
   railBtn.addEventListener("click", () => {
-    railCollapsed = false;
+    railCollapsed = !railCollapsed;
     applyRail();
     saveRail();
     fitActive();
@@ -1332,6 +1334,22 @@ export function mountShell(appEl: HTMLElement): void {
     localStorage.setItem(LS_OVERRIDES, JSON.stringify(overrides));
   }
 
+  /** Folded rail age-groups (true = collapsed). Persisted across reloads. */
+  let foldedGroups: Partial<Record<AgeGroup, boolean>> = {};
+  try {
+    foldedGroups = JSON.parse(localStorage.getItem(LS_GROUPS) ?? "{}") as Partial<
+      Record<AgeGroup, boolean>
+    >;
+  } catch {
+    foldedGroups = {};
+  }
+
+  function toggleGroup(group: AgeGroup) {
+    foldedGroups[group] = !foldedGroups[group];
+    localStorage.setItem(LS_GROUPS, JSON.stringify(foldedGroups));
+    renderRail();
+  }
+
   async function fetchRosterData(): Promise<{ ptys: PtyInfo[]; forest: ForestItem[] }> {
     const [ptyRes, forestRes] = await Promise.all([
       fetch("/api/pty"),
@@ -1501,14 +1519,25 @@ export function mountShell(appEl: HTMLElement): void {
       const groupRows = rows.filter((r) => ageGroup(r.recency, now) === group);
       if (groupRows.length === 0) continue;
 
-      const header = el("div", "rail-group-header");
+      // A fold hides the group's rows (the count still says how many). While a
+      // search is active, folds are ignored — hiding matches inside a folded
+      // group would make the search read as "no results" for no visible reason.
+      const folded = !searchQuery && foldedGroups[group] === true;
+
+      const header = el("button", `rail-group-header${folded ? " rail-group-header--folded" : ""}`);
+      header.title = folded ? "Show group" : "Hide group";
+      const caret = el("span", "rail-group-caret");
+      caret.append(icon("chevron", 11));
       const label = el("span", "rail-group-label");
       label.textContent = GROUP_LABELS[group];
       const rule = el("span", "rail-group-rule");
       const count = el("span", "rail-group-count");
       count.textContent = String(groupRows.length);
-      header.append(label, rule, count);
+      header.append(caret, label, rule, count);
+      header.addEventListener("click", () => toggleGroup(group));
       railScroll.append(header);
+
+      if (folded) continue;
 
       for (const row of groupRows) {
         visibleRows.push(row);

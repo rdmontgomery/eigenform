@@ -63,7 +63,7 @@ export function ageGroup(iso: string, now: number): AgeGroup {
 
 export const RAIL_MIN = 180;
 export const RAIL_MAX = 480;
-export const RAIL_DEFAULT = 244;
+export const RAIL_DEFAULT = 300;
 /** Dragging the splitter left of this hides the rail entirely. */
 export const RAIL_COLLAPSE_AT = 110;
 
