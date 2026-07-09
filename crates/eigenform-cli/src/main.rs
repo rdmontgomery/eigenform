@@ -867,6 +867,30 @@ fn read_text(path: &PathBuf) -> Result<String> {
     std::fs::read_to_string(path).with_context(|| format!("reading {path:?}"))
 }
 
+/// The width lines are fitted to: the terminal's, or 100 when not a tty (pipes,
+/// redirects). Floored at 60 so extreme splits still get readable columns.
+fn term_width() -> usize {
+    terminal_size::terminal_size()
+        .map(|(terminal_size::Width(w), _)| (w as usize).max(60))
+        .unwrap_or(100)
+}
+
+/// A path for display: the home prefix shortened to `~`.
+fn tilde(path: &std::path::Path, home: &std::path::Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+fn skills_render_opts(home: &std::path::Path, note: Option<String>) -> eigenform_skills::RenderOpts {
+    eigenform_skills::RenderOpts {
+        width: term_width(),
+        home: Some(home.to_path_buf()),
+        note,
+    }
+}
+
 fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     let home = home_dir().context("could not determine home directory")?;
     let cwd = match cwd_override {
@@ -878,7 +902,7 @@ fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     let found = eigenform_skills::scan_many(&roots)
         .with_context(|| format!("scanning skills under home={:?} cwd={:?}", home, cwd))?;
 
-    print!("{}", eigenform_skills::render_tree(&found));
+    print!("{}", eigenform_skills::render_tree(&found, &skills_render_opts(&home, None)));
     Ok(())
 }
 
@@ -926,12 +950,10 @@ fn skills_list(all_projects: bool) -> Result<()> {
     let found = eigenform_skills::scan_many(&roots)
         .with_context(|| "scanning skills across all projects")?;
 
-    println!("# projects discovered: {}", projects.len());
-    for p in &projects {
-        println!("#   {} -> {}", p.dir_name, p.cwd.display());
-    }
-    println!();
-    print!("{}", eigenform_skills::render_tree(&found));
+    // Repo-layer tags name their project (`repo:<dir>`), so the per-project
+    // mapping needs no roll call here — the summary carries the scan's scope.
+    let note = format!("{} projects", projects.len());
+    print!("{}", eigenform_skills::render_tree(&found, &skills_render_opts(&home, Some(note))));
     Ok(())
 }
 
@@ -946,10 +968,7 @@ fn memory_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     let project = eigenform_projects::project_for_cwd(&projects_dir, &cwd)
         .with_context(|| format!("looking up project for cwd {:?}", cwd))?;
     let Some(project) = project else {
-        println!("MEMORY");
-        println!("======");
-        println!();
-        println!("(no memory: no Claude Code project recorded for {:?})", cwd);
+        println!("no memory: no Claude Code project recorded for {}", cwd.display());
         return Ok(());
     };
 
@@ -957,10 +976,8 @@ fn memory_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     let entries = eigenform_memory::scan_memory_dir(&memory_dir)
         .with_context(|| format!("scanning memory in {:?}", memory_dir))?;
 
-    println!("# project: {} -> {}", project.dir_name, project.cwd.display());
-    println!("# memory dir: {}", memory_dir.display());
-    println!();
-    print!("{}", eigenform_memory::render_memory_tree(&entries));
+    let label = tilde(&project.cwd, &home);
+    print!("{}", eigenform_memory::render_memory_tree(&label, &entries, term_width()));
     Ok(())
 }
 
@@ -974,19 +991,44 @@ fn memory_list(all_projects: bool) -> Result<()> {
     let projects = eigenform_projects::enumerate_projects(&projects_dir)
         .with_context(|| format!("enumerating projects in {:?}", projects_dir))?;
 
-    println!("# projects discovered: {}", projects.len());
-    println!();
-
+    // Scan everything first so the summary can lead, then print only the
+    // projects that actually hold memory — the empties are a single count.
+    let mut scanned: Vec<(&eigenform_projects::Project, Vec<eigenform_memory::MemoryEntry>)> =
+        Vec::new();
     for p in &projects {
         let memory_dir = projects_dir.join(&p.dir_name).join("memory");
         let entries = eigenform_memory::scan_memory_dir(&memory_dir)
             .with_context(|| format!("scanning {:?}", memory_dir))?;
+        scanned.push((p, entries));
+    }
 
-        println!("================================================================");
-        println!("project: {} -> {}", p.dir_name, p.cwd.display());
-        println!("================================================================");
-        print!("{}", eigenform_memory::render_memory_tree(&entries));
+    let with_memory = scanned.iter().filter(|(_, e)| !e.is_empty()).count();
+    let total_entries: usize = scanned.iter().map(|(_, e)| e.len()).sum();
+    let total_tokens: usize = scanned
+        .iter()
+        .flat_map(|(_, e)| e.iter().map(|m| m.tokens))
+        .sum();
+    if with_memory == 0 {
+        println!("{} projects · none with memory", projects.len());
+        return Ok(());
+    }
+    println!(
+        "{} projects · {} with memory · {} entr{} · {}",
+        projects.len(),
+        with_memory,
+        total_entries,
+        if total_entries == 1 { "y" } else { "ies" },
+        eigenform_memory::fmt_tokens(total_tokens),
+    );
+
+    let width = term_width();
+    for (p, entries) in &scanned {
+        if entries.is_empty() {
+            continue;
+        }
         println!();
+        let label = tilde(&p.cwd, &home);
+        print!("{}", eigenform_memory::render_memory_tree(&label, entries, width));
     }
     Ok(())
 }

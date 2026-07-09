@@ -141,30 +141,59 @@ fn classify(kind: &str) -> MemoryKind {
     }
 }
 
-/// Render the per-project memory tree as text: grouped by kind in the
-/// known precedence order (feedback → project → reference → user → other),
-/// with entry names + descriptions under each section.
-pub fn render_memory_tree(entries: &[MemoryEntry]) -> String {
-    let mut out = String::from("MEMORY\n======\n\n");
+/// Truncate `s` to at most `width` display chars, ending in `…` when cut.
+/// Whitespace is collapsed first so multi-line descriptions read as one line.
+pub fn truncate_line(s: &str, width: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= width {
+        return flat;
+    }
+    let kept: String = flat.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
+/// One-line summary for a set of entries: `5 entries · ~3.1k tok`.
+pub fn summarize(entries: &[MemoryEntry]) -> String {
     if entries.is_empty() {
-        out.push_str("(no memory entries found)\n");
-        return out;
+        return "no memory entries".to_string();
     }
     let total: usize = entries.iter().map(|e| e.tokens).sum();
-    let _ = writeln!(out, "{} entr{}, {}", entries.len(), if entries.len() == 1 { "y" } else { "ies" }, fmt_tokens(total));
-    out.push('\n');
+    format!(
+        "{} entr{} · {}",
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" },
+        fmt_tokens(total)
+    )
+}
+
+/// Render one project's memory as text: a `label · summary` line, then kind
+/// groups in the known precedence order (feedback → project → reference →
+/// user → other), one line per entry (name, tokens, truncated description).
+/// Lines are fitted to `width` chars (`0` = no limit); descriptions never wrap.
+pub fn render_memory_tree(label: &str, entries: &[MemoryEntry], width: usize) -> String {
+    let width = if width == 0 { usize::MAX } else { width };
+    let mut out = String::new();
+    let _ = writeln!(out, "{label} · {}", summarize(entries));
+    if entries.is_empty() {
+        return out;
+    }
     let mut groups: BTreeMap<&MemoryKind, Vec<&MemoryEntry>> = BTreeMap::new();
     for e in entries {
         groups.entry(&e.kind).or_default().push(e);
     }
     for (kind, items) in &groups {
         let group_tokens: usize = items.iter().map(|e| e.tokens).sum();
-        let _ = writeln!(out, "[{}]  {}", kind.as_tag(), fmt_tokens(group_tokens));
+        let _ = writeln!(out, "  {}  {}", kind.as_tag(), fmt_tokens(group_tokens));
         for e in items {
-            let _ = writeln!(out, "  {}  {}", e.name, fmt_tokens(e.tokens));
-            let _ = writeln!(out, "    {}", e.description);
+            let head = format!("    {}  {}", e.name, fmt_tokens(e.tokens));
+            let line = if e.description.is_empty() {
+                head
+            } else {
+                let budget = width.saturating_sub(head.chars().count() + 3);
+                format!("{head} — {}", truncate_line(&e.description, budget))
+            };
+            let _ = writeln!(out, "{line}");
         }
-        out.push('\n');
     }
     out
 }

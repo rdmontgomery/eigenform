@@ -28,6 +28,7 @@ chrono         = { workspace = true }
 tokio          = { workspace = true }
 ureq           = { workspace = true }
 serde_json     = { workspace = true }
+terminal_size  = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
