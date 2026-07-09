@@ -1401,6 +1401,38 @@ button { font: inherit; color: inherit; }
 }
 .tool-inset-box .cmd-prompt { color: var(--accent-2); }
 
+/* nested subagent transcript (Agent tool launches) */
+.tool-subagent {
+  margin-top: 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.55;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.tool-subagent-label {
+  font-size: 9px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--tx-faint);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.tool-subagent-turn {
+  padding: 3px 0;
+  color: var(--tx-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-subagent-turn--user { color: var(--tx); font-weight: 500; }
+.tool-subagent-turn--tool {
+  font-family: var(--font-mono);
+  color: var(--tx-faint);
+  font-size: 10px;
+}
+
 /* mini-diff (edit/write) */
 .tool-diff {
   margin-top: 7px;

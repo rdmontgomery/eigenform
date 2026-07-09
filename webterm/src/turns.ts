@@ -41,6 +41,16 @@ export interface Tool {
   inputTruncated?: boolean;
   /** Preview diff lines for drill-down (present when render has detail). */
   detail?: ToolDetail;
+  /**
+   * A resolved async subagent transcript (Agent tool only), nested exchanges from
+   * its own session_json. Absent when the tool isn't an Agent launch, or the
+   * launch's agentId hasn't been resolved yet (still running / not discovered).
+   */
+  subagent?: {
+    agentType: string | null;
+    description: string | null;
+    exchanges: Exchange[];
+  };
 }
 
 /**

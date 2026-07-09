@@ -258,10 +258,31 @@ async fn session_json_route(
     };
     // Render once per (file, mtime, len); repeat views and forest-browsing skip the
     // multi-MB read+parse+serialize that dominates the manuscript load latency.
+    // NB: the cache key is the parent file only — a subagent still writing its own jsonl
+    // while the parent is quiet won't invalidate this cache until the parent changes too.
     match SESSION_CACHE.get_or_render(&path, || {
         let contents = std::fs::read_to_string(&path).unwrap_or_default();
         let session = eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
-        eigenform_render::session_json(&session)
+
+        let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
+            eigenform_forest::enumerate_subagents(&path)
+                .into_iter()
+                .filter_map(|stub| {
+                    let contents = std::fs::read_to_string(&stub.path).ok()?;
+                    let sub_session =
+                        eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+                    Some((
+                        stub.agent_id,
+                        eigenform_render::ResolvedSubagent {
+                            session: sub_session,
+                            agent_type: stub.agent_type,
+                            description: stub.description,
+                        },
+                    ))
+                })
+                .collect();
+
+        eigenform_render::session_json_with_subagents(&session, &subagents)
     }) {
         Ok(json) => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
