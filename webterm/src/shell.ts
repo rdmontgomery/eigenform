@@ -660,9 +660,6 @@ export function mountShell(appEl: HTMLElement): void {
               });
               void refreshRoster();
             },
-            // interrupt routes ^C to the ACTIVE tab's socket — the dock is only
-            // ever mounted for the active tab's uuid (syncDock invariant).
-            { interrupt: () => activeTab()?.ptyHandle?.sendInput("\x03") },
           ),
         };
       }

@@ -32,6 +32,8 @@
   --ink-teal:  oklch(0.70 0.075 200);
   --ink-slate: oklch(0.68 0.055 255);
   --ink-plum:  oklch(0.68 0.09 330);
+  /* advisor-only tint (toolview.ts) — not part of INK_KEYS' per-session hue set */
+  --ink-violet: oklch(0.68 0.10 295);
 
   --row-pad: 6px;
   --rail-w: 300px;
@@ -1121,36 +1123,6 @@ button { font: inherit; color: inherit; }
   color: var(--tx-2);
 }
 
-.drawer-actions {
-  display: flex;
-  gap: 6px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.drawer-action {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 30px;
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 500;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  color: var(--tx-2);
-  transition: all 0.12s;
-}
-.drawer-action:hover { background: var(--raised-2); color: var(--tx); }
-.drawer-action--danger:hover {
-  background: color-mix(in oklch, var(--st-error) 14%, transparent);
-  color: var(--st-error);
-}
-.drawer-action--flash { color: var(--st-success); border-color: var(--st-success); }
-
 .drawer-body {
   flex: 1;
   overflow-y: auto;
@@ -1345,6 +1317,7 @@ button { font: inherit; color: inherit; }
 .tool-acc-add { color: var(--st-success); }
 .tool-acc-del { color: var(--st-error); }
 .tool-acc--count { color: var(--ink-ochre); }
+.tool-acc--subagent { color: var(--ink-plum); }
 
 .tool-chevron { color: var(--tx-faint); display: inline-flex; }
 .tool-chevron svg { transition: transform 0.15s; }

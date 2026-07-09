@@ -28,6 +28,7 @@ test("toolView: maps real kinds to types", () => {
   assert.equal(toolView(tool({ kind: "TaskCreate" })).type, "task");
   assert.equal(toolView(tool({ kind: "AskUserQuestion" })).type, "other");
   assert.equal(toolView(tool({ kind: "ToolSearch" })).type, "other");
+  assert.equal(toolView(tool({ kind: "advisor" })).type, "advisor");
 });
 
 // ---------------------------------------------------------------------------
@@ -140,6 +141,55 @@ test("toolView: a resolved subagent surfaces its nested exchanges as a subagent 
 test("toolView: an Agent launch without a resolved subagent keeps the raw fallback body", () => {
   const v = toolView(tool({ kind: "Agent", arg: "still running", input: { description: "still running" } }));
   assert.equal(v.type, "task");
+  assert.equal(v.body.kind, "raw");
+});
+
+test("toolView: a resolved subagent gets a turn-count accessory, visible while collapsed", () => {
+  const v = toolView(tool({
+    kind: "Agent",
+    arg: "Survey branches",
+    subagent: {
+      agentType: "general-purpose",
+      description: "Survey branches",
+      exchanges: [
+        { n: 1, tok: 0, user: "go", assistant: "ok" },
+        { n: 2, tok: 0, user: "", tool: { kind: "Bash", arg: "ls", delta: "" } },
+      ],
+    },
+  }));
+  assert.deepEqual(v.accessory, { kind: "subagent", turns: 2 });
+});
+
+test("toolView: an Agent launch without a resolved subagent has no accessory", () => {
+  const v = toolView(tool({ kind: "Agent", arg: "still running" }));
+  assert.equal(v.accessory, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// advisor
+// ---------------------------------------------------------------------------
+
+test("toolView: advisor gets its own verb/icon/tint and a consult body", () => {
+  const v = toolView(tool({ kind: "advisor", output: "Looks solid, ship it." }));
+  assert.equal(v.type, "advisor");
+  assert.equal(v.verb, "Consult");
+  assert.equal(v.icon, "brain");
+  assert.equal(v.tint, "violet");
+  assert.equal(v.body.kind, "inset");
+  if (v.body.kind === "inset") {
+    assert.equal(v.body.label, "consult");
+    assert.equal(v.body.text, "Looks solid, ship it.");
+  }
+});
+
+test("toolView: advisor headline is the first line of the consult text", () => {
+  const v = toolView(tool({ kind: "advisor", output: "Ship it.\nOne caveat: watch the cache." }));
+  assert.equal(v.headline, "Ship it.");
+});
+
+test("toolView: advisor with no output yet falls back to arg for the headline", () => {
+  const v = toolView(tool({ kind: "advisor", arg: "consulting…" }));
+  assert.equal(v.headline, "consulting…");
   assert.equal(v.body.kind, "raw");
 });
 

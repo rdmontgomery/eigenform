@@ -33,10 +33,6 @@
  * The drawer remounts per session switch (shell's syncDrawer), so state loads
  * once in mountDrawer — no cross-session swap logic needed here.
  *
- * Quick actions (header row):
- *   - interrupt: sends ^C to the active tab's pty via a shell-injected callback.
- *   - copy: copies a plain-text rendering of the transcript to the clipboard.
- *
  * Data flow:
  *   1. On open: fetchSession(uuid) → initial render
  *   2. subscribeWatch(uuid) → re-fetch + re-render on each write, via the shared
@@ -115,10 +111,8 @@ export interface DrawerHandle {
   close(): void;
 }
 
-/** Shell-injected quick actions. Buttons render only for provided callbacks. */
+/** Shell-injected quick actions. */
 export interface DrawerActions {
-  /** Send an interrupt (^C) to the session's pty. */
-  interrupt?: () => void;
   /** Subscribe to /api/watch for live updates. Defaults to true. Set false for a
    *  static snapshot (e.g. the forest preview float, which re-fetches on focus
    *  rather than tailing). */
@@ -159,22 +153,8 @@ export function mountDrawer(
   expandAllBtn.append(expandAllCount);
   header.append(headerTitle, expandAllBtn);
 
-  const actionsRow = el("div", "drawer-actions");
-  if (actions.interrupt) {
-    const stopBtn = el("button", "drawer-action drawer-action--danger");
-    stopBtn.title = "Interrupt (send ^C)";
-    stopBtn.append(icon("stop", 13));
-    stopBtn.addEventListener("click", () => actions.interrupt!());
-    actionsRow.append(stopBtn);
-  }
-  const copyBtn = el("button", "drawer-action");
-  copyBtn.title = "Copy transcript";
-  copyBtn.append(icon("copy", 13));
-  copyBtn.addEventListener("click", () => void copyTranscript(copyBtn));
-  actionsRow.append(copyBtn);
-
   const body = el("div", "drawer-body scroll");
-  panel.append(header, actionsRow, body);
+  panel.append(header, body);
   hostEl.append(panel);
 
   // ------------------------------------------------------------------
@@ -458,31 +438,32 @@ export function mountDrawer(
     }
     head.append(toggleBtn(collapsed, () => toggleCard(`a:${group.turnNumber}`, collapsed)));
 
-    const tools = group.toolExchanges.map((ex) => ex.tool!).filter(Boolean);
-
-    const textEl = el("p", "turn-text");
-    textEl.textContent = collapsed
-      ? (group.assistantText || toolsSummary(tools))
-      : (group.assistantText || "");
-    if (collapsed) {
-      textEl.addEventListener("click", () => toggleCard(`a:${group.turnNumber}`, true));
-    }
-
     card.append(head);
     if (collapsed) {
+      const tools = group.toolExchanges.map((ex) => ex.tool!).filter(Boolean);
+      const textEl = el("p", "turn-text");
+      textEl.textContent = group.assistantText || toolsSummary(tools);
+      textEl.addEventListener("click", () => toggleCard(`a:${group.turnNumber}`, true));
       card.append(textEl);
       return card;
     }
 
-    if (group.assistantText) card.append(textEl);
-
-    if (group.toolExchanges.length > 0) {
-      const list = el("div");
-      list.style.marginTop = group.assistantText ? "9px" : "0";
-      group.toolExchanges.forEach((ex, i) => {
-        list.append(renderToolCall(ex.tool!, group, i));
-      });
-      card.append(list);
+    // Render narration and tool calls interleaved in true wire order — a text
+    // item sits next to the tool call it actually preceded, rather than all
+    // narration first and every tool call listed after it.
+    let seenAny = false;
+    for (const item of group.items) {
+      if (item.kind === "text") {
+        const p = el("p", "turn-text");
+        p.textContent = item.text;
+        if (seenAny) p.style.marginTop = "9px";
+        card.append(p);
+      } else {
+        const call = renderToolCall(item.exchange.tool!, group, item.toolIndex);
+        if (seenAny) call.style.marginTop = "9px";
+        card.append(call);
+      }
+      seenAny = true;
     }
 
     if (group.systemText) {
@@ -529,6 +510,11 @@ export function mountDrawer(
     } else if (view.accessory?.kind === "count") {
       const acc = el("span", "tool-acc tool-acc--count");
       acc.textContent = String(view.accessory.n);
+      side.append(acc);
+    } else if (view.accessory?.kind === "subagent") {
+      const acc = el("span", "tool-acc tool-acc--subagent");
+      const n = view.accessory.turns;
+      acc.textContent = `${n} turn${n === 1 ? "" : "s"}`;
       side.append(acc);
     }
     if (group.toolExchanges.length > 1) {
@@ -837,32 +823,6 @@ export function mountDrawer(
         void confirm();
       }
     });
-  }
-
-  // ------------------------------------------------------------------
-  // Copy transcript — plain-text rendering of the current groups
-  // ------------------------------------------------------------------
-
-  async function copyTranscript(btn: HTMLButtonElement) {
-    const parts: string[] = [];
-    for (const g of currentGroups) {
-      if (g.isLeaf) continue;
-      if (g.userText) parts.push(`## turn ${g.turnNumber} — user\n${g.userText}`);
-      if (g.assistantText) parts.push(`assistant:\n${g.assistantText}`);
-      for (const ex of g.toolExchanges) {
-        if (ex.tool) {
-          const v = toolView(ex.tool);
-          parts.push(`[${v.verb}] ${v.headline}`);
-        }
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(parts.join("\n\n"));
-      btn.classList.add("drawer-action--flash");
-      setTimeout(() => btn.classList.remove("drawer-action--flash"), 900);
-    } catch {
-      // Clipboard unavailable (permissions / non-secure context) — no-op.
-    }
   }
 
   // ------------------------------------------------------------------
