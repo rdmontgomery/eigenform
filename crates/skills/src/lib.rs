@@ -264,19 +264,93 @@ pub fn all_projects_roots(home: &Path, project_cwds: &[PathBuf]) -> Vec<(Layer, 
     shared
 }
 
-/// Render a layered scan as a text tree: skills grouped by name (alphabetic),
-/// contributions listed in precedence order, with a `WINS` marker on any
-/// name that has more than one contribution.
-pub fn render_tree(scan: &[LayeredSkill]) -> String {
-    let mut out = String::from("SKILLS\n======\n\n");
-    if scan.is_empty() {
-        out.push_str("(no skills found)\n");
-        return out;
+/// Presentation options for [`render_tree`].
+#[derive(Debug, Default, Clone)]
+pub struct RenderOpts {
+    /// Maximum line width; lines are truncated/elided to fit, never wrapped.
+    /// `0` means "no limit".
+    pub width: usize,
+    /// When set, paths under this prefix render as `~/…`.
+    pub home: Option<PathBuf>,
+    /// Extra context prepended to the summary line (e.g. `41 projects`).
+    pub note: Option<String>,
+}
+
+impl RenderOpts {
+    fn width_or_max(&self) -> usize {
+        if self.width == 0 { usize::MAX } else { self.width }
     }
+}
+
+/// Truncate `s` to at most `width` display chars, ending in `…` when cut.
+/// Whitespace is collapsed first so multi-line descriptions read as one line.
+pub fn truncate_line(s: &str, width: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= width {
+        return flat;
+    }
+    let kept: String = flat.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
+/// Shorten a path for display: the home prefix becomes `~`, and if the result
+/// still exceeds `max` chars it is left-elided (`…/tail/kept/whole`) — the tail
+/// is what distinguishes one skill file from another.
+fn display_path(path: &Path, home: Option<&Path>, max: usize) -> String {
+    let mut s = path.display().to_string();
+    if let Some(home) = home {
+        if let Ok(rest) = path.strip_prefix(home) {
+            s = format!("~/{}", rest.display());
+        }
+    }
+    if s.chars().count() <= max {
+        return s;
+    }
+    // Keep the last `max - 1` chars, then snap forward to a path boundary.
+    let chars: Vec<char> = s.chars().collect();
+    let start = chars.len().saturating_sub(max.saturating_sub(1));
+    let tail: String = chars[start..].iter().collect();
+    let snapped = tail.split_once('/').map(|(_, rest)| rest.to_string()).unwrap_or(tail);
+    format!("…/{snapped}")
+}
+
+/// Render a layered scan as text: a summary line, then skills grouped by name
+/// (alphabetic), each a name header (tokens + resolution note), a one-line
+/// truncated description, and its source path(s). Multi-source names list one
+/// aligned `layer  tokens  path` row per contribution; shadowing is called out
+/// as `<layer> wins` on the header. Lines fit `opts.width`; nothing wraps.
+pub fn render_tree(scan: &[LayeredSkill], opts: &RenderOpts) -> String {
+    let width = opts.width_or_max();
+    let home = opts.home.as_deref();
+    let mut out = String::new();
+
     let mut groups: BTreeMap<&str, Vec<&LayeredSkill>> = BTreeMap::new();
     for ls in scan {
         groups.entry(ls.skill.name.as_str()).or_default().push(ls);
     }
+
+    // Summary: `<note> · N skills · M sources · ~T tok` (sources only when it
+    // differs from the name count; note only when the caller supplied one).
+    let mut summary = Vec::new();
+    if let Some(note) = &opts.note {
+        summary.push(note.clone());
+    }
+    summary.push(format!("{} skill{}", groups.len(), if groups.len() == 1 { "" } else { "s" }));
+    if scan.len() != groups.len() {
+        summary.push(format!("{} sources", scan.len()));
+    }
+    if scan.is_empty() {
+        summary.push("none found".to_string());
+    } else {
+        let total: usize = scan.iter().map(|ls| ls.skill.tokens).sum();
+        summary.push(fmt_tokens(total));
+    }
+    let _ = writeln!(out, "{}", summary.join(" · "));
+    if scan.is_empty() {
+        return out;
+    }
+    out.push('\n');
+
     for (name, contribs) in &groups {
         let non_plugin: Vec<&&LayeredSkill> = contribs
             .iter()
@@ -284,37 +358,47 @@ pub fn render_tree(scan: &[LayeredSkill]) -> String {
             .collect();
         let plugin_count = contribs.len() - non_plugin.len();
         // Plugins are namespaced (`plugin:<plug>:<skill>`) — multiple plugin
-        // contributions to the same name coexist, they don't shadow.
+        // contributions to the same name coexist, they don't shadow. Real
+        // shadowing only happens between bare-name (non-plugin) contributions.
         let namespaced = non_plugin.is_empty() && plugin_count > 1;
         let group_tokens: usize = contribs.iter().map(|ls| ls.skill.tokens).sum();
-        if namespaced {
-            let _ = writeln!(out, "{name}  (namespaced)  {}", fmt_tokens(group_tokens));
+
+        // Header: name, total tokens, and how the name resolves.
+        let note = if contribs.len() == 1 {
+            layer_tag(&contribs[0].layer)
+        } else if namespaced {
+            format!("namespaced · {} plugins", plugin_count)
+        } else if non_plugin.len() > 1 {
+            format!("{} wins", layer_tag(&non_plugin.last().unwrap().layer))
         } else {
-            let _ = writeln!(out, "{name}  {}", fmt_tokens(group_tokens));
-        }
-        // One description line under the name (the winning contribution's, or the
-        // sole one). Descriptions are why a reader can tell skills apart at a glance.
+            format!("{} sources", contribs.len())
+        };
+        let _ = writeln!(out, "{name}  {} · {note}", fmt_tokens(group_tokens));
+
+        // One description line under the name (the winning contribution's, or
+        // the sole one) — why a reader can tell skills apart at a glance.
         if let Some(desc) = contribs.last().map(|ls| ls.skill.description.as_str()) {
             if !desc.is_empty() {
-                let _ = writeln!(out, "  {desc}");
+                let _ = writeln!(out, "  {}", truncate_line(desc, width.saturating_sub(2)));
             }
         }
-        for ls in contribs {
-            let _ = writeln!(
-                out,
-                "  [{}]  {}  {}",
-                layer_tag(&ls.layer),
-                fmt_tokens(ls.skill.tokens),
-                ls.skill.source_path.display()
-            );
+
+        if contribs.len() == 1 {
+            // Sole source: the layer is already on the header, tokens equal the
+            // total — only the path carries new information.
+            let path = display_path(&contribs[0].skill.source_path, home, width.saturating_sub(2));
+            let _ = writeln!(out, "  {path}");
+        } else {
+            let tag_w = contribs.iter().map(|ls| layer_tag(&ls.layer).chars().count()).max().unwrap_or(0);
+            let tok_w = contribs.iter().map(|ls| fmt_tokens(ls.skill.tokens).chars().count()).max().unwrap_or(0);
+            for ls in contribs {
+                let tag = layer_tag(&ls.layer);
+                let tok = fmt_tokens(ls.skill.tokens);
+                let path_max = width.saturating_sub(2 + tag_w + 2 + tok_w + 2);
+                let path = display_path(&ls.skill.source_path, home, path_max);
+                let _ = writeln!(out, "  {tag:<tag_w$}  {tok:<tok_w$}  {path}");
+            }
         }
-        // Real shadowing only happens between non-namespaced (bare-name)
-        // contributions: bundled, global, repo, cwd.
-        if non_plugin.len() > 1 {
-            let winner = non_plugin.last().unwrap();
-            let _ = writeln!(out, "  -> WINS: [{}]", layer_tag(&winner.layer));
-        }
-        out.push('\n');
     }
     out
 }
