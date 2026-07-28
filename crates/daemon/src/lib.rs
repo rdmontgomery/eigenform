@@ -1006,8 +1006,13 @@ struct PtyQuery {
     session: Option<String>,
     /// Start a fresh session: spawn `claude` in this cwd. Takes precedence over `session`.
     new: Option<String>,
-    /// When `new` is set, `create=1` tells the daemon to `fs::create_dir_all` the cwd
-    /// before spawning. Only allowed when the path is under `config.workspace_root`;
+    /// Open a plain terminal in this cwd: the daemon's configured program (a shell), not
+    /// `claude`. No JSONL watch — a terminal tab has no transcript, so nothing ever calls
+    /// `set_uuid`; the drawer/reach map/rail Links section just show their empty state.
+    /// Also takes precedence over `session`, same tier as `new`.
+    term: Option<String>,
+    /// When `new` or `term` is set, `create=1` tells the daemon to `fs::create_dir_all` the
+    /// cwd before spawning. Only allowed when the path is under `config.workspace_root`;
     /// outside paths close the socket with a POLICY frame.
     ///
     /// Wire form: `&create=1` (non-zero = true, `0` or absent = false).
@@ -1049,13 +1054,14 @@ async fn pty_ws(
     // Otherwise spawn-and-register through the host (uniform model: even bare `/pty`
     // registers a pty that outlives this socket).
 
-    // `new=<cwd>` directory policy (full-freedom + confirm; the launcher gates `create=1`
-    // behind a user "Create <path>?" prompt, and `origin_is_local` above is the CSRF guard).
+    // `new=<cwd>` / `term=<cwd>` directory policy (full-freedom + confirm; the launcher
+    // gates `create=1` behind a user "Create <path>?" prompt, and `origin_is_local` above
+    // is the CSRF guard).
     //   - create=1 + missing → mkdir_all it (anywhere), then spawn.
-    //   - create=0 + missing → refuse: don't spawn claude in a cwd that isn't there.
+    //   - create=0 + missing → refuse: don't spawn claude (or a shell) in a missing cwd.
     //   - existing dir        → spawn as-is, no mkdir, regardless of the create flag.
     // Resolved here (before on_upgrade) so a rejection closes the socket with a clear reason.
-    if let Some(cwd_str) = query.new.as_deref() {
+    if let Some(cwd_str) = query.new.as_deref().or(query.term.as_deref()) {
         let dir = normalize_path(&expand_tilde(cwd_str));
         let exists = dir.is_dir();
         if !exists {
@@ -1222,8 +1228,9 @@ async fn pty_delete_route(
 
 /// Resolve which command a pty connection should run, spawning nothing.
 /// - `new=<cwd>` → `claude` in that dir (fresh session); watch for its new JSONL.
+/// - `term=<cwd>` → the configured program (a shell), never claude; no watch, no transcript.
 /// - `session=<uuid>` → `claude --resume <full-uuid>` in that session's cwd.
-/// - neither → the configured default (a shell in dev, a dummy in tests).
+/// - none of the above → the configured default (a shell in dev, a dummy in tests).
 fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
     if let (Some(cwd), Some(projects)) = (&query.new, &cfg.projects_dir) {
         // Expand ~ first: the browser sends the path literally (no shell), and both the
@@ -1235,6 +1242,14 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
             args: vec![],
             cwd: Some(expanded),
             watch: Some((projects.clone(), escaped)),
+        };
+    }
+    if let Some(cwd) = &query.term {
+        return PtyCommand {
+            program: cfg.program.clone(),
+            args: cfg.args.clone(),
+            cwd: Some(expand_tilde(cwd)),
+            watch: None,
         };
     }
     if let (Some(uuid), Some(dir)) = (&query.session, &cfg.projects_dir) {
@@ -1804,25 +1819,49 @@ mod tests {
 
         let resumed = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, create: 0 },
+            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, term: None, create: 0 },
         );
         assert_eq!(resumed.program, "claude");
         assert_eq!(resumed.args, vec!["--resume".to_string(), uuid.to_string()]);
         assert_eq!(resumed.cwd.as_deref(), Some(std::path::Path::new("/home/me/proj")));
 
         // No session → the configured default, never claude.
-        let default = pty_command(&cfg, &PtyQuery { attach: None, session: None, new: None, create: 0 });
+        let default = pty_command(&cfg, &PtyQuery { attach: None, session: None, new: None, term: None, create: 0 });
         assert_eq!(default.program, "bash");
 
         // new=<cwd> → fresh claude in that dir, with a watch target for its new JSONL.
         let fresh = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: None, new: Some("/home/me/fresh".into()), create: 0 },
+            &PtyQuery { attach: None, session: None, new: Some("/home/me/fresh".into()), term: None, create: 0 },
         );
         assert_eq!(fresh.program, "claude");
         assert!(fresh.args.is_empty());
         assert_eq!(fresh.cwd.as_deref(), Some(std::path::Path::new("/home/me/fresh")));
         assert_eq!(fresh.watch.as_ref().map(|(_, d)| d.as_str()), Some("-home-me-fresh"));
+
+        // term=<cwd> → the configured program (a shell), never claude, no watch.
+        let term = pty_command(
+            &cfg,
+            &PtyQuery { attach: None, session: None, new: None, term: Some("/home/me/term".into()), create: 0 },
+        );
+        assert_eq!(term.program, "bash");
+        assert!(term.args.is_empty());
+        assert_eq!(term.cwd.as_deref(), Some(std::path::Path::new("/home/me/term")));
+        assert!(term.watch.is_none());
+
+        // new= takes precedence over term= if a caller somehow sets both.
+        let both = pty_command(
+            &cfg,
+            &PtyQuery {
+                attach: None,
+                session: None,
+                new: Some("/home/me/fresh".into()),
+                term: Some("/home/me/term".into()),
+                create: 0,
+            },
+        );
+        assert_eq!(both.program, "claude");
+        assert_eq!(both.cwd.as_deref(), Some(std::path::Path::new("/home/me/fresh")));
     }
 
     #[test]
@@ -1875,7 +1914,7 @@ mod tests {
         // The vanished-cwd resume still resolves to claude --resume in the recorded cwd...
         let vanished = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, create: 0 },
+            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, term: None, create: 0 },
         );
         assert_eq!(
             vanished.cwd.as_deref(),
@@ -1890,7 +1929,7 @@ mod tests {
         // A resume whose cwd is still present is NOT flagged — it spawns normally.
         let present = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: Some("abcdef01".into()), new: None, create: 0 },
+            &PtyQuery { attach: None, session: Some("abcdef01".into()), new: None, term: None, create: 0 },
         );
         assert_eq!(present.cwd.as_deref(), Some(live_cwd.as_path()));
         assert!(

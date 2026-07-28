@@ -712,17 +712,21 @@ export function mountShell(appEl: HTMLElement): void {
       drawerCurrent = null;
       reachRegion.style.display = "none";
       dockVsplit.style.display = "none";
-      if (!dockPlaceholder) {
-        dockPlaceholder = el("div", "drawer");
-        const head = el("div", "drawer-header");
-        const title = el("span", "drawer-title");
-        title.textContent = "Transcript";
-        head.append(title);
-        const empty = el("div", "drawer-empty");
-        empty.textContent = "no transcript yet — waiting for a session uuid";
-        dockPlaceholder.append(head, empty);
-        transcriptRegion.append(dockPlaceholder);
-      }
+      // Rebuilt (not reused) each time: the message depends on the active tab's
+      // kind, which can change between calls (switching from a claude tab whose
+      // uuid hasn't resolved yet to a plain terminal tab, or vice versa).
+      dockPlaceholder?.remove();
+      dockPlaceholder = el("div", "drawer");
+      const head = el("div", "drawer-header");
+      const title = el("span", "drawer-title");
+      title.textContent = "Transcript";
+      head.append(title);
+      const empty = el("div", "drawer-empty");
+      empty.textContent = activeTab()?.descriptor.kind === "terminal"
+        ? "plain terminal — no transcript for this tab"
+        : "no transcript yet — waiting for a session uuid";
+      dockPlaceholder.append(head, empty);
+      transcriptRegion.append(dockPlaceholder);
     }
     renderControls();
   }
@@ -1170,7 +1174,14 @@ export function mountShell(appEl: HTMLElement): void {
         closeTab(t.id);
       });
 
-      tab.append(badge, labelEl, kill, close);
+      tab.append(badge);
+      if (t.descriptor.kind === "terminal") {
+        const termIco = el("span", "tab-kind-ico");
+        termIco.title = "Plain terminal — no transcript";
+        termIco.append(icon("terminal", 11, 2));
+        tab.append(termIco);
+      }
+      tab.append(labelEl, kill, close);
       tab.addEventListener("click", () => activateTab(t.id));
       tabStrip.append(tab);
     }
@@ -1469,12 +1480,13 @@ export function mountShell(appEl: HTMLElement): void {
       document.body,
       anchorEl,
       {
-        onPick({ path, create }) {
+        onPick({ path, create, kind }) {
           pickerTeardown = null;
+          const param = kind === "terminal" ? "term" : "new";
           const query = create
-            ? `?new=${encodeURIComponent(path)}&create=1`
-            : `?new=${encodeURIComponent(path)}`;
-          openTabWithQuery(query, { label: basename(path), cwd: path });
+            ? `?${param}=${encodeURIComponent(path)}&create=1`
+            : `?${param}=${encodeURIComponent(path)}`;
+          openTabWithQuery(query, { label: basename(path), cwd: path, kind });
         },
         onDismiss() {
           pickerTeardown = null;

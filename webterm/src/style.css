@@ -639,6 +639,12 @@ button { font: inherit; color: inherit; }
 
 .tab .dot { width: 6px; height: 6px; }
 
+.tab-kind-ico {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--tx-faint);
+}
+
 .tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1147,6 +1153,16 @@ button { font: inherit; color: inherit; }
   color: var(--tx-3);
   font-size: 12px;
   word-break: break-all;
+}
+
+/* Persistent footer — the claude-vs-terminal modifier key is otherwise undiscoverable. */
+.picker-hint-bar {
+  flex-shrink: 0;
+  padding: 6px 11px;
+  border-top: 1px solid var(--line);
+  color: var(--tx-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 /* ── Transcript drawer ──────────────────────────────────────────────────── */

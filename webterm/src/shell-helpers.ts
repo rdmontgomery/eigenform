@@ -168,6 +168,14 @@ export interface TabDescriptor {
   /** Full cwd path when known — drives the terminal-header breadcrumb. */
   cwd?: string;
   /**
+   * "claude" (default, absent for every pre-existing saved tab) spawns a Claude
+   * Code session. "terminal" spawns a plain shell — it never gets a `uuid` (no
+   * JSONL), so it can't be resumed after a reload (see reconcileTabs: no ptyId
+   * live + no uuid → dropped), and the drawer/reach map/rail Links section stay
+   * on their empty state for the tab's whole life.
+   */
+  kind?: "claude" | "terminal";
+  /**
    * A staged prompt to type into the resumed pty ONCE, without submitting (no
    * trailing newline). Set for auto-staged Fable retries. Deliberately transient:
    * never persisted to localStorage (see saveTabs) and cleared after the first
