@@ -40,6 +40,7 @@ import type { PtyInfo, ForestItem } from "./types.ts";
 import {
   relativeRecency,
   reconcileTabs,
+  reorderTabs,
   reconnectQuery,
   reconnectDelay,
   ageGroup,
@@ -329,6 +330,24 @@ export function mountShell(appEl: HTMLElement): void {
   railBtnIcon.style.transform = "scaleX(-1)"; // left-panel reading of the icon
   railBtn.append(railBtnIcon);
   const tabStrip = el("div", "tab-strip");
+  // Drop on the strip's empty background (past the last tab) — append the
+  // dragged tab at the end. Per-tab drop handlers (in renderTabStrip) target
+  // e.target === a .tab element, so this only fires on the bare strip.
+  tabStrip.addEventListener("dragover", (e) => {
+    if (!dragTabId || e.target !== tabStrip) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  });
+  tabStrip.addEventListener("drop", (e) => {
+    if (e.target !== tabStrip) return;
+    e.preventDefault();
+    const draggedId = dragTabId;
+    dragTabId = null;
+    if (!draggedId) return;
+    applyTabOrder(reorderTabs(tabs.map((x) => x.id), draggedId, null, false));
+    saveTabs();
+    renderTabStrip();
+  });
   const controls = el("div", "topbar-controls");
   topbar.append(railBtn, tabStrip, controls);
 
@@ -459,6 +478,8 @@ export function mountShell(appEl: HTMLElement): void {
   // ------------------------------------------------------------------
   const tabs: TabEntry[] = [];
   let activeTabId: string | null = null;
+  /** Id of the tab currently being drag-reordered, or null when idle. */
+  let dragTabId: string | null = null;
 
   // Auto-recover state (see downgrade.ts + the forest poll below).
   // lastInputAt: epoch ms of the user's last keystroke into the ACTIVE tab —
@@ -480,6 +501,16 @@ export function mountShell(appEl: HTMLElement): void {
       return persisted;
     });
     localStorage.setItem(LS_KEY, JSON.stringify(descriptors));
+  }
+
+  /** Rearrange `tabs` in place to match `order` (a permutation of tab ids). */
+  function applyTabOrder(order: string[]) {
+    const byId = new Map(tabs.map((t) => [t.id, t] as const));
+    tabs.length = 0;
+    for (const id of order) {
+      const t = byId.get(id);
+      if (t) tabs.push(t);
+    }
   }
 
   function activateTab(id: string) {
@@ -967,6 +998,50 @@ export function mountShell(appEl: HTMLElement): void {
         );
       }
       if (t.dead) tab.classList.add("tab--dead");
+
+      // Drag-to-reorder: native HTML5 DnD, no library. The dragged tab's id
+      // rides in dragTabId (closure state) rather than dataTransfer alone,
+      // since dataTransfer.getData is unreadable during dragover in some
+      // browsers — we only need it for the drop itself.
+      tab.draggable = true;
+      tab.addEventListener("dragstart", (e) => {
+        dragTabId = t.id;
+        tab.classList.add("tab--dragging");
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", t.id);
+        }
+      });
+      tab.addEventListener("dragend", () => {
+        dragTabId = null;
+        tab.classList.remove("tab--dragging");
+        for (const el of tabStrip.querySelectorAll(".tab--drag-before, .tab--drag-after")) {
+          el.classList.remove("tab--drag-before", "tab--drag-after");
+        }
+      });
+      tab.addEventListener("dragover", (e) => {
+        if (!dragTabId || dragTabId === t.id) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        const rect = tab.getBoundingClientRect();
+        const before = e.clientX - rect.left < rect.width / 2;
+        tab.classList.toggle("tab--drag-before", before);
+        tab.classList.toggle("tab--drag-after", !before);
+      });
+      tab.addEventListener("dragleave", () => {
+        tab.classList.remove("tab--drag-before", "tab--drag-after");
+      });
+      tab.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const before = tab.classList.contains("tab--drag-before");
+        tab.classList.remove("tab--drag-before", "tab--drag-after");
+        const draggedId = dragTabId;
+        dragTabId = null;
+        if (!draggedId) return;
+        applyTabOrder(reorderTabs(tabs.map((x) => x.id), draggedId, t.id, before));
+        saveTabs();
+        renderTabStrip();
+      });
 
       // Tabs are always eigenform-spawned (you can only open a tab on an
       // attachable pty); a dead/exited pty has no live process.

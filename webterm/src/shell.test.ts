@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   relativeRecency,
   reconcileTabs,
+  reorderTabs,
   reconnectQuery,
   reconnectDelay,
   RECONNECT_BASE_MS,
@@ -365,6 +366,50 @@ test("reconcileTabs: tab with uuid only and matching pty exists → attach using
   const actions = reconcileTabs(saved, ptys);
   assert.equal(actions[0]!.action, "attach");
   assert.equal(actions[0]!.descriptor.ptyId, "99");
+});
+
+// ---------------------------------------------------------------------------
+// reorderTabs — drag-to-reorder the tab strip
+// ---------------------------------------------------------------------------
+
+test("reorderTabs: drop before target moves dragged id ahead of it", () => {
+  const ids = ["a", "b", "c", "d"];
+  assert.deepEqual(reorderTabs(ids, "d", "b", true), ["a", "d", "b", "c"]);
+});
+
+test("reorderTabs: drop after target moves dragged id behind it", () => {
+  const ids = ["a", "b", "c", "d"];
+  assert.deepEqual(reorderTabs(ids, "a", "c", false), ["b", "c", "a", "d"]);
+});
+
+test("reorderTabs: dragging leftward (before an earlier tab)", () => {
+  const ids = ["a", "b", "c", "d"];
+  assert.deepEqual(reorderTabs(ids, "c", "a", true), ["c", "a", "b", "d"]);
+});
+
+test("reorderTabs: targetId null appends the dragged id at the end", () => {
+  const ids = ["a", "b", "c"];
+  assert.deepEqual(reorderTabs(ids, "a", null, false), ["b", "c", "a"]);
+});
+
+test("reorderTabs: dragging onto itself is a no-op (same reference)", () => {
+  const ids = ["a", "b", "c"];
+  assert.equal(reorderTabs(ids, "b", "b", true), ids);
+});
+
+test("reorderTabs: unknown draggedId is a no-op (same reference)", () => {
+  const ids = ["a", "b", "c"];
+  assert.equal(reorderTabs(ids, "ghost", "a", true), ids);
+});
+
+test("reorderTabs: unknown targetId is a no-op (same reference)", () => {
+  const ids = ["a", "b", "c"];
+  assert.equal(reorderTabs(ids, "a", "ghost", true), ids);
+});
+
+test("reorderTabs: single-tab strip is unchanged", () => {
+  const ids = ["a"];
+  assert.deepEqual(reorderTabs(ids, "a", null, false), ["a"]);
 });
 
 // ---------------------------------------------------------------------------

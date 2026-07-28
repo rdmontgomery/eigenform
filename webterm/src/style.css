@@ -574,6 +574,10 @@ button { font: inherit; color: inherit; }
 }
 .tab--dead { opacity: 0.55; }
 
+.tab--dragging { opacity: 0.4; }
+.tab--drag-before { box-shadow: inset 2px 0 0 0 var(--accent); }
+.tab--drag-after { box-shadow: inset -2px 0 0 0 var(--accent); }
+
 .tab .dot { width: 6px; height: 6px; }
 
 .tab-label {
