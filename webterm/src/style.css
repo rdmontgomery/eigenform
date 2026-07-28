@@ -298,6 +298,65 @@ button { font: inherit; color: inherit; }
   color: var(--tx-faint);
 }
 
+/* Links — URLs mentioned in the active tab's chat. A fixed section below the
+   session list, not part of the scrolling roster (see rail-scroll above). */
+.rail-links {
+  flex: 0 0 auto;
+  max-height: 32%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+  min-height: 0;
+}
+.rail-links--empty { display: none; border: 0; }
+
+.rail-links-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 6px;
+  width: 100%;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.rail-links-header:hover .rail-group-label { color: var(--tx-2); }
+.rail-links-header:hover .rail-group-caret { color: var(--tx-3); }
+.rail-links-header--folded .rail-group-caret { transform: rotate(0deg); }
+
+.rail-links-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding: 0 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rail-link-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  color: var(--tx-2);
+  text-decoration: none;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.rail-link-row:hover { background: var(--raised-2); color: var(--tx); }
+.rail-link-row svg { flex-shrink: 0; color: var(--tx-faint); }
+.rail-link-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .rail-row {
   position: relative;
   width: 100%;

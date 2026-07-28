@@ -69,6 +69,10 @@ import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { icon } from "./icons.ts";
 import { openInspect } from "./inspect.ts";
+import { subscribeWatch } from "./watch.ts";
+import { extractUrls } from "./links.ts";
+import type { LinkEntry } from "./links.ts";
+import type { Exchange } from "./turns.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -97,6 +101,7 @@ const LS_DOCK_W = "eigenform:term:drawer-w:v1";
 const LS_REACH_H = "eigenform:term:reach-h:v1";
 const LS_RAIL = "eigenform:term:rail:v1";
 const LS_GROUPS = "eigenform:term:rail-groups:v1";
+const LS_LINKS_FOLD = "eigenform:term:rail-links-fold:v1";
 const LS_FONT = "eigenform:term:font:v1";
 
 /** Terminal typefaces offered in the font popover. macOS-first: "System Mono"
@@ -319,8 +324,9 @@ export function mountShell(appEl: HTMLElement): void {
   railSearch.append(searchBox);
 
   const railScroll = el("div", "rail-scroll scroll");
+  const railLinks = el("div", "rail-links");
   const railFoot = el("div", "rail-foot");
-  rail.append(railBrand, railSearch, railScroll, railFoot);
+  rail.append(railBrand, railSearch, railScroll, railLinks, railFoot);
 
   // main column
   const main = el("div", "main");
@@ -632,6 +638,10 @@ export function mountShell(appEl: HTMLElement): void {
 
   /** Reconcile the mounted dock (reach + transcript) against (drawerOpen, tab). */
   function syncDock() {
+    // The rail's Links section tracks the active tab's uuid the same way the
+    // dock does, but it's a permanent sidebar fixture — not gated by drawerOpen.
+    syncLinks();
+
     const open = drawerOpen && tabs.length > 0;
     drawerDock.style.display = open ? "flex" : "none";
     dockResizer.style.display = open ? "" : "none";
@@ -715,6 +725,97 @@ export function mountShell(appEl: HTMLElement): void {
       }
     }
     renderControls();
+  }
+
+  // ------------------------------------------------------------------
+  // Rail "Links" — URLs mentioned in the active tab's chat. A permanent
+  // sidebar fixture (unlike the dock, it's always mounted): tracks the
+  // active tab's uuid via syncLinks() (called from syncDock, see above) and
+  // tails live updates through the same watch hub the drawer uses.
+  // ------------------------------------------------------------------
+
+  let linksCurrent: { uuid: string; unsubscribe: () => void } | null = null;
+  let currentLinkEntries: LinkEntry[] = [];
+  let linksFolded = localStorage.getItem(LS_LINKS_FOLD) === "1";
+
+  async function loadLinks(uuid: string) {
+    try {
+      const res = await fetch(`/api/session/${encodeURIComponent(uuid)}/json`);
+      if (!res.ok) return;
+      const payload = (await res.json()) as { exchanges: Exchange[] };
+      if (linksCurrent?.uuid !== uuid) return; // stale — tab switched mid-fetch
+      currentLinkEntries = extractUrls(payload.exchanges);
+      renderLinks();
+    } catch {
+      // Best-effort — the rail just shows no links.
+    }
+  }
+
+  /** Reconcile the Links section against the active tab's uuid. */
+  function syncLinks() {
+    const uuid = activeTab()?.descriptor.uuid ?? null;
+    if (linksCurrent?.uuid === uuid) return;
+    linksCurrent?.unsubscribe();
+    linksCurrent = null;
+    currentLinkEntries = [];
+    if (uuid) {
+      const unsubscribe = subscribeWatch(uuid, () => void loadLinks(uuid));
+      linksCurrent = { uuid, unsubscribe };
+      void loadLinks(uuid);
+    }
+    renderLinks();
+  }
+
+  /** Compact host + path label for a URL — full url lives in the title tooltip. */
+  function linkLabel(url: string): string {
+    try {
+      const u = new URL(url);
+      const rest = `${u.pathname}${u.search}${u.hash}`;
+      return rest && rest !== "/" ? `${u.hostname}${rest}` : u.hostname;
+    } catch {
+      return url;
+    }
+  }
+
+  function renderLinks() {
+    railLinks.innerHTML = "";
+    railLinks.classList.toggle("rail-links--empty", currentLinkEntries.length === 0);
+    if (currentLinkEntries.length === 0) return;
+
+    const header = el("button", `rail-links-header${linksFolded ? " rail-links-header--folded" : ""}`);
+    header.title = linksFolded ? "Show links" : "Hide links";
+    const caret = el("span", "rail-group-caret");
+    caret.append(icon("chevron", 11));
+    const label = el("span", "rail-group-label");
+    label.textContent = "LINKS";
+    const rule = el("span", "rail-group-rule");
+    const count = el("span", "rail-group-count");
+    count.textContent = String(currentLinkEntries.length);
+    header.append(caret, label, rule, count);
+    header.addEventListener("click", () => {
+      linksFolded = !linksFolded;
+      localStorage.setItem(LS_LINKS_FOLD, linksFolded ? "1" : "0");
+      renderLinks();
+    });
+    railLinks.append(header);
+    if (linksFolded) return;
+
+    const list = el("div", "rail-links-list");
+    // Most-recently-mentioned first — the newest link is the one you're likely
+    // looking for.
+    for (const entry of [...currentLinkEntries].reverse()) {
+      const row = el("a", "rail-link-row");
+      row.href = entry.url;
+      row.target = "_blank";
+      row.rel = "noopener noreferrer";
+      row.title = entry.url;
+      row.append(icon("globe", 12));
+      const text = el("span", "rail-link-label");
+      text.textContent = linkLabel(entry.url);
+      row.append(text);
+      list.append(row);
+    }
+    railLinks.append(list);
   }
 
   // ── Dock splitters ─────────────────────────────────────────────────────────
