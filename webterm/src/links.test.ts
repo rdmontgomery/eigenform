@@ -48,6 +48,67 @@ test("extractUrls: dedupes by URL, keeping the earliest turn", () => {
   assert.equal(got[0]!.role, "user");
 });
 
+test("extractUrls: dedupes http vs https as the same link", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "http://example.com/a" }),
+    ex({ n: 2, assistant: "https://example.com/a" }),
+  ]);
+  assert.equal(got.length, 1);
+  assert.equal(got[0]!.url, "http://example.com/a", "keeps the first-seen variant verbatim");
+  assert.equal(got[0]!.turnNumber, 1);
+});
+
+test("extractUrls: dedupes case-insensitive host", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "https://GitHub.com/foo/bar" }),
+    ex({ n: 2, assistant: "https://github.com/foo/bar" }),
+  ]);
+  assert.equal(got.length, 1);
+  assert.equal(got[0]!.url, "https://GitHub.com/foo/bar");
+});
+
+test("extractUrls: dedupes a trailing slash on the path", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "https://example.com/foo" }),
+    ex({ n: 2, assistant: "https://example.com/foo/" }),
+  ]);
+  assert.equal(got.length, 1);
+  assert.equal(got[0]!.url, "https://example.com/foo");
+});
+
+test("extractUrls: dedupes an explicit default port", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "https://example.com:443/foo" }),
+    ex({ n: 2, assistant: "https://example.com/foo" }),
+  ]);
+  assert.equal(got.length, 1);
+  assert.equal(got[0]!.url, "https://example.com:443/foo");
+});
+
+test("extractUrls: does NOT dedupe a root path's slash (nothing to strip)", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "https://example.com/" }),
+    ex({ n: 2, assistant: "https://example.com" }),
+  ]);
+  assert.equal(got.length, 1, "both normalize to the same empty/root path");
+});
+
+test("extractUrls: does NOT dedupe differing query strings", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "https://example.com/x?tab=a" }),
+    ex({ n: 2, assistant: "https://example.com/x?tab=b" }),
+  ]);
+  assert.equal(got.length, 2);
+});
+
+test("extractUrls: does NOT dedupe differing fragments", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "https://example.com/pull/22#issue-1" }),
+    ex({ n: 2, assistant: "https://example.com/pull/22#issuecomment-2" }),
+  ]);
+  assert.equal(got.length, 2);
+});
+
 test("extractUrls: preserves order of first appearance across exchanges", () => {
   const got = extractUrls([
     ex({ n: 1, user: "first https://a.example.com" }),
