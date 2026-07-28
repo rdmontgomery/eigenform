@@ -232,6 +232,41 @@ export function reconcileTabs(
 }
 
 /**
+ * Compute the new tab order after dragging `draggedId` next to `targetId`.
+ * Pure array reorder — drives the tab strip's drag-and-drop handlers in
+ * shell.ts, which resolve ids back to live TabEntry objects.
+ *
+ *   - targetId === null: drop past the last tab → move to the end.
+ *   - before: true inserts immediately before targetId, false immediately after.
+ *
+ * Returns `ids` unchanged (same reference) if draggedId is missing, equals
+ * targetId, or targetId isn't found.
+ */
+export function reorderTabs(
+  ids: string[],
+  draggedId: string,
+  targetId: string | null,
+  before: boolean,
+): string[] {
+  if (draggedId === targetId) return ids;
+  const fromIdx = ids.indexOf(draggedId);
+  if (fromIdx < 0) return ids;
+
+  const next = ids.slice();
+  next.splice(fromIdx, 1);
+
+  if (targetId === null) {
+    next.push(draggedId);
+    return next;
+  }
+  let insertAt = next.indexOf(targetId);
+  if (insertAt < 0) return ids;
+  if (!before) insertAt += 1;
+  next.splice(insertAt, 0, draggedId);
+  return next;
+}
+
+/**
  * Pick the `/pty` query that re-opens a single dropped socket, or null if the
  * tab is unrecoverable. This is the single-tab analogue of {@link reconcileTabs}:
  * the reconnect loop reconciles ONE descriptor against the freshly-fetched live
