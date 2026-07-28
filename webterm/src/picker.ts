@@ -53,6 +53,13 @@ export interface PickResult {
    * false → the directory already exists; no mkdir needed.
    */
   create: boolean;
+  /**
+   * "claude" (default, plain Enter) spawns a fresh Claude Code session in the
+   * directory. "terminal" (Shift+Enter, or Shift+click a row) spawns a plain
+   * shell instead — no transcript, so the drawer/reach map/rail Links section
+   * never populate for that tab.
+   */
+  kind: "claude" | "terminal";
 }
 
 export interface PickDecision {
@@ -151,6 +158,8 @@ export function mountPicker(
   // When set, the picker is showing a "Create <path>?" confirmation; Enter creates,
   // Esc returns to picking, and typing cancels back to the list.
   let pendingCreate: string | null = null;
+  /** The kind decided when the create-confirmation was raised (see PickResult.kind). */
+  let pendingCreateKind: "claude" | "terminal" = "claude";
 
   // ------------------------------------------------------------------
   // DOM structure
@@ -168,7 +177,11 @@ export function mountPicker(
   const list = document.createElement("div");
   list.className = "picker-list";
 
-  overlay.append(input, list);
+  const hintBar = document.createElement("div");
+  hintBar.className = "picker-hint-bar";
+  hintBar.textContent = "⏎ claude session   ⇧⏎ terminal";
+
+  overlay.append(input, list, hintBar);
 
   // Position overlay near anchor.
   positionOverlay(overlay, anchorEl);
@@ -207,7 +220,7 @@ export function mountPicker(
       const row = buildRow(cand);
       const idx = i; // capture for closure
       row.addEventListener("mouseenter", () => setHighlight(idx));
-      row.addEventListener("click", () => confirmCurrent());
+      row.addEventListener("click", (e) => confirmCurrent(e.shiftKey ? "terminal" : "claude"));
       list.append(row);
     }
   }
@@ -252,10 +265,11 @@ export function mountPicker(
     teardown();
   }
 
-  function confirmCurrent() {
-    // In confirmation mode, confirming means "yes, create it".
+  function confirmCurrent(kind: "claude" | "terminal" = "claude") {
+    // In confirmation mode, confirming means "yes, create it" — kind was already
+    // decided when the confirmation was raised (see showConfirm).
     if (pendingCreate !== null) {
-      finish({ path: pendingCreate, create: true });
+      finish({ path: pendingCreate, create: true, kind: pendingCreateKind });
       return;
     }
     const highlighted = highlightIdx >= 0 ? (filtered[highlightIdx] ?? null) : null;
@@ -263,23 +277,23 @@ export function mountPicker(
     if (!decision) return;
     if (decision.known) {
       // A known candidate exists — open it directly.
-      finish({ path: decision.path, create: false });
+      finish({ path: decision.path, create: false, kind });
       return;
     }
     // Typed/derived path: existence unknown. Ask the daemon, then open or confirm.
-    void probeAndAct(decision.path);
+    void probeAndAct(decision.path, kind);
   }
 
   /** Stat the path via the daemon, then open it (exists) or offer to create it (missing). */
-  async function probeAndAct(path: string) {
+  async function probeAndAct(path: string, kind: "claude" | "terminal") {
     const info = await probePath(path);
     if (info && info.isDir) {
-      finish({ path, create: false });
+      finish({ path, create: false, kind });
     } else if (info && info.exists) {
       showMessage(`${path} is a file, not a directory`);
     } else {
       // Missing — or the probe failed; either way, confirm before creating.
-      showConfirm(path);
+      showConfirm(path, kind);
     }
   }
 
@@ -294,15 +308,16 @@ export function mountPicker(
   }
 
   /** Swap the list for a "Create <path>?" confirmation panel (Enter creates, Esc cancels). */
-  function showConfirm(path: string) {
+  function showConfirm(path: string, kind: "claude" | "terminal") {
     pendingCreate = path;
+    pendingCreateKind = kind;
     highlightIdx = -1;
     list.innerHTML = "";
     const panel = document.createElement("div");
     panel.className = "picker-confirm";
     const q = document.createElement("div");
     q.className = "picker-confirm-q";
-    q.textContent = `Create ${path}?`;
+    q.textContent = kind === "terminal" ? `Create ${path} and open a terminal?` : `Create ${path}?`;
     const hint = document.createElement("div");
     hint.className = "picker-confirm-hint";
     hint.textContent = "⏎ create · esc cancel";
@@ -360,7 +375,7 @@ export function mountPicker(
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      confirmCurrent();
+      confirmCurrent(e.shiftKey ? "terminal" : "claude");
       return;
     }
   }
