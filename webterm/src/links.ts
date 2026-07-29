@@ -93,3 +93,50 @@ export function extractUrls(exchanges: Exchange[]): LinkEntry[] {
 
   return [...seen.values()];
 }
+
+/**
+ * Max characters in a rail link label. Long enough for a legible host+path in
+ * the rail's default width, short enough that most labels don't need
+ * truncating at all; the CSS `text-overflow: ellipsis` on `.rail-link-label`
+ * is a safety net for a narrower rail.
+ */
+const LABEL_MAX_CHARS = 36;
+
+/**
+ * Compact host + path label for a URL — the full url lives in the row's
+ * title tooltip. Truncates from the FRONT of the path, keeping whole trailing
+ * segments, so the part that usually differs between sibling links (a PR/issue
+ * number, a filename, a slug) stays visible. Sibling links sharing a long
+ * prefix (e.g. "github.com/owner/repo/pull/") would otherwise all display as
+ * the same truncated string under plain end-ellipsis, even though they point
+ * at different PRs.
+ */
+export function linkLabel(url: string): string {
+  let host: string;
+  let rest: string;
+  try {
+    const u = new URL(url);
+    host = u.hostname;
+    rest = u.pathname === "/" ? "" : `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return url;
+  }
+
+  const full = rest ? `${host}${rest}` : host;
+  if (full.length <= LABEL_MAX_CHARS) return full;
+  if (!rest) return `${full.slice(0, LABEL_MAX_CHARS - 1)}…`; // host alone is already over budget
+
+  const budget = LABEL_MAX_CHARS - host.length - 1; // -1 for the "…" marker
+  if (budget <= 0) return `${full.slice(0, LABEL_MAX_CHARS - 1)}…`;
+
+  // rest starts with "/", so segments[0] === "" — walk backwards from the end,
+  // keeping whole "/segment" chunks while they still fit the budget.
+  const segments = rest.split("/");
+  let kept = "";
+  for (let i = segments.length - 1; i >= 1; i--) {
+    const candidate = `/${segments[i]}${kept}`;
+    if (candidate.length > budget) break;
+    kept = candidate;
+  }
+  return kept ? `${host}…${kept}` : `${host}…${rest.slice(-budget)}`;
+}

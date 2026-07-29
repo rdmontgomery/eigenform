@@ -70,7 +70,7 @@ import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { icon } from "./icons.ts";
 import { openInspect } from "./inspect.ts";
 import { subscribeWatch } from "./watch.ts";
-import { extractUrls } from "./links.ts";
+import { extractUrls, linkLabel } from "./links.ts";
 import type { LinkEntry } from "./links.ts";
 import type { Exchange } from "./turns.ts";
 
@@ -768,17 +768,6 @@ export function mountShell(appEl: HTMLElement): void {
       void loadLinks(uuid);
     }
     renderLinks();
-  }
-
-  /** Compact host + path label for a URL — full url lives in the title tooltip. */
-  function linkLabel(url: string): string {
-    try {
-      const u = new URL(url);
-      const rest = `${u.pathname}${u.search}${u.hash}`;
-      return rest && rest !== "/" ? `${u.hostname}${rest}` : u.hostname;
-    } catch {
-      return url;
-    }
   }
 
   function renderLinks() {
