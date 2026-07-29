@@ -2,7 +2,7 @@
 // Run: `node --test` (native TS via --experimental-strip-types in Node 22+).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractUrls } from "./links.ts";
+import { extractUrls, linkLabel } from "./links.ts";
 import type { Exchange } from "./turns.ts";
 
 function ex(overrides: Partial<Exchange> & { n: number }): Exchange {
@@ -147,4 +147,53 @@ test("extractUrls: no exchanges → empty list", () => {
 test("extractUrls: no URLs present → empty list", () => {
   const got = extractUrls([ex({ n: 1, user: "no links at all" })]);
   assert.deepEqual(got, []);
+});
+
+// ---------------------------------------------------------------------------
+// linkLabel — rail display label, truncated to keep the differentiating tail
+// ---------------------------------------------------------------------------
+
+test("linkLabel: short host+path fits untouched", () => {
+  assert.equal(linkLabel("https://example.com/foo"), "example.com/foo");
+});
+
+test("linkLabel: bare host (root path) has no trailing slash", () => {
+  assert.equal(linkLabel("https://example.com/"), "example.com");
+  assert.equal(linkLabel("https://example.com"), "example.com");
+});
+
+test("linkLabel: sibling PR links stay distinguishable (the bug this fixes)", () => {
+  const labels = [22, 23, 24, 25].map((n) =>
+    linkLabel(`https://github.com/rdmontgomery/eigenform/pull/${n}`),
+  );
+  // All four must render to DIFFERENT strings — a shared long prefix
+  // ("github.com/rdmontgomery/eigenform/pull/") must not swallow the part
+  // that actually differs (the PR number).
+  assert.equal(new Set(labels).size, 4, `expected 4 distinct labels, got ${JSON.stringify(labels)}`);
+  for (const label of labels) {
+    assert.ok(label.length <= 36, `label too long: ${label}`);
+  }
+});
+
+test("linkLabel: truncates from the front, keeping whole trailing path segments", () => {
+  const label = linkLabel("https://github.com/rdmontgomery/eigenform/pull/22");
+  assert.equal(label, "github.com…/eigenform/pull/22");
+});
+
+test("linkLabel: preserves the host even when the path must truncate", () => {
+  const label = linkLabel("https://github.com/rdmontgomery/eigenform/pull/22");
+  assert.ok(label.startsWith("github.com"), `expected host kept, got ${label}`);
+});
+
+test("linkLabel: a single path segment longer than the whole budget falls back to raw tail", () => {
+  const url = `https://example.com/${"x".repeat(60)}`;
+  const label = linkLabel(url);
+  assert.ok(label.startsWith("example.com…"));
+  assert.ok(label.length <= 36);
+});
+
+test("linkLabel: query string and fragment count toward the path length", () => {
+  const label = linkLabel("https://example.com/pull/22?tab=files#issuecomment-99999999");
+  assert.equal(label, "example.com…es#issuecomment-99999999");
+  assert.ok(label.length <= 36);
 });
