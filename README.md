@@ -6,6 +6,8 @@ A control surface over Claude Code (and imported Claude Chat) that performs cont
 
 The binary is `eigenform`; alias it to taste (`alias ef=eigenform`). Dual-licensed [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE).
 
+![eigenform: a browser terminal with draggable session tabs, a rail of recent sessions with a Links section tracking URLs mentioned in chat, and a docked transcript + reach map](docs/img/app.png)
+
 ## The mulligan
 
 Sometimes the bigger model (Fable) decides a prompt is risky and quietly drops your live session to a smaller one, mid-conversation. Usually it's a false read — a benign security question, a dual-use tool, a CTF box — and the session just got dumber without asking you.
