@@ -22,8 +22,10 @@ export interface LinkEntry {
 
 const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
 // Punctuation a URL can trail into from surrounding prose ("see https://x.com.")
-// but a real URL practically never ends with.
-const TRAILING_PUNCT = /[.,;:!?)\]}'"]$/;
+// but a real URL practically never ends with. Includes the markdown emphasis
+// markers, so a bolded inline link — "**[docs](https://x.com/y)**" — doesn't
+// leave a ")**" tail glued to the extracted URL.
+const TRAILING_PUNCT = /[.,;:!?)\]}'"*~]$/;
 
 /** Strip prose punctuation trailing a matched URL, without eating a balanced ")". */
 function cleanUrl(raw: string): string {
