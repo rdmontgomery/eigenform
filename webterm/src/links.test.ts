@@ -31,6 +31,30 @@ test("extractUrls: strips trailing comma and parenthesis (unbalanced)", () => {
   assert.deepEqual(got.map((g) => g.url), ["https://example.com/a", "https://example.com/b"]);
 });
 
+test("extractUrls: strips markdown emphasis trailing an inline link", () => {
+  const got = extractUrls([
+    ex({ n: 1, assistant: "opened **[PR #7](https://github.com/o/r/pull/7)** just now" }),
+  ]);
+  assert.deepEqual(got.map((g) => g.url), ["https://github.com/o/r/pull/7"]);
+});
+
+test("extractUrls: strips markdown emphasis around a bare URL", () => {
+  const got = extractUrls([
+    ex({ n: 1, assistant: "see *https://example.com/a* and ~~https://example.com/b~~" }),
+  ]);
+  assert.deepEqual(got.map((g) => g.url), [
+    "https://example.com/a",
+    "https://example.com/b",
+  ]);
+});
+
+test("extractUrls: keeps a balanced paren inside an emphasized inline link", () => {
+  const got = extractUrls([
+    ex({ n: 1, assistant: "**[wiki](https://en.wikipedia.org/wiki/Foo_(bar))**" }),
+  ]);
+  assert.equal(got[0]!.url, "https://en.wikipedia.org/wiki/Foo_(bar)");
+});
+
 test("extractUrls: keeps a balanced closing paren that's part of the URL", () => {
   const got = extractUrls([
     ex({ n: 1, user: "wiki: https://en.wikipedia.org/wiki/Foo_(bar)" }),
