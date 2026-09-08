@@ -194,12 +194,17 @@ export type TabReconcileAction =
  * Reconcile saved tab descriptors against current live ptys.
  *
  * For each saved tab:
- *   - If saved.ptyId is live OR saved.uuid matches a live pty's uuid:
- *       action="attach" (live pty available); descriptor.ptyId is resolved.
- *   - Else if saved.uuid exists (pty died but session disk-resident):
- *       action="resume" (reconnect via ?session=uuid).
- *   - Else:
- *       action="drop" (no way to reopen).
+ *   - If saved.uuid matches a live pty's uuid → action="attach" to that pty's
+ *     (possibly renumbered) id. uuid identity is preferred over the saved ptyId
+ *     because pty ids are reassigned across a daemon restart — a stale ptyId can
+ *     now belong to a different session.
+ *   - Else if saved.uuid exists and the saved ptyId is still live AND not reused
+ *     for a conflicting session → action="attach" by that id (the boot window
+ *     before a live pty has reported its uuid).
+ *   - Else if saved.uuid exists (pty died or its id was reused) → action="resume"
+ *     (reconnect via ?session=uuid).
+ *   - Else if a uuid-less tab's saved ptyId is still live → action="attach".
+ *   - Else → action="drop" (no way to reopen).
  */
 export function reconcileTabs(
   saved: TabDescriptor[],
@@ -211,16 +216,12 @@ export function reconcileTabs(
   );
 
   return saved.map((desc): TabReconcileAction => {
-    // Live pty by id?
-    if (desc.ptyId && ptyById.has(desc.ptyId)) {
-      return {
-        action: "attach",
-        descriptor: { ...desc, ptyId: desc.ptyId },
-      };
-    }
-
     if (desc.uuid) {
-      // Live pty by uuid (ptyId may have changed after daemon restart)?
+      // A uuid'd session is identified by its uuid, NOT its saved ptyId: pty ids
+      // are reassigned across a daemon restart, so the saved ptyId may now belong
+      // to a *different* live session. Attaching by that stale id binds the
+      // terminal to session B while the drawer/reach map (which follow desc.uuid)
+      // stay on session A — the "wrong transcript" on the tab you're viewing.
       const liveByUuid = ptyByUuid.get(desc.uuid);
       if (liveByUuid) {
         return {
@@ -228,10 +229,31 @@ export function reconcileTabs(
           descriptor: { ...desc, ptyId: liveByUuid.id, uuid: desc.uuid },
         };
       }
-      // pty gone, but uuid means a disk session exists to resume.
+      // No live pty carries this uuid. Trust the saved ptyId only if it hasn't
+      // been reused for another session (its live uuid must not contradict ours);
+      // this covers the boot window before a live pty has reported its uuid.
+      if (desc.ptyId) {
+        const liveById = ptyById.get(desc.ptyId);
+        if (liveById && (liveById.uuid === null || liveById.uuid === desc.uuid)) {
+          return {
+            action: "attach",
+            descriptor: { ...desc, ptyId: desc.ptyId },
+          };
+        }
+      }
+      // pty gone (or its id was reused) — the disk session exists to resume.
       return {
         action: "resume",
         descriptor: { ...desc, uuid: desc.uuid },
+      };
+    }
+
+    // No uuid (ephemeral or plain-terminal tab): the live pty id is the only
+    // identity we have.
+    if (desc.ptyId && ptyById.has(desc.ptyId)) {
+      return {
+        action: "attach",
+        descriptor: { ...desc, ptyId: desc.ptyId },
       };
     }
 
