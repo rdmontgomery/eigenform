@@ -1093,6 +1093,24 @@ async fn pty_ws(
         }
     }
 
+    // Resume-resolution guard: a `session=<uuid>` that resolves to no on-disk session
+    // (no projects_dir configured, or an unknown uuid) would fall through `pty_command`
+    // to the default shell — silently launching a terminal instead of resuming Claude.
+    // Refuse up front with a clear reason so the client surfaces it rather than dropping
+    // the user into a bare prompt. Checked before pty_command so no shell is ever built.
+    if session_resume_unresolved(&state.config, &query) {
+        state.events.record(
+            "resume-refused",
+            serde_json::json!({
+                "reason": "session could not be resolved",
+                "session": query.session,
+            }),
+        );
+        return ws.on_upgrade(move |socket| async move {
+            let _ = close_with_reason(socket, "session could not be resolved").await;
+        });
+    }
+
     let command = pty_command(&state.config, &query);
 
     // Resume guard, mirroring the `new=` "no such directory" policy above: a session
@@ -1277,6 +1295,23 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
 /// Symlinks count as present (`is_dir` follows them), so a remapped project still resumes.
 fn resume_cwd_missing(command: &PtyCommand) -> bool {
     command.cwd.as_deref().is_some_and(|c| !c.is_dir())
+}
+
+/// True when a `session=<uuid>` resume can't be resolved to a real on-disk session:
+/// either no `projects_dir` is configured, or the uuid matches no session stub. Left
+/// unguarded, such a request falls through `pty_command` to the default shell — silently
+/// launching a plain terminal in place of the Claude session the user asked to resume
+/// (the symptom after a reinstall drops the projects_dir config). The caller refuses with
+/// a clear reason instead. Only meaningful when `query.session` is set; false otherwise,
+/// so `new=`/`term=`/bare `/pty` requests are never affected.
+fn session_resume_unresolved(cfg: &Config, query: &PtyQuery) -> bool {
+    let Some(uuid) = query.session.as_deref() else {
+        return false;
+    };
+    let Some(dir) = cfg.projects_dir.as_deref() else {
+        return true;
+    };
+    eigenform_forest::resolve_stub(dir, uuid).is_err()
 }
 
 /// Claude Code's project dir name for a cwd: `/` → `-` (e.g. `/home/me/p` → `-home-me-p`).
@@ -1936,6 +1971,55 @@ mod tests {
             !resume_cwd_missing(&present),
             "a resume whose cwd still exists must not be flagged"
         );
+    }
+
+    #[test]
+    fn unresolvable_session_resume_is_flagged_not_silently_shelled() {
+        // A session= resume that resolves to nothing must be refused, NOT fall through
+        // to a plain shell (the "old tabs came back as terminals after a reinstall" bug).
+        let dir = tempfile::tempdir().unwrap();
+        let pdir = dir.path().join("-home-me-proj");
+        std::fs::create_dir_all(&pdir).unwrap();
+        let known = "abcdef00-0000-4000-8000-000000000000";
+        std::fs::write(
+            pdir.join(format!("{known}.jsonl")),
+            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{known}"}}"#) + "\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            program: "bash".into(),
+            args: vec![],
+            cwd: None,
+            web_dir: None,
+            term_dir: None,
+            projects_dir: Some(dir.path().to_path_buf()),
+            sessions_dir: None,
+            state_dir: None,
+            workspace_root: None,
+            dev: false,
+            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
+            log_file: None,
+        };
+        let q = |session: Option<&str>| PtyQuery {
+            attach: None,
+            session: session.map(str::to_string),
+            new: None,
+            term: None,
+            create: 0,
+        };
+
+        // A uuid with no matching stub → unresolved → refuse.
+        assert!(session_resume_unresolved(&cfg, &q(Some("ffffffff"))));
+        // A resolvable uuid → not flagged; it resumes normally.
+        assert!(!session_resume_unresolved(&cfg, &q(Some("abcdef00"))));
+        // Non-resume requests are never flagged.
+        assert!(!session_resume_unresolved(&cfg, &q(None)));
+
+        // No projects_dir configured at all (e.g. a reinstall that lost the config):
+        // every resume is unresolvable, so it's refused rather than shelled.
+        let cfg_no_projects = Config { projects_dir: None, ..cfg };
+        assert!(session_resume_unresolved(&cfg_no_projects, &q(Some("abcdef00"))));
     }
 
     #[test]
