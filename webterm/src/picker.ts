@@ -183,9 +183,9 @@ export function mountPicker(
 
   overlay.append(input, list, hintBar);
 
-  // Position overlay near anchor.
-  positionOverlay(overlay, anchorEl);
+  // Append first so the overlay has a measurable width, then position it.
   container.append(overlay);
+  positionOverlay(overlay, anchorEl);
   input.focus();
 
   // ------------------------------------------------------------------
@@ -425,5 +425,15 @@ function positionOverlay(overlay: HTMLElement, anchor: HTMLElement) {
   const rect = anchor.getBoundingClientRect();
   overlay.style.position = "fixed";
   overlay.style.top = `${rect.bottom + 4}px`;
-  overlay.style.left = `${rect.left}px`;
+
+  // Right-justify to the window rather than left-aligning to the "+" button.
+  // With several tabs open the button sits far right, and a left-aligned
+  // overlay spills past the viewport edge — the options become unreadable.
+  // Anchoring the overlay's right edge to the window keeps every row on screen.
+  // The overlay width is fixed in CSS (.picker-overlay { width: 440px }); read
+  // it back so the math survives a stylesheet change, falling back to 440.
+  const MARGIN = 12;
+  const width = overlay.offsetWidth || 440;
+  const left = Math.max(MARGIN, window.innerWidth - width - MARGIN);
+  overlay.style.left = `${left}px`;
 }
