@@ -614,8 +614,14 @@ button { font: inherit; color: inherit; }
   padding: 0 8px 0 11px;
   cursor: pointer;
   user-select: none;
-  min-width: 0;
-  max-width: 230px;
+  /* Uniform, self-distributing tabs. flex-basis 0 makes every tab claim an
+     equal share of the strip, so widths stay even instead of tracking each
+     label's length; min-width keeps a tab readable before the strip scrolls,
+     max-width stops a lone tab from sprawling. The active tab gets more room
+     below so the label you're actually working in stays legible. */
+  flex: 1 1 0;
+  min-width: 108px;
+  max-width: 200px;
   background: transparent;
   border-right: 1px solid var(--line);
   border-top: 2px solid transparent;
@@ -630,6 +636,7 @@ button { font: inherit; color: inherit; }
   background: var(--term-bg);
   border-top-color: var(--tab-ink, var(--accent));
   color: oklch(0.91 0.018 75);   /* cream — the tab joins the dark page in both themes */
+  max-width: 260px;              /* give the tab in focus room to show its full label */
 }
 .tab--dead { opacity: 0.55; }
 
