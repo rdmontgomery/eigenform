@@ -255,6 +255,39 @@ test("reconcileTabs: attach wins over resume when ptyId still live (even if uuid
   assert.equal(actions[0]!.action, "attach");
 });
 
+test("reconcileTabs: resumes (not attach) when the saved ptyId was reused for a different session", () => {
+  // Daemon restarted and reassigned id "10" to an UNRELATED live session. The
+  // old code attached by id, binding the terminal to uuid-b while the transcript
+  // followed the saved uuid-a — the wrong-transcript bug. Now: match by uuid,
+  // find no live pty for uuid-a, refuse the reused id, and resume uuid-a.
+  const ptys: PtyInfo[] = [pty({ id: "10", uuid: "uuid-b" })];
+  const saved = [{ ptyId: "10", uuid: "uuid-a", label: "My tab" }];
+  const actions = reconcileTabs(saved, ptys);
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0]!.action, "resume");
+  assert.equal(actions[0]!.descriptor.uuid, "uuid-a");
+});
+
+test("reconcileTabs: attaches by renumbered id when uuid matches a live pty", () => {
+  // Daemon restart kept the session alive under a NEW id. Match on uuid and
+  // attach to the live id rather than resuming a duplicate.
+  const ptys: PtyInfo[] = [pty({ id: "42", uuid: "uuid-a" })];
+  const saved = [{ ptyId: "10", uuid: "uuid-a", label: "My tab" }];
+  const actions = reconcileTabs(saved, ptys);
+  assert.equal(actions[0]!.action, "attach");
+  assert.equal(actions[0]!.descriptor.ptyId, "42");
+});
+
+test("reconcileTabs: attaches by saved id when the live pty has no uuid yet", () => {
+  // Boot window: the pty is live under its saved id but hasn't reported its uuid.
+  // A null live uuid doesn't contradict the saved uuid, so attach by id.
+  const ptys: PtyInfo[] = [pty({ id: "10", uuid: null })];
+  const saved = [{ ptyId: "10", uuid: "uuid-a", label: "My tab" }];
+  const actions = reconcileTabs(saved, ptys);
+  assert.equal(actions[0]!.action, "attach");
+  assert.equal(actions[0]!.descriptor.ptyId, "10");
+});
+
 test("reconcileTabs: handles multiple saved tabs with different outcomes", () => {
   const ptys: PtyInfo[] = [pty({ id: "1", uuid: "alive-uuid" })];
   const saved = [
