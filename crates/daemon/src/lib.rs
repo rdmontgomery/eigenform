@@ -38,6 +38,7 @@ mod embedded {
     #[folder = "../../webterm"]
     #[include = "index.html"]
     #[include = "dist/**"]
+    #[include = "static/**"]
     struct Assets;
 
     /// Root fallback: serve an embedded asset by its URL path, else the index (SPA

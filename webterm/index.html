@@ -11,6 +11,13 @@
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c1814'/><g fill='none' stroke='%23e09a3e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9H24V21'/><path d='M11 13.5H19.5V18.5'/></g></svg>"
     />
+    <!-- Install-app icons. Chromium (Vivaldi included) builds the desktop-app
+         icon from the manifest's PNGs, not the SVG favicon above; without these
+         it falls back to a generated letter tile from the title. Files live in
+         webterm/static/ (tracked) and are served on both the dev ServeDir path
+         and the embedded RustEmbed `static/**` path. -->
+    <link rel="manifest" href="/static/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
     <!-- Chrome/terminal fonts (eigenform design system). Loaded here, not via CSS
          @import — esbuild bundles xterm.css before style.css, so an @import
          there would land mid-bundle and be ignored. Falls back to the system
