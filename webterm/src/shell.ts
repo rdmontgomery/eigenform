@@ -330,7 +330,11 @@ export function mountShell(appEl: HTMLElement): void {
   searchBox.append(icon("search", 13));
   const searchInput = el("input", "rail-search-input");
   searchInput.placeholder = "Search sessions";
-  searchBox.append(searchInput);
+  const searchClear = el("button", "rail-search-clear");
+  searchClear.title = "Clear search";
+  searchClear.append(icon("x", 12));
+  searchClear.hidden = true;
+  searchBox.append(searchInput, searchClear);
   railSearch.append(searchBox);
 
   const railScroll = el("div", "rail-scroll scroll");
@@ -1693,7 +1697,14 @@ export function mountShell(appEl: HTMLElement): void {
 
   searchInput.addEventListener("input", () => {
     searchQuery = searchInput.value.trim().toLowerCase();
+    searchClear.hidden = searchInput.value === "";
     renderRail();
+  });
+
+  searchClear.addEventListener("click", () => {
+    searchInput.value = "";
+    searchInput.dispatchEvent(new Event("input"));
+    searchInput.focus();
   });
 
   /** True when this row backs the active tab. */
