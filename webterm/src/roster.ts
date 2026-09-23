@@ -111,6 +111,8 @@ export interface RosterRow {
   msgCount?: number;
   /** Present iff a Fable→Opus guardrail downgrade was detected for this session. */
   downgrade?: { offendingTurn: string } | null;
+  /** Present (true) iff the session was launched headless (`claude -p`, SDK). */
+  headless?: true;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +295,7 @@ export function buildRoster(
     let forestCwd: string | null = null;
     let sparkCount: number | null = null;
     let downgrade: { offendingTurn: string } | null = null;
+    let headless = false;
     if (resolvedUuid !== null) {
       const fi = forestByUuid.get(resolvedUuid);
       if (fi) {
@@ -300,6 +303,7 @@ export function buildRoster(
         forestCwd = fi.cwd;
         sparkCount = fi.spark.length;
         downgrade = fi.downgrade ?? null;
+        headless = fi.headless === true;
         mergedForestUuids.add(resolvedUuid);
       }
     }
@@ -344,6 +348,9 @@ export function buildRoster(
     if (downgrade !== null) {
       row.downgrade = downgrade;
     }
+    if (headless) {
+      row.headless = true;
+    }
 
     liveRows.push(row);
   }
@@ -365,7 +372,7 @@ export function buildRoster(
       override: overrideVal,
     });
 
-    diskRows.push({
+    const row: RosterRow = {
       key: `uuid:${fi.uuid}`,
       label,
       cwdChip: cwdChip(fi.cwd),
@@ -382,7 +389,9 @@ export function buildRoster(
       recency: fi.recency,
       msgCount: fi.spark.length,
       downgrade: fi.downgrade ?? null,
-    });
+    };
+    if (fi.headless) row.headless = true;
+    diskRows.push(row);
   }
 
   // Sort disk rows: most-recent recency first.

@@ -393,3 +393,20 @@ test("forest row running outside eigenform is external, not dead", () => {
   assert.equal(byUuid.get("dead")!.liveness, "none");
   assert.equal(byUuid.get("dead")!.activity, "idle");
 });
+
+test("headless flag rides through both the merged-pty and disk-only paths", () => {
+  const rows = buildRoster(
+    [pty({ id: "1", uuid: "hosted" })],
+    [
+      forest({ uuid: "hosted", headless: true }),
+      forest({ uuid: "batch", headless: true }),
+      forest({ uuid: "tui" }),
+    ],
+    {},
+  );
+  const byUuid = new Map(rows.map((r) => [r.uuid, r]));
+  assert.equal(byUuid.get("hosted")!.headless, true);
+  assert.equal(byUuid.get("batch")!.headless, true);
+  // interactive rows carry no key at all (keeps deepEqual fixtures stable).
+  assert.equal("headless" in byUuid.get("tui")!, false);
+});

@@ -35,6 +35,8 @@ const PATHS: Record<string, string> = {
   skill: '<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z"/>',
   // memory — a two-lobed brain (single-stroke, mirrors left/right around a central fissure)
   brain: '<path d="M12 5.5a3 3 0 0 0-5 2.2 3 3 0 0 0-1.2 5.2A2.6 2.6 0 0 0 8 18a2.5 2.5 0 0 0 4 .5M12 5.5a3 3 0 0 1 5 2.2 3 3 0 0 1 1.2 5.2A2.6 2.6 0 0 1 16 18a2.5 2.5 0 0 1-4 .5M12 5.5V19"/>',
+  // active sessions — a heartbeat trace
+  pulse: '<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
   bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
   chevrons: '<path d="M6 5l6 6 6-6M6 12l6 6 6-6"/>',
   type: '<path d="M5 7V5h14v2M12 5v14M9 19h6"/>',

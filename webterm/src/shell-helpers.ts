@@ -377,3 +377,24 @@ export function seedDue(t: SeedTiming, now: number): boolean {
   if (t.lastOutputAt === null) return false; // nothing painted yet
   return now - t.lastOutputAt >= SEED_QUIET_MS;
 }
+
+// ---------------------------------------------------------------------------
+// tabSubtitle
+// ---------------------------------------------------------------------------
+
+/**
+ * The tab's second line: which directory the session was launched from. The
+ * cwd basename, matching the rail's project chip — unless the label already IS
+ * that basename (a fresh session before its AI title lands), in which case the
+ * parent is prepended ("webterm/src") so the line still adds information.
+ * Null when the cwd is unknown or root.
+ */
+export function tabSubtitle(cwd: string | undefined, label: string): string | null {
+  if (!cwd) return null;
+  const parts = cwd.split("/").filter(Boolean);
+  const base = parts[parts.length - 1];
+  if (!base) return null;
+  if (base !== label) return base;
+  const parent = parts[parts.length - 2];
+  return parent ? `${parent}/${base}` : `/${base}`;
+}

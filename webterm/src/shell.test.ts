@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   relativeRecency,
+  tabSubtitle,
   reconcileTabs,
   reorderTabs,
   reconnectQuery,
@@ -478,4 +479,12 @@ test("seedDue: hard cap delivers even while output never quiesces", () => {
   const now = armedAt + SEED_HARD_CAP_MS;
   const t = { armedAt, lastOutputAt: now - 50 };
   assert.equal(seedDue(t, now), true);
+});
+
+test("tabSubtitle: cwd basename, widened to parent/base when it echoes the label", () => {
+  assert.equal(tabSubtitle("/home/rick/eigenform/webterm", "Fix the tab strip"), "webterm");
+  assert.equal(tabSubtitle("/home/rick/eigenform/webterm/src", "src"), "webterm/src");
+  assert.equal(tabSubtitle("/srv/", "srv"), "/srv");
+  assert.equal(tabSubtitle("/", "x"), null);
+  assert.equal(tabSubtitle(undefined, "x"), null);
 });

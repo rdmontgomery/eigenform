@@ -291,6 +291,10 @@ pub struct LiveSession {
     pub spark: Vec<u32>,
     /// Present iff a Fable→Opus guardrail downgrade was detected in this session.
     pub downgrade: Option<Downgrade>,
+    /// Launched non-interactively (`claude -p`, an Agent SDK host) — see [`is_headless`].
+    pub headless: bool,
+    /// The live process's pid, from its session claim. None for dead sessions.
+    pub pid: Option<u32>,
 }
 
 /// A detected Fable→Opus **guardrail** downgrade in a session transcript.
@@ -425,6 +429,140 @@ fn is_tool_result(v: &serde_json::Value) -> bool {
 /// Is a process alive? `/proc/<pid>` on Linux/WSL (this project's target).
 pub fn is_pid_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// A process's start time (clock ticks since boot, `/proc/<pid>/stat` field 22) — the
+/// value Claude Code records as `procStart` in its session claim. None off-Linux or when
+/// the process is gone.
+pub fn proc_start_of(pid: u32) -> Option<String> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `comm` (field 2) is parenthesised and may contain spaces; fields resume after the
+    // last ')' at field 3, so starttime (22) is the 20th token of the remainder.
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(19).map(str::to_string)
+}
+
+/// Is this entrypoint a non-interactive launch? `claude -p` writes `sdk-cli`; the Agent
+/// SDKs write `sdk-ts` / `sdk-py`. The interactive TUI writes `cli`.
+pub fn is_headless(entrypoint: &str) -> bool {
+    entrypoint.starts_with("sdk-")
+}
+
+/// How much to trust a `sessions/<pid>.json` claim that a session is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimHealth {
+    /// The pid is alive and (where recorded) its start time matches the claim.
+    Alive,
+    /// No such process — Claude exited without cleaning up its claim.
+    Dead,
+    /// The pid is alive but belongs to a different, later process (pid reuse): the claim
+    /// is a ghost that a bare pid check would wrongly report as live.
+    Reused,
+}
+
+impl ClaimHealth {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClaimHealth::Alive => "alive",
+            ClaimHealth::Dead => "dead",
+            ClaimHealth::Reused => "reused",
+        }
+    }
+}
+
+/// One `~/.claude/sessions/<pid>.json`: Claude Code's own claim that a session is running.
+#[derive(Debug, Clone)]
+pub struct Claim {
+    pub pid: u32,
+    pub session_id: String,
+    pub cwd: Option<PathBuf>,
+    /// Epoch milliseconds.
+    pub started_at: Option<i64>,
+    pub kind: Option<String>,
+    pub entrypoint: Option<String>,
+    /// Claude's own busy/idle status, when it records one.
+    pub status: Option<String>,
+    pub name: Option<String>,
+    pub path: PathBuf,
+    pub health: ClaimHealth,
+}
+
+/// Read every session claim, judging each against the real process table.
+pub fn read_claims(sessions_dir: &Path) -> Vec<Claim> {
+    read_claims_with(sessions_dir, is_pid_alive, proc_start_of)
+}
+
+/// [`read_claims`] with injected liveness + start-time probes (for deterministic tests).
+/// A claim without a recorded `procStart`, or whose process start can't be read, is
+/// judged on the pid alone.
+pub fn read_claims_with(
+    sessions_dir: &Path,
+    alive: impl Fn(u32) -> bool,
+    start_of: impl Fn(u32) -> Option<String>,
+) -> Vec<Claim> {
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return Vec::new();
+    };
+    let str_of = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&p) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        let Some(pid) = v.get("pid").and_then(|x| x.as_u64()).map(|x| x as u32) else { continue };
+        let Some(session_id) = str_of(&v, "sessionId") else { continue };
+        let health = if !alive(pid) {
+            ClaimHealth::Dead
+        } else {
+            match (str_of(&v, "procStart"), start_of(pid)) {
+                (Some(claimed), Some(actual)) if claimed != actual => ClaimHealth::Reused,
+                _ => ClaimHealth::Alive,
+            }
+        };
+        out.push(Claim {
+            pid,
+            session_id,
+            cwd: str_of(&v, "cwd").map(PathBuf::from),
+            started_at: v.get("startedAt").and_then(|x| x.as_i64()),
+            kind: str_of(&v, "kind"),
+            entrypoint: str_of(&v, "entrypoint"),
+            status: str_of(&v, "status"),
+            name: str_of(&v, "name"),
+            path: p,
+            health,
+        });
+    }
+    out.sort_by_key(|c| std::cmp::Reverse(c.started_at.unwrap_or(0)));
+    out
+}
+
+/// The `entrypoint` a session transcript was written under (`cli`, `sdk-cli`, …), from
+/// the first rows that carry one. Reads only the head of the file, once: a found value is
+/// memoized per path (it never changes), so the forest's 3s tick doesn't re-read heads.
+pub fn session_entrypoint(path: &Path) -> Option<String> {
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    if let Some(hit) = seen.lock().ok().and_then(|m| m.get(path).cloned()) {
+        return Some(hit);
+    }
+    let found = read_entrypoint(path)?;
+    if let Ok(mut m) = seen.lock() {
+        m.insert(path.to_path_buf(), found.clone());
+    }
+    Some(found)
+}
+
+fn read_entrypoint(path: &Path) -> Option<String> {
+    let mut buf = Vec::new();
+    fs::File::open(path).ok()?.take(TAIL_WINDOW).read_to_end(&mut buf).ok()?;
+    String::from_utf8_lossy(&buf).lines().find_map(|line| {
+        let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        v.get("entrypoint").and_then(|x| x.as_str()).map(str::to_string)
+    })
 }
 
 /// Whether a session's last turn has closed (ready) vs is in flight (working), from a
@@ -575,24 +713,12 @@ pub fn live_forest_with(
     now: DateTime<Utc>,
     alive: impl Fn(u32) -> bool,
 ) -> Vec<LiveSession> {
-    // sessionId → cwd, for the processes that are actually alive.
-    let mut live: HashMap<String, PathBuf> = HashMap::new();
-    if let Ok(entries) = fs::read_dir(sessions_dir) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&p) else { continue };
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
-            let pid = v.get("pid").and_then(|x| x.as_u64()).map(|x| x as u32);
-            let sid = v.get("sessionId").and_then(|x| x.as_str()).map(str::to_string);
-            let cwd = v.get("cwd").and_then(|x| x.as_str()).map(PathBuf::from);
-            if let (Some(pid), Some(sid)) = (pid, sid) {
-                if alive(pid) {
-                    live.insert(sid, cwd.unwrap_or_default());
-                }
-            }
+    // sessionId → its live claim. A dead pid's stale claim is simply ignored (the pid
+    // check is the GC), and so is a reused pid's ghost claim (the procStart check).
+    let mut live: HashMap<String, Claim> = HashMap::new();
+    for c in read_claims_with(sessions_dir, alive, proc_start_of) {
+        if c.health == ClaimHealth::Alive {
+            live.insert(c.session_id.clone(), c);
         }
     }
 
@@ -601,7 +727,8 @@ pub fn live_forest_with(
     let mut out: Vec<LiveSession> = Vec::new();
     for r in &recents {
         seen.insert(r.uuid.clone());
-        let is_live = live.contains_key(&r.uuid);
+        let claim = live.get(&r.uuid);
+        let is_live = claim.is_some();
         let state = if is_live {
             if session_complete(&r.path) {
                 SessionState::Ready
@@ -620,22 +747,26 @@ pub fn live_forest_with(
             state,
             spark: cached_spark(state_dir, &r.uuid, &r.path),
             downgrade: cached_downgrade(state_dir, &r.uuid, &r.path),
+            headless: claim_headless(claim) || session_entrypoint(&r.path).is_some_and(|e| is_headless(&e)),
+            pid: claim.map(|c| c.pid),
         });
     }
     // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
-    for (sid, cwd) in &live {
+    for (sid, c) in &live {
         if seen.contains(sid) {
             continue;
         }
         out.push(LiveSession {
             uuid: sid.clone(),
             title: None,
-            cwd: cwd.clone(),
+            cwd: c.cwd.clone().unwrap_or_default(),
             recency: now,
             live: true,
             state: SessionState::Working,
             spark: Vec::new(),
             downgrade: None,
+            headless: claim_headless(Some(c)),
+            pid: Some(c.pid),
         });
     }
 
@@ -646,6 +777,10 @@ pub fn live_forest_with(
             .then(b.recency.cmp(&a.recency))
     });
     out
+}
+
+fn claim_headless(c: Option<&Claim>) -> bool {
+    c.and_then(|c| c.entrypoint.as_deref()).is_some_and(is_headless)
 }
 
 struct Tail {

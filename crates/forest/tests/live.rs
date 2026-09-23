@@ -91,3 +91,59 @@ fn ready_sorts_before_working_before_recent() {
     let order: Vec<_> = got.iter().map(|s| s.uuid.as_str()).collect();
     assert_eq!(order, vec!["aaa", "bbb", "ccc"], "ready, then working, then recent");
 }
+
+/// A claim whose pid is alive but whose recorded `procStart` differs from the running
+/// process's is a pid-reuse ghost: not live.
+#[test]
+fn reused_pid_claims_are_not_live() {
+    let (proj, sess, state) = fixture();
+    let pid = std::process::id();
+    std::fs::write(
+        sess.path().join(format!("{pid}.json")),
+        format!("{{\"pid\":{pid},\"sessionId\":\"ccc\",\"cwd\":\"/home/me/p\",\"procStart\":\"not-a-real-start\"}}"),
+    )
+    .unwrap();
+    let claims = eigenform_forest::read_claims(sess.path());
+    let ghost = claims.iter().find(|c| c.pid == pid).expect("claim read");
+    assert_eq!(ghost.health, eigenform_forest::ClaimHealth::Reused);
+
+    let got = eigenform_forest::live_forest(proj.path(), sess.path(), state.path(), now());
+    let ccc = got.iter().find(|s| s.uuid == "ccc").unwrap();
+    assert!(!ccc.live, "a reused pid must not resurrect the session");
+}
+
+#[test]
+fn matching_proc_start_is_alive() {
+    let sess = tempfile::tempdir().unwrap();
+    let pid = std::process::id();
+    let start = eigenform_forest::proc_start_of(pid).expect("linux /proc");
+    std::fs::write(
+        sess.path().join(format!("{pid}.json")),
+        format!("{{\"pid\":{pid},\"sessionId\":\"x\",\"procStart\":\"{start}\"}}"),
+    )
+    .unwrap();
+    let claims = eigenform_forest::read_claims(sess.path());
+    assert_eq!(claims[0].health, eigenform_forest::ClaimHealth::Alive);
+}
+
+/// `claude -p` transcripts carry `entrypoint: sdk-cli`; the TUI writes `cli`.
+#[test]
+fn headless_sessions_are_flagged_from_the_transcript_entrypoint() {
+    let (proj, sess, state) = fixture();
+    let pdir = proj.path().join("-home-me-p");
+    std::fs::write(
+        pdir.join("ddd.jsonl"),
+        "{\"type\":\"user\",\"timestamp\":\"2026-06-06T00:00:00Z\",\"entrypoint\":\"sdk-cli\",\"message\":{\"role\":\"user\"}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pdir.join("eee.jsonl"),
+        "{\"type\":\"user\",\"timestamp\":\"2026-06-06T00:00:00Z\",\"entrypoint\":\"cli\",\"message\":{\"role\":\"user\"}}\n",
+    )
+    .unwrap();
+    let got = live_forest_with(proj.path(), sess.path(), state.path(), now(), |_| false);
+    let by = |u: &str| got.iter().find(|s| s.uuid == u).unwrap();
+    assert!(by("ddd").headless);
+    assert!(!by("eee").headless);
+    assert!(!by("aaa").headless, "no entrypoint recorded → interactive");
+}

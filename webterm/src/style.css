@@ -97,45 +97,78 @@ button { font: inherit; color: inherit; }
 .scroll::-webkit-scrollbar-track { background: transparent; }
 
 @keyframes eigenform-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@keyframes eigenform-ring {
-  0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--dot-color, var(--st-running)) 55%, transparent); }
-  70%, 100% { box-shadow: 0 0 0 5px transparent; }
-}
 @keyframes eigenform-fade { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 /* ── Status dots ────────────────────────────────────────────────────────── */
 /* Two orthogonal channels (see docs/plans/2026-07-02-live-session-clarity):
-   • activity → color + glow: working = running amber (ring + pulse),
-     waiting = accent "your turn" (pulse), idle = slate (steady).
-   • provenance → fill: eigenform = solid (attachable), external = hollow ring
-     (live outside eigenform, can't attach), dead = faint flat.
-   Only live provenances animate; a dead dot never glows regardless of activity. */
+   • activity → SHAPE + color, so state reads without color vision or a squint:
+       working = a spinning open arc in running amber ("in motion"),
+       waiting = a haloed solid disc in green ("your move"),
+       idle    = a small plain dot in slate (live, quiet).
+   • provenance → fill: eigenform = filled, external = hollow + thinner (live
+     outside eigenform, can't attach), dead = a faint flat speck, never animated.
+   Every dot sits in a fixed 12px box so a state change never shifts layout. */
+@keyframes eigenform-spin { to { transform: rotate(360deg); } }
+@keyframes eigenform-halo {
+  0%, 100% { box-shadow: 0 0 0 2px color-mix(in oklch, var(--dot-color) 38%, transparent); }
+  50%      { box-shadow: 0 0 0 3.5px color-mix(in oklch, var(--dot-color) 16%, transparent); }
+}
 .dot {
   position: relative;
-  display: inline-block;
-  box-sizing: border-box;
-  width: 7px; height: 7px;
-  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px; height: 12px;
   flex: 0 0 auto;
   --dot-color: var(--st-idle);
+}
+.dot::before {
+  content: "";
+  box-sizing: border-box;
+  display: block;
+  width: 6px; height: 6px;
+  border-radius: 99px;
   background: var(--dot-color);
 }
 /* activity → color */
 .dot--working { --dot-color: var(--st-running); }
-.dot--waiting { --dot-color: var(--accent); }
+.dot--waiting { --dot-color: var(--st-success); }
 .dot--idle    { --dot-color: var(--st-idle); }
-/* provenance → fill */
-.dot--eigenform { background: var(--dot-color); }
-.dot--external  { background: transparent; border: 1.5px solid var(--dot-color); }
-.dot--dead      { background: var(--tx-faint); }
-/* glow → live provenances only, gated by activity (dead never animates) */
-.dot--eigenform.dot--working,
-.dot--external.dot--working {
-  animation: eigenform-ring 1.8s ease-out infinite, eigenform-pulse 1.4s ease-in-out infinite;
+
+/* working → open arc, spinning */
+.dot--working:not(.dot--dead)::before {
+  width: 11px; height: 11px;
+  background: transparent;
+  border: 2px solid var(--dot-color);
+  border-right-color: transparent;
+  animation: eigenform-spin 0.9s linear infinite;
 }
-.dot--eigenform.dot--waiting,
-.dot--external.dot--waiting {
-  animation: eigenform-pulse 1.2s ease-in-out infinite;
+/* external → the same shape, hollow and thinner: live, but not ours to attach */
+.dot--working.dot--external::before { border-width: 1.5px; }
+/* waiting → larger disc with a breathing halo */
+.dot--waiting:not(.dot--dead)::before {
+  width: 8px; height: 8px;
+  animation: eigenform-halo 1.6s ease-in-out infinite;
+}
+.dot--waiting.dot--external::before {
+  background: transparent;
+  border: 1.5px solid var(--dot-color);
+}
+/* idle (live) → small plain dot; external = small hollow ring */
+.dot--idle.dot--external::before {
+  width: 7px; height: 7px;
+  background: transparent;
+  border: 1.5px solid var(--dot-color);
+}
+/* dead → faint speck, never animated */
+.dot--dead::before {
+  width: 5px; height: 5px;
+  background: var(--tx-faint);
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot::before { animation: none !important; }
 }
 
 /* ── Shell layout ───────────────────────────────────────────────────────── */
@@ -428,6 +461,9 @@ button { font: inherit; color: inherit; }
 }
 /* live outside eigenform: tint the tag to match the hollow-ring dot */
 .rail-row-live--external { color: var(--tx-3); }
+/* the turn-state tag echoes the dot's color, so "running" / "your turn" pop */
+.rail-row-live--working { color: var(--st-running); }
+.rail-row-live--waiting { color: var(--st-success); }
 
 .rail-row-recency {
   font-family: var(--font-mono);
@@ -564,7 +600,12 @@ button { font: inherit; color: inherit; }
 
 .rail-foot {
   flex-shrink: 0;
+  width: 100%;
+  background: none;
+  border: 0;
   border-top: 1px solid var(--line);
+  cursor: pointer;
+  text-align: left;
   padding: 9px 14px;
   display: flex;
   align-items: center;
@@ -573,8 +614,8 @@ button { font: inherit; color: inherit; }
   font-size: 10.5px;
   color: var(--tx-3);
 }
-.rail-foot .dot { width: 6px; height: 6px; }
 .rail-foot-total { margin-left: auto; color: var(--tx-faint); }
+.rail-foot:hover { background: var(--raised); color: var(--tx-2); }
 
 /* ── Main column ────────────────────────────────────────────────────────── */
 .main {
@@ -610,7 +651,7 @@ button { font: inherit; color: inherit; }
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 0 8px 0 11px;
   cursor: pointer;
   user-select: none;
@@ -644,7 +685,6 @@ button { font: inherit; color: inherit; }
 .tab--drag-before { box-shadow: inset 2px 0 0 0 var(--accent); }
 .tab--drag-after { box-shadow: inset -2px 0 0 0 var(--accent); }
 
-.tab .dot { width: 6px; height: 6px; }
 
 .tab-kind-ico {
   display: inline-flex;
@@ -652,13 +692,31 @@ button { font: inherit; color: inherit; }
   color: var(--tx-faint);
 }
 
+/* title over launch dir; the stack centres itself when there's no subtitle */
+.tab-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.2;
+}
 .tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  flex: 1;
   font-weight: 500;
+}
+.tab-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: color-mix(in oklch, var(--tab-ink, var(--tx-3)) 80%, var(--tx-3));
+  margin-top: 1px;
 }
 .tab--active .tab-label { font-weight: 600; }
 
@@ -2079,3 +2137,95 @@ button { font: inherit; color: inherit; }
 .ix-desc { color: var(--tx-2); padding: 2px 4px 2px 6px; line-height: 1.45; }
 .ix-path { color: var(--tx-faint); font-family: var(--font-mono); font-size: 10.5px; padding: 0 4px 4px 6px; word-break: break-all; }
 .ix-empty { color: var(--tx-faint); font-style: italic; padding: 2px 6px; }
+
+/* ── Active sessions (claims) overlay ───────────────────────────────────────
+   Reuses the .ix-* overlay chrome from the config inventory. */
+.cl-panel { width: min(720px, 100%); }
+.cl-panel .ix-title { white-space: nowrap; min-width: 0; }
+.cl-panel .ix-subtitle { overflow: hidden; text-overflow: ellipsis; }
+.cl-sweep {
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  color: var(--tx-2);
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cl-sweep:hover { color: var(--tx); border-color: var(--line); }
+.cl-section + .cl-section { margin-top: 10px; }
+.cl-section-head {
+  padding: 8px 6px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+.cl-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+.cl-row:hover { background: var(--raised); }
+.cl-row--dead .cl-label, .cl-row--reused .cl-label { color: var(--tx-3); }
+.cl-body { min-width: 0; }
+.cl-body--link { cursor: pointer; }
+.cl-body--link:hover .cl-label { text-decoration: underline; text-decoration-color: var(--line); }
+.cl-label {
+  font-size: 12.75px;
+  font-weight: 500;
+  color: var(--tx);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cl-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-faint);
+}
+.cl-dir { color: var(--tx-3); }
+.cl-badge {
+  font-size: 9.5px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 3px;
+  white-space: nowrap;
+}
+.cl-badge--headless { color: var(--ink-slate); }
+.cl-badge--hosted   { color: var(--accent); }
+.cl-badge--stale    { color: var(--tx-3); }
+.cl-act {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--tx-3);
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.cl-act:hover { color: var(--tx); border-color: var(--line); background: var(--raised-2); }
+.cl-act--end:hover { color: var(--st-error); }
+.cl-act.cl-act--armed {
+  color: var(--st-error);
+  border-color: var(--st-error);
+  background: color-mix(in oklch, var(--st-error) 12%, transparent);
+}
+.cl-act:disabled { cursor: default; opacity: 0.6; }
