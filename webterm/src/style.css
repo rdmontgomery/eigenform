@@ -284,6 +284,21 @@ button { font: inherit; color: inherit; }
   font-size: 12px;
 }
 .rail-search-input::placeholder { color: var(--tx-3); }
+.rail-search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  margin: -2px -3px -2px 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--tx-3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.rail-search-clear[hidden] { display: none; }
+.rail-search-clear:hover { background: var(--raised-2); color: var(--tx); }
 
 .rail-scroll {
   flex: 1;
