@@ -45,6 +45,7 @@ import {
   reconnectDelay,
   ageGroup,
   inkFor,
+  tabSubtitle,
   railFromPointer,
   RAIL_DEFAULT,
   drawerWidthFromPointer,
@@ -69,6 +70,7 @@ import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { icon } from "./icons.ts";
 import { openInspect } from "./inspect.ts";
+import { openClaims } from "./claims.ts";
 import { subscribeWatch } from "./watch.ts";
 import { extractUrls, linkLabel } from "./links.ts";
 import type { LinkEntry } from "./links.ts";
@@ -194,11 +196,19 @@ function inkVar(cwd: string | undefined, fallback: string): string {
   return `var(--ink-${inkFor(cwd ?? fallback)})`;
 }
 
-const GROUP_LABELS: Record<AgeGroup, string> = {
+/** A rail group: an age bucket for interactive sessions, or the one "headless"
+ *  bucket that gathers every `claude -p` / SDK run regardless of age. */
+type RailGroup = AgeGroup | "headless";
+
+const GROUP_LABELS: Record<RailGroup, string> = {
   today: "Today",
   week: "This week",
   earlier: "Earlier",
+  headless: "Headless",
 };
+/** Groups that start folded until the user opens them. Headless runs are
+ *  scripted noise next to the sessions you're driving by hand. */
+const FOLDED_BY_DEFAULT: ReadonlySet<RailGroup> = new Set(["headless"]);
 const GROUP_ORDER: AgeGroup[] = ["today", "week", "earlier"];
 
 // ---------------------------------------------------------------------------
@@ -325,7 +335,8 @@ export function mountShell(appEl: HTMLElement): void {
 
   const railScroll = el("div", "rail-scroll scroll");
   const railLinks = el("div", "rail-links");
-  const railFoot = el("div", "rail-foot");
+  const railFoot = el("button", "rail-foot");
+  railFoot.addEventListener("click", () => showClaims());
   rail.append(railBrand, railSearch, railScroll, railLinks, railFoot);
 
   // main column
@@ -897,6 +908,12 @@ export function mountShell(appEl: HTMLElement): void {
       openInspect({ cwd: activeTab()?.descriptor.cwd ?? undefined }),
     );
 
+    // Active sessions — every session Claude claims is running, to end or sweep.
+    const claimsBtn = el("button", "icon-btn claims-btn");
+    claimsBtn.title = "Active sessions (what Claude thinks is running)";
+    claimsBtn.append(icon("pulse", 16));
+    claimsBtn.addEventListener("click", showClaims);
+
     const sep = el("div", "topbar-sep");
 
     // Single "inspect" toggle — opens the docked panel (reach map + transcript).
@@ -905,7 +922,18 @@ export function mountShell(appEl: HTMLElement): void {
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, fontBtn, configBtn, sep, drawerBtn);
+    controls.append(themeBtn, fontBtn, configBtn, claimsBtn, sep, drawerBtn);
+  }
+
+  function showClaims() {
+    openClaims({
+      onChange: () => void refreshRoster(),
+      onOpenPty: (ptyId) => {
+        const row = lastRows.find((r) => r.ptyId === ptyId);
+        if (row) launchRow(row);
+        else openTabWithQuery(`?attach=${ptyId}`, { ptyId, label: "session" });
+      },
+    });
   }
 
   // ------------------------------------------------------------------
@@ -1084,13 +1112,10 @@ export function mountShell(appEl: HTMLElement): void {
     tabStrip.innerHTML = "";
     for (const t of tabs) {
       const tab = el("div", "tab");
-      if (t.id === activeTabId) {
-        tab.classList.add("tab--active");
-        tab.style.setProperty(
-          "--tab-ink",
-          inkVar(t.descriptor.cwd, t.descriptor.label),
-        );
-      }
+      // Every tab carries its project ink (the subtitle uses it); only the
+      // active tab turns it into the top border.
+      tab.style.setProperty("--tab-ink", inkVar(t.descriptor.cwd, t.descriptor.label));
+      if (t.id === activeTabId) tab.classList.add("tab--active");
       if (t.dead) tab.classList.add("tab--dead");
 
       // Drag-to-reorder: native HTML5 DnD, no library. The dragged tab's id
@@ -1144,8 +1169,18 @@ export function mountShell(appEl: HTMLElement): void {
       const badge = el("span", dotClasses(tabActivity, tabLiveness));
       badge.title = dotTitle(tabActivity, tabLiveness);
 
+      // Two-line text stack: title, then the launch dir (like the rail's chip).
+      const textEl = el("span", "tab-text");
       const labelEl = el("span", "tab-label");
       labelEl.textContent = t.descriptor.label;
+      textEl.append(labelEl);
+      const sub = tabSubtitle(t.descriptor.cwd, t.descriptor.label);
+      if (sub) {
+        const subEl = el("span", "tab-sub");
+        subEl.textContent = sub;
+        subEl.title = t.descriptor.cwd ?? "";
+        textEl.append(subEl);
+      }
 
       const kill = el("button", "tab-kill");
       kill.title = "Kill pty (process terminated)";
@@ -1170,7 +1205,7 @@ export function mountShell(appEl: HTMLElement): void {
         termIco.append(icon("terminal", 11, 2));
         tab.append(termIco);
       }
-      tab.append(labelEl, kill, close);
+      tab.append(textEl, kill, close);
       tab.addEventListener("click", () => activateTab(t.id));
       tabStrip.append(tab);
     }
@@ -1508,18 +1543,23 @@ export function mountShell(appEl: HTMLElement): void {
     localStorage.setItem(LS_OVERRIDES, JSON.stringify(overrides));
   }
 
-  /** Folded rail age-groups (true = collapsed). Persisted across reloads. */
-  let foldedGroups: Partial<Record<AgeGroup, boolean>> = {};
+  /** Folded rail groups (true = collapsed). Persisted across reloads; a group
+   *  never toggled falls back to FOLDED_BY_DEFAULT. */
+  let foldedGroups: Partial<Record<RailGroup, boolean>> = {};
   try {
     foldedGroups = JSON.parse(localStorage.getItem(LS_GROUPS) ?? "{}") as Partial<
-      Record<AgeGroup, boolean>
+      Record<RailGroup, boolean>
     >;
   } catch {
     foldedGroups = {};
   }
 
-  function toggleGroup(group: AgeGroup) {
-    foldedGroups[group] = !foldedGroups[group];
+  function isFolded(group: RailGroup): boolean {
+    return foldedGroups[group] ?? FOLDED_BY_DEFAULT.has(group);
+  }
+
+  function toggleGroup(group: RailGroup) {
+    foldedGroups[group] = !isFolded(group);
     localStorage.setItem(LS_GROUPS, JSON.stringify(foldedGroups));
     renderRail();
   }
@@ -1689,14 +1729,21 @@ export function mountShell(appEl: HTMLElement): void {
       railScroll.append(empty);
     }
 
-    for (const group of GROUP_ORDER) {
-      const groupRows = rows.filter((r) => ageGroup(r.recency, now) === group);
+    // Interactive sessions bucket by age; headless runs share one group at the
+    // bottom so a batch of `claude -p` jobs never buries the sessions you drive.
+    const buckets: [RailGroup, RosterRow[]][] = GROUP_ORDER.map((g) => [
+      g,
+      rows.filter((r) => !r.headless && ageGroup(r.recency, now) === g),
+    ]);
+    buckets.push(["headless", rows.filter((r) => r.headless)]);
+
+    for (const [group, groupRows] of buckets) {
       if (groupRows.length === 0) continue;
 
       // A fold hides the group's rows (the count still says how many). While a
       // search is active, folds are ignored — hiding matches inside a folded
       // group would make the search read as "no results" for no visible reason.
-      const folded = !searchQuery && foldedGroups[group] === true;
+      const folded = !searchQuery && isFolded(group);
 
       const header = el("button", `rail-group-header${folded ? " rail-group-header--folded" : ""}`);
       header.title = folded ? "Show group" : "Hide group";
@@ -1706,7 +1753,12 @@ export function mountShell(appEl: HTMLElement): void {
       label.textContent = GROUP_LABELS[group];
       const rule = el("span", "rail-group-rule");
       const count = el("span", "rail-group-count");
-      count.textContent = String(groupRows.length);
+      // A folded headless group still says how many of its runs are live.
+      const liveCount = groupRows.filter((r) => r.liveness !== "none").length;
+      count.textContent =
+        group === "headless" && liveCount > 0
+          ? `${liveCount} live · ${groupRows.length}`
+          : String(groupRows.length);
       header.append(caret, label, rule, count);
       header.addEventListener("click", () => toggleGroup(group));
       railScroll.append(header);
@@ -1760,6 +1812,7 @@ export function mountShell(appEl: HTMLElement): void {
     if (tag) {
       const live = el("span", "rail-row-live");
       if (row.liveness === "external") live.classList.add("rail-row-live--external");
+      if (row.activity !== "idle") live.classList.add(`rail-row-live--${row.activity}`);
       live.textContent = tag;
       live.title = dotTitle(row.activity, row.liveness);
       meta.append(live);
@@ -1834,6 +1887,7 @@ export function mountShell(appEl: HTMLElement): void {
     const total = el("span", "rail-foot-total");
     total.textContent = `${lastRows.length} sessions`;
     railFoot.append(dot, label, total);
+    railFoot.title = "Show active sessions";
   }
 
   /**

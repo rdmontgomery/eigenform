@@ -48,6 +48,33 @@ export interface ForestItem {
   spark: number[];
   /** Present iff a Fable→Opus guardrail downgrade was detected. */
   downgrade?: { offendingTurn: string } | null;
+  /** Launched non-interactively (`claude -p`, an Agent SDK host). */
+  headless?: boolean;
+  /** The live process's pid; null for dead sessions. */
+  pid?: number | null;
+}
+
+/**
+ * One row from `GET /api/claims` — a `~/.claude/sessions/<pid>.json` claim that a
+ * session is running, judged against the process table:
+ * - `health`: alive = the process is running; dead = pid gone, claim left behind;
+ *   reused = pid alive but now a different process (a ghost claim).
+ * - `startedAt`: epoch ms.
+ * - `ptyId`: the eigenform pty hosting this process, if any.
+ */
+export interface Claim {
+  pid: number;
+  sessionId: string;
+  cwd: string | null;
+  startedAt: number | null;
+  kind: string | null;
+  entrypoint: string | null;
+  status: string | null;
+  name: string | null;
+  title: string | null;
+  health: "alive" | "dead" | "reused";
+  headless: boolean;
+  ptyId: string | null;
 }
 
 /**
