@@ -477,6 +477,9 @@ async fn claim_delete_route(
     axum::Json(serde_json::json!({ "pid": pid, "action": action })).into_response()
 }
 
+/// Quiet period after a filesystem event before the forest is rescanned (see [`forest_sse`]).
+const FOREST_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
+
 fn hash_str(s: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -488,12 +491,18 @@ fn hash_str(s: &str) -> u64 {
 /// sessions + projects dirs (snappy: activity, new sessions) ∪ a coarse 3s tick (catches
 /// pid exits, which aren't filesystem events). Emits only when the snapshot's hash changes,
 /// so the tick is silent when nothing moved. The payload travels in the event (no refetch).
+///
+/// A live session appends to its JSONL many times a second, so filesystem events are
+/// coalesced: after one arrives the loop waits [`FOREST_DEBOUNCE`] and drains the rest
+/// before rescanning, bounding the full-forest scan to a few per second under load.
 fn forest_sse(cfg: Arc<Config>) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(8);
     tokio::spawn(async move {
         // A dedicated thread owns the notify watcher; it pings on any write under the
-        // watched dirs. Lives until the event channel closes (SSE gone).
-        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<()>(8);
+        // watched dirs. Same reaping discipline as [`watch_channel`]: it polls with a 1s
+        // timeout and exits once the consumer is gone, so a disconnected client can't
+        // strand a watcher (and its inotify instance) until the next filesystem event.
+        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<()>(1);
         let watch_dirs: Vec<PathBuf> = [cfg.sessions_dir.clone(), cfg.projects_dir.clone()]
             .into_iter()
             .flatten()
@@ -508,9 +517,22 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
             for d in &watch_dirs {
                 let _ = notify::Watcher::watch(&mut watcher, d, notify::RecursiveMode::Recursive);
             }
-            for _event in raw_rx {
-                if evt_tx.blocking_send(()).is_err() {
-                    break; // SSE gone; drop the watcher
+            loop {
+                match raw_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                    // A full channel already means "rescan pending" — never block on it.
+                    Ok(_) => {
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) =
+                            evt_tx.try_send(())
+                        {
+                            break; // SSE gone; drop the watcher
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if evt_tx.is_closed() {
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
         });
@@ -531,7 +553,13 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
             }
             tokio::select! {
                 _ = tick.tick() => {}
-                r = evt_rx.recv() => { if r.is_none() { break; } }
+                r = evt_rx.recv() => {
+                    if r.is_none() { break; }
+                    // Coalesce a burst of writes into one rescan.
+                    tokio::time::sleep(FOREST_DEBOUNCE).await;
+                    while evt_rx.try_recv().is_ok() {}
+                }
+                _ = tx.closed() => break,
             }
         }
     });

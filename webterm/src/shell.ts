@@ -25,8 +25,10 @@
  * LOCALSTORAGE SCHEMA (key "eigenform:term:tabs:v1"):
  *   JSON array of TabDescriptor. Versioned key — bump suffix if schema changes.
  *
- * POLL: rail polls GET /api/pty + GET /api/forest every 3s to update badges.
- * Interval is cleared on visibilitychange → hidden to avoid background fan-out.
+ * ROSTER: the forest (every session on disk — the expensive scan) is PUSHED by
+ * the daemon over SSE (GET /api/watch/forest) only when it changes; the rail
+ * polls just GET /api/pty (the in-memory host registry, cheap) every 3s. Both
+ * stop on visibilitychange → hidden and resume on show.
  */
 
 import { newTerminal, connectPty, applyFont, applyTermTheme, DEFAULT_FONT } from "./pty.ts";
@@ -1552,14 +1554,42 @@ export function mountShell(appEl: HTMLElement): void {
     renderRail();
   }
 
+  /** Latest forest snapshot pushed by /api/watch/forest; null until the first push. */
+  let lastForest: ForestItem[] | null = null;
+  let forestStream: EventSource | null = null;
+
+  /** Subscribe to forest pushes. The daemon sends the current snapshot on connect,
+   *  then again whenever it changes; each push re-renders the roster. EventSource
+   *  reconnects on its own if the daemon restarts. */
+  function openForestStream() {
+    if (forestStream) return;
+    forestStream = new EventSource("/api/watch/forest");
+    forestStream.onmessage = (ev: MessageEvent<string>) => {
+      try {
+        lastForest = JSON.parse(ev.data) as ForestItem[];
+      } catch {
+        return;
+      }
+      void refreshRoster();
+    };
+  }
+
+  function closeForestStream() {
+    forestStream?.close();
+    forestStream = null;
+  }
+
   async function fetchRosterData(): Promise<{ ptys: PtyInfo[]; forest: ForestItem[] }> {
-    const [ptyRes, forestRes] = await Promise.all([
-      fetch("/api/pty"),
-      fetch("/api/forest"),
-    ]);
-    const ptys = (await ptyRes.json()) as PtyInfo[];
-    const forest = (await forestRes.json()) as ForestItem[];
-    return { ptys, forest };
+    const ptys = fetch("/api/pty").then((r) => r.json() as Promise<PtyInfo[]>);
+    // Before the first push (boot), fetch the snapshot once so tab restore can
+    // reconcile against it; after that the stream keeps lastForest current.
+    const forest =
+      lastForest !== null
+        ? Promise.resolve(lastForest)
+        : fetch("/api/forest").then((r) => r.json() as Promise<ForestItem[]>);
+    const [p, f] = await Promise.all([ptys, forest]);
+    lastForest ??= f;
+    return { ptys: p, forest: f };
   }
 
   /** Latest fetched roster — re-rendered locally on search input / tab switch. */
@@ -1979,13 +2009,16 @@ export function mountShell(appEl: HTMLElement): void {
 
   void boot();
 
-  // 3-second roster poll; cancel on hide, restart on show to avoid background fan-out.
+  // Forest arrives by push; only the cheap pty list is polled. Both stop while the
+  // page is hidden and resume (with an immediate refresh) when it's shown again.
+  openForestStream();
   let pollInterval = setInterval(() => void refreshRoster(), 3000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       clearInterval(pollInterval);
+      closeForestStream();
     } else {
-      // Page became visible again — refresh immediately then resume polling.
+      openForestStream();
       void refreshRoster();
       pollInterval = setInterval(() => void refreshRoster(), 3000);
     }

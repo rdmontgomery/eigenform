@@ -70,3 +70,67 @@ async fn forest_route_reports_a_live_ready_session_with_spark() {
     assert_eq!(entry["state"], "ready", "completed turn → ready");
     assert_eq!(entry["spark"], serde_json::json!([77]), "output_tokens per turn");
 }
+
+/// Read SSE `data:` payloads from `stream` until `want` of them arrive or ~`budget_ms` pass.
+async fn read_sse_data(stream: &mut tokio::net::TcpStream, want: usize, budget_ms: u64) -> Vec<String> {
+    use tokio::io::AsyncReadExt;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
+    let mut acc = String::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let datas: Vec<String> = acc
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: ").or_else(|| l.strip_prefix("data:")))
+            .map(str::to_string)
+            .collect();
+        if datas.len() >= want || tokio::time::Instant::now() >= deadline {
+            return datas;
+        }
+        if let Ok(Ok(n)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), stream.read(&mut buf)).await
+        {
+            if n == 0 {
+                return datas;
+            }
+            acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    }
+}
+
+#[tokio::test]
+async fn forest_watch_pushes_the_snapshot_then_pushes_again_on_change() {
+    use tokio::io::AsyncWriteExt;
+    let (proj, _s, _st, cfg) = fixture();
+    let base = start(cfg).await;
+    let host = base.strip_prefix("http://").unwrap().to_string();
+
+    let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
+    let req = format!("GET /api/watch/forest HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
+
+    // The first event is the current snapshot, sent immediately — no waiting on a change.
+    let first = read_sse_data(&mut stream, 1, 3000).await;
+    assert_eq!(first.len(), 1, "initial snapshot pushed on connect");
+    let v: serde_json::Value = serde_json::from_str(&first[0]).unwrap();
+    let entry = v.as_array().unwrap().iter().find(|e| e["uuid"] == UUID).expect("our session");
+    assert_eq!(entry["spark"], serde_json::json!([77]));
+
+    // Another completed turn changes the spark → a second push carrying the new state.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let path = proj.path().join("-home-me-p").join(format!("{UUID}.jsonl"));
+    let mut f = tokio::fs::OpenOptions::new().append(true).open(&path).await.unwrap();
+    f.write_all(
+        b"{\"type\":\"user\",\"timestamp\":\"2026-06-06T10:01:00Z\",\"message\":{\"role\":\"user\"}}\n\
+          {\"type\":\"assistant\",\"timestamp\":\"2026-06-06T10:01:01Z\",\"message\":{\"role\":\"assistant\",\"usage\":{\"output_tokens\":5}}}\n\
+          {\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-06-06T10:01:02Z\"}\n",
+    )
+    .await
+    .unwrap();
+    f.flush().await.unwrap();
+
+    let next = read_sse_data(&mut stream, 1, 6000).await;
+    assert_eq!(next.len(), 1, "a change pushes a fresh snapshot");
+    let v: serde_json::Value = serde_json::from_str(&next[0]).unwrap();
+    let entry = v.as_array().unwrap().iter().find(|e| e["uuid"] == UUID).expect("our session");
+    assert_eq!(entry["spark"], serde_json::json!([77, 5]), "new turn reflected in the push");
+}
