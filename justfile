@@ -11,10 +11,6 @@ default:
 build:
     cd webterm && npm install && npm run build
 
-# Build the legacy woland workbench bundle → web/dist (paused; served at /woland).
-build-woland:
-    cd web && npm install && npm run build
-
 # Build the app, start the daemon, open the browser at / (pty spawns $SHELL, never claude).
 run port="4317": build
     cargo run -q -p eigenform-cli -- daemon --port {{port}} --open

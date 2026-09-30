@@ -66,9 +66,6 @@ pub struct Config {
     pub program: String,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
-    /// Directory of the legacy woland workbench, served (paused, dev-only) at `/woland`.
-    /// None = not mounted.
-    pub web_dir: Option<PathBuf>,
     /// Directory of the eigenform terminal app served at `/` (the front door).
     /// None = serve the embedded build (feature `embed-assets`) or API only.
     pub term_dir: Option<PathBuf>,
@@ -103,41 +100,25 @@ pub struct AppState {
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
 /// pty. The eigenform terminal app is the root (`/`): served from `term_dir` when given,
-/// otherwise from the embedded build (feature `embed-assets`). The legacy woland
-/// workbench, when `web_dir` is set, mounts at `/woland` (paused, dev-only).
+/// otherwise from the embedded build (feature `embed-assets`).
 pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty_ws))
         .route("/api/pty", get(pty_list_route))
         .route("/api/pty/:id", axum::routing::delete(pty_delete_route))
-        .route("/session/:uuid", get(session_route))
-        .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/session/:uuid/json", get(session_json_route))
         .route("/api/session/:uuid/fork", post(fork_route))
-        .route("/api/sessions", get(sessions_route))
         .route("/api/forest", get(forest_route))
         .route("/api/watch/forest", get(forest_watch_route))
         .route("/api/claims", get(claims_route))
         .route("/api/claims/:pid", axum::routing::delete(claim_delete_route))
-        .route("/api/projects", get(projects_route))
         .route("/api/inspect", get(inspect_route))
-        .route("/api/recent", get(recent_route))
         .route("/api/candidates", get(candidates_route))
         .route("/api/path", get(path_probe_route))
         .route("/api/health", get(health_route))
         .route("/api/events", get(events_route))
         .route("/api/events/stream", get(events_stream_route))
         .route("/api/watch/:uuid", get(watch_route));
-
-    // Legacy woland, paused: mounts at /woland only when a build dir is given.
-    if let Some(web_dir) = &config.web_dir {
-        let index = web_dir.join("index.html");
-        router = router.nest_service(
-            "/woland",
-            tower_http::services::ServeDir::new(web_dir)
-                .fallback(tower_http::services::ServeFile::new(index)),
-        );
-    }
 
     // eigenform (the terminal app) is the front door at `/`.
     // Dev routes take precedence over the static fallback so the reload hook injects.
@@ -171,41 +152,15 @@ pub fn app(config: Config) -> Router {
     router.with_state(state)
 }
 
-/// Bind `addr` and serve woland until the process is killed.
+/// Bind `addr` and serve the app until the process is killed.
 pub async fn serve(addr: std::net::SocketAddr, config: Config) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app(config)).await?;
     Ok(())
 }
 
-/// `GET /session/:uuid` — the semantic transcript as a standalone HTML page.
-async fn session_route(
-    AxumPath(uuid): AxumPath<String>,
-    State(state): State<AppState>,
-) -> Response {
-    let cfg = &state.config;
-    match session_fragment(cfg, &uuid) {
-        Ok(frag) => Html(transcript_page(&frag)).into_response(),
-        Err(e) => e.into_response(),
-    }
-}
-
-/// `GET /api/session/:uuid` — just the transcript fragment, for in-page injection into
-/// the Manuscript (no page chrome).
-async fn session_fragment_route(
-    AxumPath(uuid): AxumPath<String>,
-    State(state): State<AppState>,
-) -> Response {
-    let cfg = &state.config;
-    match session_fragment(cfg, &uuid) {
-        Ok(frag) => Html(frag).into_response(),
-        Err(e) => e.into_response(),
-    }
-}
-
-/// `GET /api/session/:uuid/json` — the transcript as structured JSON for the Manuscript
-/// (exchanges + a trailing leaf), so woland can fold/annotate per turn rather than inject
-/// opaque HTML.
+/// `GET /api/session/:uuid/json` — the transcript as structured JSON (exchanges + a
+/// trailing leaf) for the drawer, reach map, and forest preview.
 async fn session_json_route(
     AxumPath(uuid): AxumPath<String>,
     State(state): State<AppState>,
@@ -252,11 +207,6 @@ async fn session_json_route(
             .into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "could not read session").into_response(),
     }
-}
-
-/// Resolve, read, parse, and render a session's transcript fragment.
-fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'static str)> {
-    Ok(eigenform_render::session_html(&load_session(cfg, uuid)?))
 }
 
 /// `POST /api/session/:uuid/fork` — edit-then-fork at a turn. Body `{turn, text}`:
@@ -316,19 +266,6 @@ fn fork_session(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not write fork"))
 }
 
-/// Resolve, read, and parse a session's JSONL into a [`Session`].
-fn load_session(cfg: &Config, uuid: &str) -> Result<eigenform_surgery::Session, (StatusCode, &'static str)> {
-    let dir = cfg
-        .projects_dir
-        .as_ref()
-        .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
-    let path = eigenform_forest::resolve(dir, uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
-    let contents =
-        std::fs::read_to_string(&path).map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
-    // parse_str is currently infallible (ParseError is uninhabited).
-    Ok(eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {}))
-}
-
 /// Cache of rendered session JSON, keyed by file path and invalidated by the file's
 /// (modified-time, length) stamp. A static transcript is parsed once; the live session
 /// (whose file grows each turn) re-renders only when it actually changes.
@@ -362,52 +299,6 @@ impl SessionJsonCache {
 
 /// Process-wide session-JSON cache (one daemon serves one user; keying by path is fine).
 static SESSION_CACHE: LazyLock<SessionJsonCache> = LazyLock::new(SessionJsonCache::default);
-
-/// `GET /api/sessions` — recent sessions across all projects, for the sidebar.
-async fn sessions_route(State(state): State<AppState>) -> Response {
-    let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-        Ok(sessions) => {
-            let items: Vec<_> = sessions
-                .iter()
-                .map(|s| {
-                    serde_json::json!({
-                        "uuid": s.uuid,
-                        "title": s.title.clone().unwrap_or_else(|| "(untitled)".to_string()),
-                        "cwd": s.cwd.display().to_string(),
-                        "recency": s.recency.to_rfc3339(),
-                    })
-                })
-                .collect();
-            axum::Json(items).into_response()
-        }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
-    }
-}
-
-/// `GET /api/projects` — distinct project cwds (recent-first), for the new-session
-/// directory datalist.
-async fn projects_route(State(state): State<AppState>) -> Response {
-    let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-        Ok(sessions) => {
-            let mut seen = std::collections::HashSet::new();
-            let cwds: Vec<String> = sessions
-                .iter()
-                .map(|s| s.cwd.display().to_string())
-                .filter(|c| seen.insert(c.clone()))
-                .collect();
-            axum::Json(cwds).into_response()
-        }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
-    }
-}
 
 #[derive(serde::Deserialize)]
 struct InspectQuery {
@@ -657,21 +548,6 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
                 .interval(std::time::Duration::from_secs(10)),
         )
         .into_response()
-}
-
-/// `GET /api/recent` — the most recent session uuid across all projects.
-async fn recent_route(State(state): State<AppState>) -> Response {
-    let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-        Ok(mut sessions) => match sessions.drain(..).next() {
-            Some(s) => s.uuid.into_response(),
-            None => (StatusCode::NOT_FOUND, "no sessions").into_response(),
-        },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
-    }
 }
 
 /// `GET /api/candidates` — launcher directory list: recent session cwds merged with the
@@ -924,26 +800,6 @@ fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response
         )
         .into_response()
 }
-
-/// Wrap a transcript fragment in a standalone dark page with collapsible styling.
-fn transcript_page(fragment: &str) -> String {
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>transcript</title>\
-         <style>{TRANSCRIPT_CSS}</style></head><body>{fragment}</body></html>"
-    )
-}
-
-const TRANSCRIPT_CSS: &str = "\
-body{margin:0;padding:12px;background:#0b0b0e;color:#e6e6e6;\
-font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5}\
-.session header{color:#8a8a99;margin-bottom:10px}\
-details.exchange{margin:0 0 6px;border-left:2px solid #23232b;padding-left:8px}\
-summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}\
-.reply{margin:4px 0 4px 16px;white-space:pre-wrap;word-break:break-word}\
-.glyph{display:inline-block;width:1em}.glyph.user{color:#7aa2f7}\
-.glyph.assistant{color:#9ece6a}.glyph.system{color:#565666}\
-.role{color:#565666;margin-right:6px}.content{white-space:pre-wrap}\
-.leaf{color:#e0af68}";
 
 #[derive(serde::Deserialize)]
 struct PtyQuery {

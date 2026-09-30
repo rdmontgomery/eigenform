@@ -2,10 +2,7 @@
 **/*.rs.bk
 Cargo.lock.bak
 
-# TS frontend (later)
-/web/node_modules/
-/web/dist/
-/web/.vite/
+# TS frontend
 /webterm/node_modules/
 /webterm/dist/
 

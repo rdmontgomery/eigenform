@@ -78,7 +78,7 @@ just run            # one-shot: build the app, run the daemon, open the browser
 just test           # Rust workspace + webterm unit tests (never spawns claude)
 ```
 
-In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so you don't rebuild the binary to see UI changes — `just dev` rebuilds the bundle and live-reloads the page. The legacy **woland** workbench is paused; when built (`just build-woland`) it's served at `/woland`.
+In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so you don't rebuild the binary to see UI changes — `just dev` rebuilds the bundle and live-reloads the page.
 
 ## Status
 

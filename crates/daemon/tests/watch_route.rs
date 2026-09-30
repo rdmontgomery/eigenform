@@ -1,5 +1,4 @@
-//! The session transcript route: GET /session/:uuid renders the semantic HTML, and
-//! GET /api/recent reports the most recent session uuid.
+//! GET /api/watch/:uuid: the per-session SSE fires when the session's JSONL is written.
 
 #[path = "helpers/mod.rs"]
 mod helpers;
@@ -33,50 +32,6 @@ async fn start(cfg: Config) -> String {
         axum::serve(listener, app(cfg)).await.unwrap();
     });
     format!("http://{addr}")
-}
-
-#[tokio::test]
-async fn session_route_renders_the_transcript_html() {
-    let (_d, cfg) = fixture();
-    let base = start(cfg).await;
-    let body = helpers::http_get(&base, "/session/aaaa1111").await;
-    assert!(body.contains("<details"), "collapsible transcript:\n{body}");
-    assert!(body.contains("render me in the right pane"), "content present:\n{body}");
-}
-
-#[tokio::test]
-async fn session_fragment_route_returns_bare_html_for_in_page_injection() {
-    let (_d, cfg) = fixture();
-    let base = start(cfg).await;
-    let body = helpers::http_get(&base, "/api/session/aaaa1111").await;
-    assert!(body.contains("<details"), "transcript fragment:\n{body}");
-    assert!(body.contains("render me in the right pane"));
-    assert!(!body.to_lowercase().contains("<!doctype"), "fragment, not a full page:\n{body}");
-}
-
-#[tokio::test]
-async fn sessions_route_lists_sessions_with_titles() {
-    let (_d, cfg) = fixture();
-    let base = start(cfg).await;
-    let body = helpers::http_get(&base, "/api/sessions").await;
-    assert!(body.contains(UUID), "uuid in list:\n{body}");
-    assert!(body.contains("render me in the right pane"), "title in list:\n{body}");
-}
-
-#[tokio::test]
-async fn projects_route_lists_distinct_cwds() {
-    let (_d, cfg) = fixture();
-    let base = start(cfg).await;
-    let body = helpers::http_get(&base, "/api/projects").await;
-    assert!(body.contains("/home/me/p"), "project cwd listed:\n{body}");
-}
-
-#[tokio::test]
-async fn recent_route_reports_the_latest_uuid() {
-    let (_d, cfg) = fixture();
-    let base = start(cfg).await;
-    let body = helpers::http_get(&base, "/api/recent").await;
-    assert!(body.contains(UUID), "recent uuid:\n{body}");
 }
 
 #[tokio::test]
