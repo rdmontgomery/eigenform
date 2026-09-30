@@ -36,16 +36,8 @@ fn fixture() -> (tempfile::TempDir, Config) {
 
     let cfg = Config {
         program: "cat".into(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
         projects_dir: Some(dir.path().to_path_buf()),
-        sessions_dir: None,
-        state_dir: None,
-        workspace_root: None,
-        dev: false,
-        log_file: None,
+        ..Default::default()
     };
     (dir, cfg)
 }

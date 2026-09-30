@@ -27,16 +27,8 @@ async fn start_with_workspace() -> (String, tempfile::TempDir) {
     let workspace = tempfile::tempdir().unwrap();
     let cfg = Config {
         program: "sh".to_string(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
-        projects_dir: None,
-        sessions_dir: None,
-        state_dir: None,
         workspace_root: Some(workspace.path().to_path_buf()),
-        dev: false,
-        log_file: None,
+        ..Default::default()
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

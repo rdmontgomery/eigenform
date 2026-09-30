@@ -6,16 +6,9 @@ use eigenform_daemon::{app, Config};
 fn cfg(term_dir: std::path::PathBuf, dev: bool) -> Config {
     Config {
         program: "cat".into(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
         term_dir: Some(term_dir),
-        projects_dir: None,
-        sessions_dir: None,
-        state_dir: None,
-        workspace_root: None,
         dev,
-        log_file: None,
+        ..Default::default()
     }
 }
 

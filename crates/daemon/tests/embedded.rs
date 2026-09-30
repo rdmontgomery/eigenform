@@ -20,16 +20,8 @@ async fn start(cfg: Config) -> String {
 fn embedded_cfg() -> Config {
     Config {
         program: "cat".into(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
         term_dir: None, // force the embedded fallback
-        projects_dir: None,
-        sessions_dir: None,
-        state_dir: None,
-        workspace_root: None,
-        dev: false,
-        log_file: None,
+        ..Default::default()
     }
 }
 

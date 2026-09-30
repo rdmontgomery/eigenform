@@ -61,7 +61,7 @@ mod embedded {
 
 /// What the daemon runs when a terminal connects. For slice 1 this is a fixed command
 /// (a shell for the demo, a dummy in tests) — NOT arbitrary exec from the request.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Config {
     pub program: String,
     pub args: Vec<String>,
@@ -1786,16 +1786,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            log_file: None,
+            ..Default::default()
         };
 
         let resumed = pty_command(
@@ -1879,16 +1871,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            log_file: None,
+            ..Default::default()
         };
 
         // The vanished-cwd resume still resolves to claude --resume in the recorded cwd...
@@ -1934,16 +1918,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            log_file: None,
+            ..Default::default()
         };
         let q = |session: Option<&str>| PtyQuery {
             attach: None,
@@ -1987,16 +1963,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            log_file: None,
+            ..Default::default()
         };
 
         // fork "before" u2 → rewind to the s1 boundary; u2 and its tail drop.
