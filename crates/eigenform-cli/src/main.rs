@@ -656,7 +656,6 @@ fn daemon(
         state_dir: Some(state_dir()?),
         workspace_root,
         dev,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         log_file,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));

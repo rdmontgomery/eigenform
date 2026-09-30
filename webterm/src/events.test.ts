@@ -78,54 +78,12 @@ test("refusals lead with the reason and add context", () => {
   );
 });
 
-test("downgrade-recovered shows short src → branch and the restatement mode", () => {
-  assert.equal(
-    eventSummary(
-      ev("downgrade-recovered", {
-        srcUuid: "dddd4444-0000-4000-8000-000000000004",
-        branchUuid: "eeee5555-0000-4000-8000-000000000005",
-        offendingTurn: "u2",
-        rephrased: true,
-      }),
-    ),
-    "dddd4444 → eeee5555 · rephrased",
-  );
-  // The rephraser fell back to the verbatim prompt.
-  assert.equal(
-    eventSummary(
-      ev("downgrade-recovered", {
-        srcUuid: "dddd4444-0000-4000-8000-000000000004",
-        branchUuid: "eeee5555-0000-4000-8000-000000000005",
-        rephrased: false,
-      }),
-    ),
-    "dddd4444 → eeee5555 · verbatim",
-  );
-});
-
-test("downgrade-recovery-failed leads with src and the reason", () => {
-  assert.equal(
-    eventSummary(
-      ev("downgrade-recovery-failed", {
-        srcUuid: "dddd4444-0000-4000-8000-000000000004",
-        reason: "no downgrade detected",
-      }),
-    ),
-    "dddd4444 · no downgrade detected",
-  );
-  // A missing reason still renders the fallback verb, not an empty string.
-  assert.equal(
-    eventSummary(ev("downgrade-recovery-failed", { srcUuid: "dddd4444-0000" })),
-    "dddd4444 · failed",
-  );
-});
-
 test("an unknown (future) kind still renders a generic summary", () => {
   // The key extensibility property: a kind events.ts has never seen must still
   // summarize legibly, so a later branch can emit new kinds with no change here.
   assert.equal(
-    eventSummary(ev("downgrade-detected", { from: "fable", to: "opus", ptyId: "9" })),
-    "from: fable · to: opus · ptyId: 9",
+    eventSummary(ev("model-switched", { from: "opus", to: "sonnet", ptyId: "9" })),
+    "from: opus · to: sonnet · ptyId: 9",
   );
   // No payload → empty summary, not a crash.
   assert.equal(eventSummary(ev("mystery", {})), "");

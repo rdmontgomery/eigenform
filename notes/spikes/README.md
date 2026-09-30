@@ -8,7 +8,7 @@ Format (every spike):
 # <NN> — <topic>
 
 **Claim:** one sentence.
-**Status:** CONFIRMED | REFUTED | PENDING | INCONCLUSIVE
+**Status:** CONFIRMED | REFUTED | PENDING | INCONCLUSIVE | RETIRED
 **claude version:** <version>
 **Date:** <ISO date>
 
@@ -23,3 +23,5 @@ What this means for the design. If REFUTED, what changes.
 ```
 
 Spikes 2–4 gate implementation start. Spike 5 (cache TTL) defers to step 9.
+
+RETIRED means the claim may still be true but nothing depends on it anymore; it is skipped by re-vetting (`.claude/skills/vetting-claude-internals`).

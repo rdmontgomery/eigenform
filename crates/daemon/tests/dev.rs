@@ -15,7 +15,6 @@ fn cfg(term_dir: std::path::PathBuf, dev: bool) -> Config {
         state_dir: None,
         workspace_root: None,
         dev,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         log_file: None,
     }
 }

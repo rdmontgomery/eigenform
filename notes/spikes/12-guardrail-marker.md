@@ -6,7 +6,7 @@ the transcript. It is a *silent* model-field transition: a main-chain assistant 
 with no notice row and no marker string. The `GUARDRAIL_MARKER` placeholder that the detector
 previously matched (`"switched this session to a safer model"`) does **not** occur, so the old
 detector never fired in the field.
-**Status:** CONFIRMED
+**Status:** RETIRED 2026-09-30 (was CONFIRMED @2.1.199). Fable no longer downgrades live sessions, and the mulligan detector that depended on this claim was removed — nothing is load-bearing on it, so it is out of the re-vet set.
 **claude version:** 2.1.199 (Claude Code)
 **Date:** 2026-07-02
 

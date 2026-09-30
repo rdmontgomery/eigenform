@@ -1,8 +1,9 @@
-//! eigenform-daemon: the woland backend — pty manager + http/ws server.
+//! eigenform-daemon: the session host + http/ws server behind the eigenform app.
 //!
-//! Slice 1: the pty bridge. Spawn an arbitrary command in a pty and stream its stdio.
-//! The bridge drives ANY command; real `claude --resume` is launched only by the user,
-//! never by tests or the agent. See `docs/plans/2026-06-03-woland-design.md`.
+//! Hosts pty sessions (a [`host::SessionHost`] that outlives any one browser socket),
+//! serves the transcript / forest / claims / inspect APIs, and bridges each pty to a
+//! websocket. The bridge drives ANY command; real `claude` is launched only by the user
+//! from inside the app, never by the daemon, tests, or the agent.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -84,51 +85,9 @@ pub struct Config {
     pub workspace_root: Option<PathBuf>,
     /// Dev mode: inject the live-reload hook and serve `/api/dev/reload`.
     pub dev: bool,
-    /// Command that turns an offending prompt into a suggested restatement. The
-    /// composed prompt is appended as the final argv entry; stdout is the
-    /// suggestion. Default `["claude", "-p"]`; tests inject a stub. Keeping the
-    /// daemon's only model call as a `claude` subprocess (never the API) matches
-    /// the invariant that eigenform only ever runs `claude`.
-    pub rephrase_cmd: Vec<String>,
     /// Optional JSONL sink for the structured event stream (`--log-file <path>`).
     /// Each recorded event is appended as one JSON line, best-effort; None = no file.
     pub log_file: Option<PathBuf>,
-}
-
-/// Run `cmd` in `cwd`, appending the restatement instruction + the offending
-/// prompt as the final argv entry, and return trimmed stdout. Errors (spawn
-/// failure, non-zero exit, empty output) bubble up so the caller can fall back to
-/// the verbatim prompt.
-pub fn rephrase_prompt(
-    cmd: &[String],
-    cwd: &Path,
-    offending: &str,
-) -> std::io::Result<String> {
-    let (program, args) = cmd
-        .split_first()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty rephrase_cmd"))?;
-    let prompt = format!(
-        "The prompt below caused an over-eager safety downgrade of a coding \
-         session. Restate it to remove ambiguity and make the benign intent \
-         explicit, preserving the actual ask. Return ONLY the restated prompt. \
-         If the ask is genuinely disallowed, say so plainly instead.\n\n{offending}"
-    );
-    let output = std::process::Command::new(program)
-        .args(args)
-        .arg(&prompt)
-        .current_dir(cwd)
-        .output()?;
-    if !output.status.success() {
-        return Err(std::io::Error::other(format!(
-            "rephrase command exited {}",
-            output.status
-        )));
-    }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() {
-        return Err(std::io::Error::other("empty rephrase output"));
-    }
-    Ok(text)
 }
 
 /// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
@@ -155,7 +114,6 @@ pub fn app(config: Config) -> Router {
         .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/session/:uuid/json", get(session_json_route))
         .route("/api/session/:uuid/fork", post(fork_route))
-        .route("/api/session/:uuid/recover-downgrade", post(recover_downgrade_route))
         .route("/api/sessions", get(sessions_route))
         .route("/api/forest", get(forest_route))
         .route("/api/watch/forest", get(forest_watch_route))
@@ -358,107 +316,6 @@ fn fork_session(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not write fork"))
 }
 
-/// `POST /api/session/:uuid/recover-downgrade` — detect the guardrail downgrade,
-/// fork a Fable branch truncated to before the offending prompt (reusing
-/// `fork_session` → `surgery::fork_before`), and stage a suggested restatement.
-/// Never sends. Returns `{ branchUuid, stagedText, offendingTurn, note }`.
-async fn recover_downgrade_route(
-    AxumPath(uuid): AxumPath<String>,
-    State(state): State<AppState>,
-) -> Response {
-    match recover_downgrade(&state.config, &uuid) {
-        Ok(v) => {
-            // Record the outcome so EVERY recovery — the auto-stage on the forest poll
-            // and a manual GUI trigger alike — leaves a trace in the Events pane. `note`
-            // is null when the rephraser succeeded; non-null means we staged verbatim.
-            state.events.record(
-                "downgrade-recovered",
-                serde_json::json!({
-                    "srcUuid": uuid,
-                    "branchUuid": v.get("branchUuid"),
-                    "offendingTurn": v.get("offendingTurn"),
-                    "rephrased": v.get("note").is_some_and(serde_json::Value::is_null),
-                }),
-            );
-            Json(v).into_response()
-        }
-        Err(e) => {
-            // A failed attempt is itself informative — especially a manual trigger on a
-            // session with nothing to recover ("no downgrade detected"). Record why
-            // before returning the error, so the Events pane always shows the result.
-            state.events.record(
-                "downgrade-recovery-failed",
-                serde_json::json!({ "srcUuid": uuid, "reason": e.1 }),
-            );
-            e.into_response()
-        }
-    }
-}
-
-fn recover_downgrade(
-    cfg: &Config,
-    src_uuid: &str,
-) -> Result<serde_json::Value, (StatusCode, &'static str)> {
-    let dir = cfg
-        .projects_dir
-        .as_ref()
-        .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
-    let src_path = eigenform_forest::resolve(dir, src_uuid)
-        .map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
-    let down = eigenform_forest::detect_downgrade(&src_path)
-        .ok_or((StatusCode::UNPROCESSABLE_ENTITY, "no downgrade detected"))?;
-
-    // Fork first (load-bearing). Reuses the existing primitive.
-    let branch_uuid = fork_session(cfg, src_uuid, &down.offending_turn)?;
-
-    // Pull the offending prompt's text for the rephraser and the verbatim fallback.
-    let offending_text = user_turn_text(&src_path, &down.offending_turn).unwrap_or_default();
-    // Nominal cwd: the transcript's storage dir (`~/.claude/projects/<enc>`), not the
-    // session's real project cwd. A "restate this prompt" call needs no repo context, so
-    // this is immaterial; if it were ever empty the spawn fails and we fall back to verbatim.
-    let cwd = src_path.parent().map(Path::to_path_buf).unwrap_or_default();
-    let (staged_text, note) = match rephrase_prompt(&cfg.rephrase_cmd, &cwd, &offending_text) {
-        Ok(t) => (t, serde_json::Value::Null),
-        Err(_) => (
-            offending_text,
-            serde_json::Value::String(
-                "couldn't reach the rephraser — staged your prompt verbatim".into(),
-            ),
-        ),
-    };
-
-    Ok(serde_json::json!({
-        "branchUuid": branch_uuid,
-        "stagedText": staged_text,
-        "offendingTurn": down.offending_turn,
-        "note": note,
-    }))
-}
-
-/// The `message.content` text of the user turn with `uuid` in the JSONL at `path`.
-fn user_turn_text(path: &Path, uuid: &str) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    for line in text.lines() {
-        // IMPORTANT: a non-JSON / opaque line must be SKIPPED, not abort the scan.
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if v.get("uuid").and_then(|x| x.as_str()) == Some(uuid) {
-            let content = v.get("message").and_then(|m| m.get("content"))?;
-            if let Some(s) = content.as_str() {
-                return Some(s.to_string());
-            }
-            return content.as_array().map(|bs| {
-                bs.iter()
-                    .filter_map(|b| b.get("text").and_then(|x| x.as_str()))
-                    .collect::<Vec<_>>()
-                    // Space-join to match forest's `user_text`, so a multi-block
-                    // user turn doesn't fuse words (user content is usually a plain string).
-                    .join(" ")
-            });
-        }
-    }
-    None
-}
-
 /// Resolve, read, and parse a session's JSONL into a [`Session`].
 fn load_session(cfg: &Config, uuid: &str) -> Result<eigenform_surgery::Session, (StatusCode, &'static str)> {
     let dir = cfg
@@ -633,9 +490,6 @@ fn forest_json(cfg: &Config) -> String {
                     "live": s.live,
                     "state": s.state.as_str(),
                     "spark": s.spark,
-                    "downgrade": s.downgrade.as_ref().map(|d| serde_json::json!({
-                        "offendingTurn": d.offending_turn,
-                    })),
                     "headless": s.headless,
                     "pid": s.pid,
                 })
@@ -1941,7 +1795,6 @@ mod tests {
             state_dir: None,
             workspace_root: None,
             dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
             log_file: None,
         };
 
@@ -2035,7 +1888,6 @@ mod tests {
             state_dir: None,
             workspace_root: None,
             dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
             log_file: None,
         };
 
@@ -2091,7 +1943,6 @@ mod tests {
             state_dir: None,
             workspace_root: None,
             dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
             log_file: None,
         };
         let q = |session: Option<&str>| PtyQuery {
@@ -2145,7 +1996,6 @@ mod tests {
             state_dir: None,
             workspace_root: None,
             dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
             log_file: None,
         };
 

@@ -1,5 +1,10 @@
 # Fable→Opus Downgrade Recovery
 
+> **Retired 2026-09-30.** Fable no longer drops live sessions to Opus, so the
+> mulligan (downgrade detection, `/recover-downgrade`, the rephraser, auto-stage)
+> was removed. Kept as a historical record; the fork/`fork_before` surgery it
+> reused remains.
+
 > Design — 2026-07-02
 
 ## Problem

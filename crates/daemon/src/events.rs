@@ -7,7 +7,7 @@
 //!
 //! # Design constraints
 //! - `kind` is a plain `String` (kebab-case by convention), deliberately open-ended
-//!   so future work can emit new kinds (e.g. `downgrade-detected`, `rephrase-fallback`)
+//!   so future work can emit new kinds (e.g. `model-switched`, `compact-started`)
 //!   without touching this module or the wire schema.
 //! - `data` is arbitrary JSON — usually carrying a `ptyId` and/or session `uuid`.
 //! - `record` is called from many threads (the pty pump, filesystem-watcher threads,
@@ -202,10 +202,10 @@ mod tests {
     fn open_ended_kinds_pass_through_untouched() {
         // A future branch's new kind must record without any change to the bus.
         let bus = EventBus::default();
-        bus.record("downgrade-detected", serde_json::json!({ "from": "fable", "to": "opus" }));
+        bus.record("model-switched", serde_json::json!({ "from": "opus", "to": "sonnet" }));
         let all = bus.snapshot(None);
-        assert_eq!(all[0].kind, "downgrade-detected");
-        assert_eq!(all[0].data["from"], "fable");
+        assert_eq!(all[0].kind, "model-switched");
+        assert_eq!(all[0].data["from"], "opus");
     }
 
     #[test]
