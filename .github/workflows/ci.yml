@@ -33,14 +33,16 @@ jobs:
       - run: npm run build
 
   rust:
-    name: rust (clippy · test · embedded build)
+    name: rust (fmt · clippy · test · embedded build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked
       - name: test
