@@ -25,8 +25,10 @@
  * LOCALSTORAGE SCHEMA (key "eigenform:term:tabs:v1"):
  *   JSON array of TabDescriptor. Versioned key — bump suffix if schema changes.
  *
- * POLL: rail polls GET /api/pty + GET /api/forest every 3s to update badges.
- * Interval is cleared on visibilitychange → hidden to avoid background fan-out.
+ * ROSTER: the forest (every session on disk — the expensive scan) is PUSHED by
+ * the daemon over SSE (GET /api/watch/forest) only when it changes; the rail
+ * polls just GET /api/pty (the in-memory host registry, cheap) every 3s. Both
+ * stop on visibilitychange → hidden and resume on show.
  */
 
 import { newTerminal, connectPty, applyFont, applyTermTheme, DEFAULT_FONT } from "./pty.ts";
@@ -58,7 +60,6 @@ import {
   type TabDescriptor,
   type TabReconcileAction,
 } from "./shell-helpers.ts";
-import { shouldAutoRecover } from "./downgrade.ts";
 import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
@@ -501,14 +502,6 @@ export function mountShell(appEl: HTMLElement): void {
   let activeTabId: string | null = null;
   /** Id of the tab currently being drag-reordered, or null when idle. */
   let dragTabId: string | null = null;
-
-  // Auto-recover state (see downgrade.ts + the forest poll below).
-  // lastInputAt: epoch ms of the user's last keystroke into the ACTIVE tab —
-  //   guards against yanking focus / eating a keypress mid-sentence.
-  // recovered: source session uuids we've already auto-staged a retry for
-  //   (fires at most once per session, even across polls).
-  let lastInputAt = 0;
-  const recovered = new Set<string>();
 
   function activeTab(): TabEntry | null {
     return tabs.find((t) => t.id === activeTabId) ?? null;
@@ -1292,13 +1285,6 @@ export function mountShell(appEl: HTMLElement): void {
       reconnectTimer: null,
     };
 
-    // Track the user's last keystroke into the ACTIVE tab so the auto-recover
-    // gate never fires mid-sentence (see the forest poll's shouldAutoRecover).
-    // Compares entry.id (mutated in place by onPtyId) so it survives id renumber.
-    handle.term.onData(() => {
-      if (entry.id === activeTabId) lastInputAt = Date.now();
-    });
-
     connectEntry(entry, query, desc.ptyId);
     tabs.push(entry);
     saveTabs();
@@ -1320,7 +1306,7 @@ export function mountShell(appEl: HTMLElement): void {
    * announced id should become the tab's stable identity).
    */
   function connectEntry(entry: TabEntry, query: string, hadPtyId?: string) {
-    // Staged-seed delivery (fable-retry rephrases, fork-edited prompts): type the
+    // Staged-seed delivery (fork-edited prompts): type the
     // seed into the pty once its output has settled — NOT on the daemon's session
     // frame. claude ≥2.1.200 resumes keep the session id and announce nothing at
     // startup (spike 13), so output quiescence is the only startup signal that
@@ -1568,14 +1554,42 @@ export function mountShell(appEl: HTMLElement): void {
     renderRail();
   }
 
+  /** Latest forest snapshot pushed by /api/watch/forest; null until the first push. */
+  let lastForest: ForestItem[] | null = null;
+  let forestStream: EventSource | null = null;
+
+  /** Subscribe to forest pushes. The daemon sends the current snapshot on connect,
+   *  then again whenever it changes; each push re-renders the roster. EventSource
+   *  reconnects on its own if the daemon restarts. */
+  function openForestStream() {
+    if (forestStream) return;
+    forestStream = new EventSource("/api/watch/forest");
+    forestStream.onmessage = (ev: MessageEvent<string>) => {
+      try {
+        lastForest = JSON.parse(ev.data) as ForestItem[];
+      } catch {
+        return;
+      }
+      void refreshRoster();
+    };
+  }
+
+  function closeForestStream() {
+    forestStream?.close();
+    forestStream = null;
+  }
+
   async function fetchRosterData(): Promise<{ ptys: PtyInfo[]; forest: ForestItem[] }> {
-    const [ptyRes, forestRes] = await Promise.all([
-      fetch("/api/pty"),
-      fetch("/api/forest"),
-    ]);
-    const ptys = (await ptyRes.json()) as PtyInfo[];
-    const forest = (await forestRes.json()) as ForestItem[];
-    return { ptys, forest };
+    const ptys = fetch("/api/pty").then((r) => r.json() as Promise<PtyInfo[]>);
+    // Before the first push (boot), fetch the snapshot once so tab restore can
+    // reconcile against it; after that the stream keeps lastForest current.
+    const forest =
+      lastForest !== null
+        ? Promise.resolve(lastForest)
+        : fetch("/api/forest").then((r) => r.json() as Promise<ForestItem[]>);
+    const [p, f] = await Promise.all([ptys, forest]);
+    lastForest ??= f;
+    return { ptys: p, forest: f };
   }
 
   /** Latest fetched roster — re-rendered locally on search input / tab switch. */
@@ -1828,13 +1842,6 @@ export function mountShell(appEl: HTMLElement): void {
       live.title = dotTitle(row.activity, row.liveness);
       meta.append(live);
     }
-    if (row.downgrade) {
-      const downgrade = el("span", "rail-downgrade");
-      downgrade.textContent = "fable→opus";
-      downgrade.title =
-        "Guardrail downgraded this session to Opus — a Fable retry can be staged";
-      meta.append(downgrade);
-    }
     body.append(labelEl, meta);
 
     const recencyEl = el("span", "rail-row-recency");
@@ -1901,69 +1908,11 @@ export function mountShell(appEl: HTMLElement): void {
     railFoot.title = "Show active sessions";
   }
 
-  /**
-   * If the ACTIVE session shows a Fable→Opus downgrade (and the user isn't
-   * mid-keystroke), POST for a forked retry, open the branch, and stage the
-   * rephrased prompt into it WITHOUT submitting. Fires at most once per source
-   * session. `forest` is the raw snapshot from the poll (ForestItem carries uuid
-   * + downgrade, so it satisfies DowngradeCandidate structurally).
-   */
-  async function maybeAutoRecover(forest: ForestItem[]) {
-    const hit = shouldAutoRecover({
-      activeUuid: activeTab()?.descriptor.uuid ?? null,
-      rows: forest,
-      handled: recovered,
-      lastInputAt,
-      now: Date.now(),
-      recentInputMs: 1500,
-    });
-    if (!hit) return;
-    // Mark handled BEFORE the await so a slow POST can't double-fire on the next
-    // 3s poll. Left handled on failure too, so it doesn't spin.
-    recovered.add(hit.uuid);
-    try {
-      const res = await fetch(
-        "/api/session/" + encodeURIComponent(hit.uuid) + "/recover-downgrade",
-        { method: "POST" },
-      );
-      if (!res.ok) {
-        // Deliberate non-ok (4xx/5xx): keep it handled so we don't spin.
-        console.warn(`recover-downgrade failed (${res.status}) for ${hit.uuid}`);
-        return;
-      }
-      const { branchUuid, stagedText, note } = (await res.json()) as {
-        branchUuid: string;
-        stagedText: string;
-        offendingTurn: string;
-        note: string | null;
-      };
-      // note != null → the rephraser fell back to verbatim. Surface it WITHOUT
-      // baking it into the persisted label (label is saved by saveTabs, so a
-      // one-shot note must not become a permanent tab name). No toast to reuse,
-      // and TabDescriptor has no per-tab title channel — so just warn.
-      if (note) console.warn(`fable retry rephrase note for ${hit.uuid}: ${note}`);
-      openTabWithQuery("?session=" + encodeURIComponent(branchUuid), {
-        uuid: branchUuid,
-        label: "fable-retry",
-        seedInput: stagedText,
-      });
-      void refreshRoster();
-    } catch (err) {
-      // Network blip → allow one retry next poll; a deliberate non-ok stays
-      // handled to avoid spinning.
-      recovered.delete(hit.uuid);
-      console.warn(`recover-downgrade errored for ${hit.uuid}:`, err);
-    }
-  }
-
   async function refreshRoster() {
     try {
       const { ptys, forest } = await fetchRosterData();
       lastRows = buildRoster(ptys, forest, overrides);
       renderRail();
-
-      // Auto-stage a Fable retry for the active downgraded session (once each).
-      void maybeAutoRecover(forest);
 
       // Update tab state badges + cwd + uuid + title from live pty / forest data.
       for (const t of tabs) {
@@ -2060,13 +2009,16 @@ export function mountShell(appEl: HTMLElement): void {
 
   void boot();
 
-  // 3-second roster poll; cancel on hide, restart on show to avoid background fan-out.
+  // Forest arrives by push; only the cheap pty list is polled. Both stop while the
+  // page is hidden and resume (with an immediate refresh) when it's shown again.
+  openForestStream();
   let pollInterval = setInterval(() => void refreshRoster(), 3000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       clearInterval(pollInterval);
+      closeForestStream();
     } else {
-      // Page became visible again — refresh immediately then resume polling.
+      openForestStream();
       void refreshRoster();
       pollInterval = setInterval(() => void refreshRoster(), 3000);
     }

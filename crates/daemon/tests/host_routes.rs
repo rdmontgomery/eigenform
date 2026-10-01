@@ -15,17 +15,7 @@ use eigenform_daemon::{app, Config};
 async fn start() -> String {
     let cfg = Config {
         program: "sh".to_string(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
-        projects_dir: None,
-        sessions_dir: None,
-        state_dir: None,
-        workspace_root: None,
-        dev: false,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-        log_file: None,
+        ..Default::default()
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -40,17 +30,8 @@ async fn start() -> String {
 async fn start_with_sessions(sessions_dir: std::path::PathBuf) -> String {
     let cfg = Config {
         program: "sh".to_string(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
-        projects_dir: None,
         sessions_dir: Some(sessions_dir),
-        state_dir: None,
-        workspace_root: None,
-        dev: false,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-        log_file: None,
+        ..Default::default()
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

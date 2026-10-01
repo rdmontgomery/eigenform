@@ -31,17 +31,9 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Config) {
 
     let cfg = Config {
         program: "cat".into(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
         projects_dir: Some(projects.path().to_path_buf()),
-        sessions_dir: None,
-        state_dir: None,
         workspace_root: Some(workspace.path().to_path_buf()),
-        dev: false,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-        log_file: None,
+        ..Default::default()
     };
     (workspace, projects, cfg)
 }
@@ -88,17 +80,7 @@ async fn candidates_recents_first_then_subdirs_deduped() {
 async fn candidates_empty_when_nothing_configured() {
     let cfg = Config {
         program: "cat".into(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
-        projects_dir: None,
-        sessions_dir: None,
-        state_dir: None,
-        workspace_root: None,
-        dev: false,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-        log_file: None,
+        ..Default::default()
     };
     let base = start(cfg).await;
     let body = helpers::http_get(&base, "/api/candidates").await;

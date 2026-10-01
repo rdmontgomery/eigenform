@@ -8,13 +8,17 @@ The binary is `eigenform`; alias it to taste (`alias ef=eigenform`). Dual-licens
 
 ![eigenform: a browser terminal with draggable session tabs, a rail of recent sessions with a Links section tracking URLs mentioned in chat, and a docked transcript + reach map](docs/img/app.png)
 
-## The mulligan
+## What you get
 
-Sometimes the bigger model (Fable) decides a prompt is risky and quietly drops your live session to a smaller one, mid-conversation. Usually it's a false read — a benign security question, a dual-use tool, a CTF box — and the session just got dumber without asking you.
+One local daemon, one browser tab, every Claude Code session you have.
 
-eigenform catches the drop as it lands. It forks a fresh Fable branch rewound to the turn *before* the one that tripped the wire, drafts a cleaner way to ask, and stages it in your input — **never sent.** You read it, edit it, decide. One keystroke and you're back on the model you started with.
+- **A real terminal, tabbed.** Full-fidelity xterm sessions hosted by the daemon — they survive a closed browser, a reload, a dropped socket. Tabs drag, restore by session uuid, and reconnect on their own.
+- **The rail.** Every session on disk, live or not, ranked by state and recency, with shape-coded status dots (working / ready / external / headless), search, inline rename, a fuzzy launcher for new sessions, and a Links section that collects the URLs mentioned in chat.
+- **Transcript + reach map.** A docked drawer renders the session semantically — turns, tool calls, mini-diffs — alongside a reach map of how far the agent's hands stretched — subdirs, sibling repos, web hosts, MCP servers, subagents — with a secret-read-then-egress pair flagged.
+- **Context surgery.** Edit any past prompt and fork: a copy-on-write branch is written beside the original (never touched), resumed in a new tab, with your edited prompt staged in the input — **never sent**.
+- **Audit panes.** Active-sessions modal (what Claude *thinks* is running vs. what is), an events stream, and an inspect view of the skills and memory layers each project actually sees.
 
-If the ask was genuinely over the line, the draft says so instead of helping — this is recovery from *wrong* downgrades, not a way around right ones. It's the [fork operation](#what-this-is) pointed at one specific, annoying failure: copy-on-write, so the original thread is never touched, and nothing leaves your machine.
+Nothing leaves your machine. The daemon reads `~/.claude`; it never calls the API.
 
 ## Install & run
 
@@ -71,16 +75,14 @@ Then `ef` launches the app and `ef daemon`, `ef sessions`, `ef surgery …` all 
 ```sh
 just dev            # esbuild --watch + cargo-watch: edit .ts → browser reloads, .rs → daemon restarts
 just run            # one-shot: build the app, run the daemon, open the browser
-just test           # workspace unit/integration tests (never spawns claude)
+just test           # Rust workspace + webterm unit tests (never spawns claude)
 ```
 
-In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so you don't rebuild the binary to see UI changes — `just dev` rebuilds the bundle and live-reloads the page. The legacy **woland** workbench is paused; when built (`just build-woland`) it's served at `/woland`.
+In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so you don't rebuild the binary to see UI changes — `just dev` rebuilds the bundle and live-reloads the page.
 
 ## Status
 
 Early but running. The browser app — a full-fidelity terminal centerpiece with a session host, launcher, and transcript drawer — is implemented and self-contained via `just install`. The context-surgery, forest, render, skills, memory, and inspect crates are built and tested; the eigenform graph is still ahead. The original design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md), and spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
-
-The [mulligan](#the-mulligan) (Fable→Opus downgrade recovery) is wired end-to-end and tested. It arms once the guardrail's exact notice string is pinned from a live occurrence — until then it's dormant by design (detection is a signature match, and the marker is a documented placeholder). Design: [`docs/plans/2026-07-02-fable-downgrade-recovery-design.md`](docs/plans/2026-07-02-fable-downgrade-recovery-design.md).
 
 ## What this is
 

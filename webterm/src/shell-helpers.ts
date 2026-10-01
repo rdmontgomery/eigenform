@@ -177,7 +177,7 @@ export interface TabDescriptor {
   kind?: "claude" | "terminal";
   /**
    * A staged prompt to type into the resumed pty ONCE, without submitting (no
-   * trailing newline). Set for auto-staged Fable retries. Deliberately transient:
+   * trailing newline). Set for edit-then-fork branches. Deliberately transient:
    * never persisted to localStorage (see saveTabs) and cleared after the first
    * send so a reconnect can't re-inject it.
    */

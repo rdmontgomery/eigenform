@@ -46,8 +46,6 @@ export interface ForestItem {
   live: boolean;
   state: string;
   spark: number[];
-  /** Present iff a Fable→Opus guardrail downgrade was detected. */
-  downgrade?: { offendingTurn: string } | null;
   /** Launched non-interactively (`claude -p`, an Agent SDK host). */
   headless?: boolean;
   /** The live process's pid; null for dead sessions. */

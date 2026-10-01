@@ -25,17 +25,10 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir, Config
     .unwrap();
     let cfg = Config {
         program: "cat".into(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
         projects_dir: Some(proj.path().to_path_buf()),
         sessions_dir: Some(sess.path().to_path_buf()),
         state_dir: Some(state.path().to_path_buf()),
-        workspace_root: None,
-        dev: false,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-        log_file: None,
+        ..Default::default()
     };
     (proj, sess, state, cfg)
 }
@@ -78,78 +71,66 @@ async fn forest_route_reports_a_live_ready_session_with_spark() {
     assert_eq!(entry["spark"], serde_json::json!([77]), "output_tokens per turn");
 }
 
-// Session uuids (filename stems) for the downgrade snapshot test.
-const DOWNGRADED_UUID: &str = "dddd4444-0000-4000-8000-000000000004";
-const CLEAN_UUID: &str = "cccc3333-0000-4000-8000-000000000003";
-
-/// A downgraded session (Task 1's `guardrail_fixture()` shape) plus a clean session,
-/// both dropped in the projects dir so they appear as recent Forest rows.
-fn downgrade_fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir, Config) {
-    let proj = tempfile::tempdir().unwrap();
-    let sess = tempfile::tempdir().unwrap();
-    let state = tempfile::tempdir().unwrap();
-    let pdir = proj.path().join("-home-me-p");
-    std::fs::create_dir_all(&pdir).unwrap();
-
-    // Downgraded transcript: u2 (offending) → silent fable→opus model flip (no synthetic
-    // notice — that's the real guardrail shape).
-    let downgraded = [
-        r#"{"type":"user","isSidechain":false,"uuid":"u1","timestamp":"2026-06-06T10:00:00Z","sessionId":"s","message":{"role":"user","content":"benign question"}}"#.to_string(),
-        r#"{"type":"assistant","isSidechain":false,"uuid":"a1","timestamp":"2026-06-06T10:00:01Z","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"ok"}]}}"#.to_string(),
-        r#"{"type":"user","isSidechain":false,"uuid":"u2","timestamp":"2026-06-06T10:00:02Z","sessionId":"s","message":{"role":"user","content":"the offending prompt"}}"#.to_string(),
-        r#"{"type":"assistant","isSidechain":false,"uuid":"a2","timestamp":"2026-06-06T10:00:04Z","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"reply"}]}}"#.to_string(),
-    ].join("\n") + "\n";
-    std::fs::write(pdir.join(format!("{DOWNGRADED_UUID}.jsonl")), downgraded).unwrap();
-
-    // Clean transcript: always-Fable, no guardrail notice.
-    let clean = [
-        r#"{"type":"user","isSidechain":false,"uuid":"u1","timestamp":"2026-06-06T09:00:00Z","sessionId":"s","message":{"role":"user","content":"go"}}"#.to_string(),
-        r#"{"type":"assistant","isSidechain":false,"uuid":"a1","timestamp":"2026-06-06T09:00:01Z","message":{"model":"claude-fable-5","role":"assistant","content":[{"type":"text","text":"reply"}]}}"#.to_string(),
-    ].join("\n") + "\n";
-    std::fs::write(pdir.join(format!("{CLEAN_UUID}.jsonl")), clean).unwrap();
-
-    let cfg = Config {
-        program: "cat".into(),
-        args: vec![],
-        cwd: None,
-        web_dir: None,
-        term_dir: None,
-        projects_dir: Some(proj.path().to_path_buf()),
-        sessions_dir: Some(sess.path().to_path_buf()),
-        state_dir: Some(state.path().to_path_buf()),
-        workspace_root: None,
-        dev: false,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-        log_file: None,
-    };
-    (proj, sess, state, cfg)
+/// Read SSE `data:` payloads from `stream` until `want` of them arrive or ~`budget_ms` pass.
+async fn read_sse_data(stream: &mut tokio::net::TcpStream, want: usize, budget_ms: u64) -> Vec<String> {
+    use tokio::io::AsyncReadExt;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
+    let mut acc = String::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let datas: Vec<String> = acc
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: ").or_else(|| l.strip_prefix("data:")))
+            .map(str::to_string)
+            .collect();
+        if datas.len() >= want || tokio::time::Instant::now() >= deadline {
+            return datas;
+        }
+        if let Ok(Ok(n)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), stream.read(&mut buf)).await
+        {
+            if n == 0 {
+                return datas;
+            }
+            acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    }
 }
 
 #[tokio::test]
-async fn forest_route_surfaces_a_downgrade_and_leaves_clean_null() {
-    let (_p, _s, _st, cfg) = downgrade_fixture();
+async fn forest_watch_pushes_the_snapshot_then_pushes_again_on_change() {
+    use tokio::io::AsyncWriteExt;
+    let (proj, _s, _st, cfg) = fixture();
     let base = start(cfg).await;
-    let body = get(&format!("{base}/api/forest")).await;
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| panic!("json:\n{body}"));
-    let arr = v.as_array().expect("array");
+    let host = base.strip_prefix("http://").unwrap().to_string();
 
-    let downgraded = arr
-        .iter()
-        .find(|e| e["uuid"] == DOWNGRADED_UUID)
-        .unwrap_or_else(|| panic!("downgraded session present:\n{body}"));
-    assert_eq!(
-        downgraded["downgrade"]["offendingTurn"],
-        serde_json::json!("u2"),
-        "downgraded row carries the offending user turn:\n{body}"
-    );
+    let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
+    let req = format!("GET /api/watch/forest HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
 
-    let clean = arr
-        .iter()
-        .find(|e| e["uuid"] == CLEAN_UUID)
-        .unwrap_or_else(|| panic!("clean session present:\n{body}"));
-    assert_eq!(
-        clean["downgrade"],
-        serde_json::Value::Null,
-        "clean row has no downgrade:\n{body}"
-    );
+    // The first event is the current snapshot, sent immediately — no waiting on a change.
+    let first = read_sse_data(&mut stream, 1, 3000).await;
+    assert_eq!(first.len(), 1, "initial snapshot pushed on connect");
+    let v: serde_json::Value = serde_json::from_str(&first[0]).unwrap();
+    let entry = v.as_array().unwrap().iter().find(|e| e["uuid"] == UUID).expect("our session");
+    assert_eq!(entry["spark"], serde_json::json!([77]));
+
+    // Another completed turn changes the spark → a second push carrying the new state.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let path = proj.path().join("-home-me-p").join(format!("{UUID}.jsonl"));
+    let mut f = tokio::fs::OpenOptions::new().append(true).open(&path).await.unwrap();
+    f.write_all(
+        b"{\"type\":\"user\",\"timestamp\":\"2026-06-06T10:01:00Z\",\"message\":{\"role\":\"user\"}}\n\
+          {\"type\":\"assistant\",\"timestamp\":\"2026-06-06T10:01:01Z\",\"message\":{\"role\":\"assistant\",\"usage\":{\"output_tokens\":5}}}\n\
+          {\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-06-06T10:01:02Z\"}\n",
+    )
+    .await
+    .unwrap();
+    f.flush().await.unwrap();
+
+    let next = read_sse_data(&mut stream, 1, 6000).await;
+    assert_eq!(next.len(), 1, "a change pushes a fresh snapshot");
+    let v: serde_json::Value = serde_json::from_str(&next[0]).unwrap();
+    let entry = v.as_array().unwrap().iter().find(|e| e["uuid"] == UUID).expect("our session");
+    assert_eq!(entry["spark"], serde_json::json!([77, 5]), "new turn reflected in the push");
 }

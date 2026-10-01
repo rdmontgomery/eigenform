@@ -1,5 +1,10 @@
 # Fable→Opus Downgrade Recovery — Implementation Plan
 
+> **Retired 2026-09-30.** Fable no longer drops live sessions to Opus, so the
+> mulligan (downgrade detection, `/recover-downgrade`, the rephraser, auto-stage)
+> was removed. Kept as a historical record; the fork/`fork_before` surgery it
+> reused remains.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** When a Claude Code session is downgraded Fable→Opus by the safety guardrail, detect it, fork a fresh Fable session truncated to before the offending prompt, stage a model-suggested restatement in the input, auto-open it in the Furnace — and never auto-send.

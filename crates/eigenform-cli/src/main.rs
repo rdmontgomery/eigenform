@@ -51,7 +51,7 @@ enum Cmd {
         action: SessionsAction,
     },
     /// the live Forest: sessions corroborated from disk (liveness × state × activity),
-    /// the same snapshot woland's Forest shows
+    /// the same snapshot the app's rail shows
     Forest {
         /// only the live sessions (drop the recents)
         #[arg(long)]
@@ -78,9 +78,6 @@ enum Cmd {
         /// command to run in the pty (default: $SHELL, else bash). NOT claude unless you ask.
         #[arg(long)]
         cmd: Option<String>,
-        /// directory of the legacy woland build to serve at /woland (default: ./web if built)
-        #[arg(long)]
-        web: Option<PathBuf>,
         /// directory of the eigenform (webterm) build to serve at / (default: ./webterm if
         /// built, else the build baked into the binary)
         #[arg(long)]
@@ -262,7 +259,7 @@ fn main() -> Result<()> {
         Cmd::Surgery { action } => surgery(action),
         Cmd::Ptys { port } => ptys_list(port),
         Cmd::Candidates { workspace } => candidates_list(workspace),
-        Cmd::Daemon { port, cmd, web, term, workspace, dev, open, log_file } => daemon(port, cmd, web, term, workspace, dev, open, log_file),
+        Cmd::Daemon { port, cmd, term, workspace, dev, open, log_file } => daemon(port, cmd, term, workspace, dev, open, log_file),
         Cmd::Stop { port } => stop(port),
         Cmd::Status { port } => status(port),
         Cmd::Sessions { action } => match action {
@@ -381,7 +378,7 @@ fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Print the corroborated live Forest — the CLI mirror of woland's Forest surface.
+/// Print the corroborated live Forest — the CLI mirror of the app's rail.
 fn forest_list(live_only: bool) -> Result<()> {
     let now = chrono::Utc::now();
     let rows = eigenform_forest::live_forest(&projects_dir()?, &sessions_dir()?, &state_dir()?, now);
@@ -583,11 +580,9 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn daemon(
     port: u16,
     cmd: Option<String>,
-    web: Option<PathBuf>,
     term: Option<PathBuf>,
     workspace: Option<PathBuf>,
     dev: bool,
@@ -604,7 +599,6 @@ fn daemon(
 
     // Absolutize user-supplied paths so tower-http's ServeDir doesn't double-resolve
     // them against the process CWD per request.
-    let web = web.map(|p| absolutize(&cwd, p));
     let term = term.map(|p| absolutize(&cwd, p));
     let workspace = workspace.map(|p| absolutize(&cwd, p));
     // Absolutize so the event log resolves against the launch cwd, not the daemon's.
@@ -615,17 +609,6 @@ fn daemon(
     // (feature `embed-assets`); a dev binary built without that feature serves API only.
     let term_dir = term.or_else(|| {
         let candidate = cwd.join("webterm");
-        candidate.join("dist/main.js").is_file().then_some(candidate)
-    });
-
-    // woland (legacy, paused): explicit --web always; otherwise only in dev, where ./web
-    // (if built) is mounted at /woland. The normal launch path never surfaces it — running
-    // `eigenform` from this repo shouldn't auto-mount or advertise the paused workbench.
-    let web_dir = web.or_else(|| {
-        if !dev {
-            return None;
-        }
-        let candidate = cwd.join("web");
         candidate.join("dist/main.js").is_file().then_some(candidate)
     });
 
@@ -649,14 +632,12 @@ fn daemon(
         program,
         args: Vec::new(),
         cwd: Some(cwd),
-        web_dir,
         term_dir,
         projects_dir: Some(projects_dir()?),
         sessions_dir: Some(sessions_dir()?),
         state_dir: Some(state_dir()?),
         workspace_root,
         dev,
-        rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
         log_file,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -666,9 +647,6 @@ fn daemon(
         if dev { "  (dev: live-reload on)" } else { "" },
         if serving_embedded { "  (embedded build)" } else { "" },
     );
-    if config.web_dir.is_some() {
-        println!("woland (paused) → {url}/woland");
-    }
 
     if open {
         open_browser(&url);

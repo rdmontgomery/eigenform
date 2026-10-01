@@ -155,49 +155,6 @@ pub fn inspect_json(data: &InspectData) -> String {
     .expect("inspect json serializes")
 }
 
-/// The session transcript as semantic HTML: a collapsible `<details>` per exchange
-/// (user turn + nested replies), full untruncated content, escaped. This is render's
-/// html projection for woland's right pane.
-pub fn session_html(session: &Session) -> String {
-    let visible = visible_turns(session);
-    let leaf = visible_leaf(session, &visible);
-    let exchanges = visible.iter().filter(|t| t.role == Role::User).count();
-
-    let mut out = String::new();
-    out.push_str(&format!(
-        "<article class=\"session\"><header>session {} · {} exchange{}</header>",
-        esc(&short_id(&session.session_id)),
-        exchanges,
-        if exchanges == 1 { "" } else { "s" },
-    ));
-
-    let mut open = false;
-    for turn in &visible {
-        if turn.role == Role::User {
-            if open {
-                out.push_str("</details>");
-            }
-            out.push_str("<details open class=\"exchange\"><summary>");
-            out.push_str(&turn_html(turn, &leaf));
-            out.push_str("</summary>");
-            open = true;
-        } else {
-            if !open {
-                out.push_str("<details open class=\"exchange\">");
-                open = true;
-            }
-            out.push_str("<div class=\"reply\">");
-            out.push_str(&turn_html(turn, &leaf));
-            out.push_str("</div>");
-        }
-    }
-    if open {
-        out.push_str("</details>");
-    }
-    out.push_str("</article>");
-    out
-}
-
 /// An async subagent transcript resolved and handed to render for attachment — render
 /// itself never fetches these (no disk I/O here); the caller (daemon/CLI, backed by
 /// `eigenform_forest::enumerate_subagents`) does the discovery and parsing.
@@ -207,7 +164,7 @@ pub struct ResolvedSubagent {
     pub description: Option<String>,
 }
 
-/// The session transcript as structured JSON for woland's Manuscript: exchanges (a user
+/// The session transcript as structured JSON for the webterm drawer: exchanges (a user
 /// turn grouped with its assistant + system replies), plus a trailing `leaf` the UI
 /// renders as the live input. This is ground-truth *content* only — per-turn token/cost
 /// fields are left to the client's (currently stubbed) cache model. The shape matches the
@@ -226,7 +183,7 @@ pub fn session_json_with_subagents(
 ) -> String {
     let visible = visible_turns(session);
 
-    // Group like session_html: a user turn opens an exchange; assistant/system attach to
+    // Group by exchange: a user turn opens an exchange; assistant/system attach to
     // the open one (a stray reply before any user turn opens an empty-user exchange).
     let mut exchanges: Vec<serde_json::Value> = Vec::new();
     for turn in &visible {
@@ -434,9 +391,9 @@ fn truncate_tool_content(s: &str) -> (&str, bool) {
 /// content order, each paired with its result from the session. A single assistant
 /// message can issue several tool calls at once (parallel tool use); all are emitted.
 ///
-/// Field naming asymmetry (historical-compat): `truncated` applies to OUTPUT (pre-existing
-/// field name consumed by woland), while `inputTruncated` applies to INPUT (added in 4.1).
-/// Do not normalise these without a simultaneous woland update.
+/// Field naming asymmetry (historical-compat): `truncated` applies to OUTPUT (the original
+/// field name), while `inputTruncated` applies to INPUT (added in 4.1). webterm's drawer
+/// reads both; rename them together or not at all.
 fn extract_tools(
     turn: &Turn,
     session: &Session,
@@ -530,41 +487,6 @@ fn append_text(obj: &mut serde_json::Value, key: &str, text: &str) {
         }
         _ => obj[key] = json!(text),
     }
-}
-
-fn turn_html(turn: &Turn, leaf: &Option<String>) -> String {
-    let (glyph, label) = turn_glyph_label(turn.role);
-    let content = match turn.role {
-        Role::System => duration_label(turn),
-        _ => content_raw(turn), // preserve newlines; pre-wrap renders them
-    };
-    let marker = if leaf.as_deref() == Some(turn.uuid.as_str()) {
-        " <span class=\"leaf\">← leaf</span>"
-    } else {
-        ""
-    };
-    format!(
-        "<span class=\"glyph {label}\">{glyph}</span> \
-         <span class=\"role\">{label}</span> \
-         <span class=\"content\">{}</span>{marker}",
-        esc(&content),
-    )
-}
-
-/// Escape text for safe embedding in HTML.
-fn esc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Width of the source (left) column in the side-by-side fork diff.

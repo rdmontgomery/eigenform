@@ -1,8 +1,9 @@
-//! eigenform-daemon: the woland backend — pty manager + http/ws server.
+//! eigenform-daemon: the session host + http/ws server behind the eigenform app.
 //!
-//! Slice 1: the pty bridge. Spawn an arbitrary command in a pty and stream its stdio.
-//! The bridge drives ANY command; real `claude --resume` is launched only by the user,
-//! never by tests or the agent. See `docs/plans/2026-06-03-woland-design.md`.
+//! Hosts pty sessions (a [`host::SessionHost`] that outlives any one browser socket),
+//! serves the transcript / forest / claims / inspect APIs, and bridges each pty to a
+//! websocket. The bridge drives ANY command; real `claude` is launched only by the user
+//! from inside the app, never by the daemon, tests, or the agent.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -60,14 +61,11 @@ mod embedded {
 
 /// What the daemon runs when a terminal connects. For slice 1 this is a fixed command
 /// (a shell for the demo, a dummy in tests) — NOT arbitrary exec from the request.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Config {
     pub program: String,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
-    /// Directory of the legacy woland workbench, served (paused, dev-only) at `/woland`.
-    /// None = not mounted.
-    pub web_dir: Option<PathBuf>,
     /// Directory of the eigenform terminal app served at `/` (the front door).
     /// None = serve the embedded build (feature `embed-assets`) or API only.
     pub term_dir: Option<PathBuf>,
@@ -84,51 +82,9 @@ pub struct Config {
     pub workspace_root: Option<PathBuf>,
     /// Dev mode: inject the live-reload hook and serve `/api/dev/reload`.
     pub dev: bool,
-    /// Command that turns an offending prompt into a suggested restatement. The
-    /// composed prompt is appended as the final argv entry; stdout is the
-    /// suggestion. Default `["claude", "-p"]`; tests inject a stub. Keeping the
-    /// daemon's only model call as a `claude` subprocess (never the API) matches
-    /// the invariant that eigenform only ever runs `claude`.
-    pub rephrase_cmd: Vec<String>,
     /// Optional JSONL sink for the structured event stream (`--log-file <path>`).
     /// Each recorded event is appended as one JSON line, best-effort; None = no file.
     pub log_file: Option<PathBuf>,
-}
-
-/// Run `cmd` in `cwd`, appending the restatement instruction + the offending
-/// prompt as the final argv entry, and return trimmed stdout. Errors (spawn
-/// failure, non-zero exit, empty output) bubble up so the caller can fall back to
-/// the verbatim prompt.
-pub fn rephrase_prompt(
-    cmd: &[String],
-    cwd: &Path,
-    offending: &str,
-) -> std::io::Result<String> {
-    let (program, args) = cmd
-        .split_first()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty rephrase_cmd"))?;
-    let prompt = format!(
-        "The prompt below caused an over-eager safety downgrade of a coding \
-         session. Restate it to remove ambiguity and make the benign intent \
-         explicit, preserving the actual ask. Return ONLY the restated prompt. \
-         If the ask is genuinely disallowed, say so plainly instead.\n\n{offending}"
-    );
-    let output = std::process::Command::new(program)
-        .args(args)
-        .arg(&prompt)
-        .current_dir(cwd)
-        .output()?;
-    if !output.status.success() {
-        return Err(std::io::Error::other(format!(
-            "rephrase command exited {}",
-            output.status
-        )));
-    }
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() {
-        return Err(std::io::Error::other("empty rephrase output"));
-    }
-    Ok(text)
 }
 
 /// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
@@ -144,42 +100,25 @@ pub struct AppState {
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
 /// pty. The eigenform terminal app is the root (`/`): served from `term_dir` when given,
-/// otherwise from the embedded build (feature `embed-assets`). The legacy woland
-/// workbench, when `web_dir` is set, mounts at `/woland` (paused, dev-only).
+/// otherwise from the embedded build (feature `embed-assets`).
 pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty_ws))
         .route("/api/pty", get(pty_list_route))
         .route("/api/pty/:id", axum::routing::delete(pty_delete_route))
-        .route("/session/:uuid", get(session_route))
-        .route("/api/session/:uuid", get(session_fragment_route))
         .route("/api/session/:uuid/json", get(session_json_route))
         .route("/api/session/:uuid/fork", post(fork_route))
-        .route("/api/session/:uuid/recover-downgrade", post(recover_downgrade_route))
-        .route("/api/sessions", get(sessions_route))
         .route("/api/forest", get(forest_route))
         .route("/api/watch/forest", get(forest_watch_route))
         .route("/api/claims", get(claims_route))
         .route("/api/claims/:pid", axum::routing::delete(claim_delete_route))
-        .route("/api/projects", get(projects_route))
         .route("/api/inspect", get(inspect_route))
-        .route("/api/recent", get(recent_route))
         .route("/api/candidates", get(candidates_route))
         .route("/api/path", get(path_probe_route))
         .route("/api/health", get(health_route))
         .route("/api/events", get(events_route))
         .route("/api/events/stream", get(events_stream_route))
         .route("/api/watch/:uuid", get(watch_route));
-
-    // Legacy woland, paused: mounts at /woland only when a build dir is given.
-    if let Some(web_dir) = &config.web_dir {
-        let index = web_dir.join("index.html");
-        router = router.nest_service(
-            "/woland",
-            tower_http::services::ServeDir::new(web_dir)
-                .fallback(tower_http::services::ServeFile::new(index)),
-        );
-    }
 
     // eigenform (the terminal app) is the front door at `/`.
     // Dev routes take precedence over the static fallback so the reload hook injects.
@@ -213,41 +152,15 @@ pub fn app(config: Config) -> Router {
     router.with_state(state)
 }
 
-/// Bind `addr` and serve woland until the process is killed.
+/// Bind `addr` and serve the app until the process is killed.
 pub async fn serve(addr: std::net::SocketAddr, config: Config) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app(config)).await?;
     Ok(())
 }
 
-/// `GET /session/:uuid` — the semantic transcript as a standalone HTML page.
-async fn session_route(
-    AxumPath(uuid): AxumPath<String>,
-    State(state): State<AppState>,
-) -> Response {
-    let cfg = &state.config;
-    match session_fragment(cfg, &uuid) {
-        Ok(frag) => Html(transcript_page(&frag)).into_response(),
-        Err(e) => e.into_response(),
-    }
-}
-
-/// `GET /api/session/:uuid` — just the transcript fragment, for in-page injection into
-/// the Manuscript (no page chrome).
-async fn session_fragment_route(
-    AxumPath(uuid): AxumPath<String>,
-    State(state): State<AppState>,
-) -> Response {
-    let cfg = &state.config;
-    match session_fragment(cfg, &uuid) {
-        Ok(frag) => Html(frag).into_response(),
-        Err(e) => e.into_response(),
-    }
-}
-
-/// `GET /api/session/:uuid/json` — the transcript as structured JSON for the Manuscript
-/// (exchanges + a trailing leaf), so woland can fold/annotate per turn rather than inject
-/// opaque HTML.
+/// `GET /api/session/:uuid/json` — the transcript as structured JSON (exchanges + a
+/// trailing leaf) for the drawer, reach map, and forest preview.
 async fn session_json_route(
     AxumPath(uuid): AxumPath<String>,
     State(state): State<AppState>,
@@ -294,11 +207,6 @@ async fn session_json_route(
             .into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "could not read session").into_response(),
     }
-}
-
-/// Resolve, read, parse, and render a session's transcript fragment.
-fn session_fragment(cfg: &Config, uuid: &str) -> Result<String, (StatusCode, &'static str)> {
-    Ok(eigenform_render::session_html(&load_session(cfg, uuid)?))
 }
 
 /// `POST /api/session/:uuid/fork` — edit-then-fork at a turn. Body `{turn, text}`:
@@ -358,120 +266,6 @@ fn fork_session(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not write fork"))
 }
 
-/// `POST /api/session/:uuid/recover-downgrade` — detect the guardrail downgrade,
-/// fork a Fable branch truncated to before the offending prompt (reusing
-/// `fork_session` → `surgery::fork_before`), and stage a suggested restatement.
-/// Never sends. Returns `{ branchUuid, stagedText, offendingTurn, note }`.
-async fn recover_downgrade_route(
-    AxumPath(uuid): AxumPath<String>,
-    State(state): State<AppState>,
-) -> Response {
-    match recover_downgrade(&state.config, &uuid) {
-        Ok(v) => {
-            // Record the outcome so EVERY recovery — the auto-stage on the forest poll
-            // and a manual GUI trigger alike — leaves a trace in the Events pane. `note`
-            // is null when the rephraser succeeded; non-null means we staged verbatim.
-            state.events.record(
-                "downgrade-recovered",
-                serde_json::json!({
-                    "srcUuid": uuid,
-                    "branchUuid": v.get("branchUuid"),
-                    "offendingTurn": v.get("offendingTurn"),
-                    "rephrased": v.get("note").is_some_and(serde_json::Value::is_null),
-                }),
-            );
-            Json(v).into_response()
-        }
-        Err(e) => {
-            // A failed attempt is itself informative — especially a manual trigger on a
-            // session with nothing to recover ("no downgrade detected"). Record why
-            // before returning the error, so the Events pane always shows the result.
-            state.events.record(
-                "downgrade-recovery-failed",
-                serde_json::json!({ "srcUuid": uuid, "reason": e.1 }),
-            );
-            e.into_response()
-        }
-    }
-}
-
-fn recover_downgrade(
-    cfg: &Config,
-    src_uuid: &str,
-) -> Result<serde_json::Value, (StatusCode, &'static str)> {
-    let dir = cfg
-        .projects_dir
-        .as_ref()
-        .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
-    let src_path = eigenform_forest::resolve(dir, src_uuid)
-        .map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
-    let down = eigenform_forest::detect_downgrade(&src_path)
-        .ok_or((StatusCode::UNPROCESSABLE_ENTITY, "no downgrade detected"))?;
-
-    // Fork first (load-bearing). Reuses the existing primitive.
-    let branch_uuid = fork_session(cfg, src_uuid, &down.offending_turn)?;
-
-    // Pull the offending prompt's text for the rephraser and the verbatim fallback.
-    let offending_text = user_turn_text(&src_path, &down.offending_turn).unwrap_or_default();
-    // Nominal cwd: the transcript's storage dir (`~/.claude/projects/<enc>`), not the
-    // session's real project cwd. A "restate this prompt" call needs no repo context, so
-    // this is immaterial; if it were ever empty the spawn fails and we fall back to verbatim.
-    let cwd = src_path.parent().map(Path::to_path_buf).unwrap_or_default();
-    let (staged_text, note) = match rephrase_prompt(&cfg.rephrase_cmd, &cwd, &offending_text) {
-        Ok(t) => (t, serde_json::Value::Null),
-        Err(_) => (
-            offending_text,
-            serde_json::Value::String(
-                "couldn't reach the rephraser — staged your prompt verbatim".into(),
-            ),
-        ),
-    };
-
-    Ok(serde_json::json!({
-        "branchUuid": branch_uuid,
-        "stagedText": staged_text,
-        "offendingTurn": down.offending_turn,
-        "note": note,
-    }))
-}
-
-/// The `message.content` text of the user turn with `uuid` in the JSONL at `path`.
-fn user_turn_text(path: &Path, uuid: &str) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    for line in text.lines() {
-        // IMPORTANT: a non-JSON / opaque line must be SKIPPED, not abort the scan.
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if v.get("uuid").and_then(|x| x.as_str()) == Some(uuid) {
-            let content = v.get("message").and_then(|m| m.get("content"))?;
-            if let Some(s) = content.as_str() {
-                return Some(s.to_string());
-            }
-            return content.as_array().map(|bs| {
-                bs.iter()
-                    .filter_map(|b| b.get("text").and_then(|x| x.as_str()))
-                    .collect::<Vec<_>>()
-                    // Space-join to match forest's `user_text`, so a multi-block
-                    // user turn doesn't fuse words (user content is usually a plain string).
-                    .join(" ")
-            });
-        }
-    }
-    None
-}
-
-/// Resolve, read, and parse a session's JSONL into a [`Session`].
-fn load_session(cfg: &Config, uuid: &str) -> Result<eigenform_surgery::Session, (StatusCode, &'static str)> {
-    let dir = cfg
-        .projects_dir
-        .as_ref()
-        .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
-    let path = eigenform_forest::resolve(dir, uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
-    let contents =
-        std::fs::read_to_string(&path).map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
-    // parse_str is currently infallible (ParseError is uninhabited).
-    Ok(eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {}))
-}
-
 /// Cache of rendered session JSON, keyed by file path and invalidated by the file's
 /// (modified-time, length) stamp. A static transcript is parsed once; the live session
 /// (whose file grows each turn) re-renders only when it actually changes.
@@ -505,52 +299,6 @@ impl SessionJsonCache {
 
 /// Process-wide session-JSON cache (one daemon serves one user; keying by path is fine).
 static SESSION_CACHE: LazyLock<SessionJsonCache> = LazyLock::new(SessionJsonCache::default);
-
-/// `GET /api/sessions` — recent sessions across all projects, for the sidebar.
-async fn sessions_route(State(state): State<AppState>) -> Response {
-    let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-        Ok(sessions) => {
-            let items: Vec<_> = sessions
-                .iter()
-                .map(|s| {
-                    serde_json::json!({
-                        "uuid": s.uuid,
-                        "title": s.title.clone().unwrap_or_else(|| "(untitled)".to_string()),
-                        "cwd": s.cwd.display().to_string(),
-                        "recency": s.recency.to_rfc3339(),
-                    })
-                })
-                .collect();
-            axum::Json(items).into_response()
-        }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
-    }
-}
-
-/// `GET /api/projects` — distinct project cwds (recent-first), for the new-session
-/// directory datalist.
-async fn projects_route(State(state): State<AppState>) -> Response {
-    let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-        Ok(sessions) => {
-            let mut seen = std::collections::HashSet::new();
-            let cwds: Vec<String> = sessions
-                .iter()
-                .map(|s| s.cwd.display().to_string())
-                .filter(|c| seen.insert(c.clone()))
-                .collect();
-            axum::Json(cwds).into_response()
-        }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
-    }
-}
 
 #[derive(serde::Deserialize)]
 struct InspectQuery {
@@ -633,9 +381,6 @@ fn forest_json(cfg: &Config) -> String {
                     "live": s.live,
                     "state": s.state.as_str(),
                     "spark": s.spark,
-                    "downgrade": s.downgrade.as_ref().map(|d| serde_json::json!({
-                        "offendingTurn": d.offending_turn,
-                    })),
                     "headless": s.headless,
                     "pid": s.pid,
                 })
@@ -732,6 +477,9 @@ async fn claim_delete_route(
     axum::Json(serde_json::json!({ "pid": pid, "action": action })).into_response()
 }
 
+/// Quiet period after a filesystem event before the forest is rescanned (see [`forest_sse`]).
+const FOREST_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
+
 fn hash_str(s: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -743,12 +491,18 @@ fn hash_str(s: &str) -> u64 {
 /// sessions + projects dirs (snappy: activity, new sessions) ∪ a coarse 3s tick (catches
 /// pid exits, which aren't filesystem events). Emits only when the snapshot's hash changes,
 /// so the tick is silent when nothing moved. The payload travels in the event (no refetch).
+///
+/// A live session appends to its JSONL many times a second, so filesystem events are
+/// coalesced: after one arrives the loop waits [`FOREST_DEBOUNCE`] and drains the rest
+/// before rescanning, bounding the full-forest scan to a few per second under load.
 fn forest_sse(cfg: Arc<Config>) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(8);
     tokio::spawn(async move {
         // A dedicated thread owns the notify watcher; it pings on any write under the
-        // watched dirs. Lives until the event channel closes (SSE gone).
-        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<()>(8);
+        // watched dirs. Same reaping discipline as [`watch_channel`]: it polls with a 1s
+        // timeout and exits once the consumer is gone, so a disconnected client can't
+        // strand a watcher (and its inotify instance) until the next filesystem event.
+        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<()>(1);
         let watch_dirs: Vec<PathBuf> = [cfg.sessions_dir.clone(), cfg.projects_dir.clone()]
             .into_iter()
             .flatten()
@@ -763,9 +517,22 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
             for d in &watch_dirs {
                 let _ = notify::Watcher::watch(&mut watcher, d, notify::RecursiveMode::Recursive);
             }
-            for _event in raw_rx {
-                if evt_tx.blocking_send(()).is_err() {
-                    break; // SSE gone; drop the watcher
+            loop {
+                match raw_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                    // A full channel already means "rescan pending" — never block on it.
+                    Ok(_) => {
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) =
+                            evt_tx.try_send(())
+                        {
+                            break; // SSE gone; drop the watcher
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if evt_tx.is_closed() {
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
         });
@@ -786,7 +553,13 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
             }
             tokio::select! {
                 _ = tick.tick() => {}
-                r = evt_rx.recv() => { if r.is_none() { break; } }
+                r = evt_rx.recv() => {
+                    if r.is_none() { break; }
+                    // Coalesce a burst of writes into one rescan.
+                    tokio::time::sleep(FOREST_DEBOUNCE).await;
+                    while evt_rx.try_recv().is_ok() {}
+                }
+                _ = tx.closed() => break,
             }
         }
     });
@@ -803,21 +576,6 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
                 .interval(std::time::Duration::from_secs(10)),
         )
         .into_response()
-}
-
-/// `GET /api/recent` — the most recent session uuid across all projects.
-async fn recent_route(State(state): State<AppState>) -> Response {
-    let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-        Ok(mut sessions) => match sessions.drain(..).next() {
-            Some(s) => s.uuid.into_response(),
-            None => (StatusCode::NOT_FOUND, "no sessions").into_response(),
-        },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response(),
-    }
 }
 
 /// `GET /api/candidates` — launcher directory list: recent session cwds merged with the
@@ -1070,26 +828,6 @@ fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response
         )
         .into_response()
 }
-
-/// Wrap a transcript fragment in a standalone dark page with collapsible styling.
-fn transcript_page(fragment: &str) -> String {
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>transcript</title>\
-         <style>{TRANSCRIPT_CSS}</style></head><body>{fragment}</body></html>"
-    )
-}
-
-const TRANSCRIPT_CSS: &str = "\
-body{margin:0;padding:12px;background:#0b0b0e;color:#e6e6e6;\
-font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5}\
-.session header{color:#8a8a99;margin-bottom:10px}\
-details.exchange{margin:0 0 6px;border-left:2px solid #23232b;padding-left:8px}\
-summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}\
-.reply{margin:4px 0 4px 16px;white-space:pre-wrap;word-break:break-word}\
-.glyph{display:inline-block;width:1em}.glyph.user{color:#7aa2f7}\
-.glyph.assistant{color:#9ece6a}.glyph.system{color:#565666}\
-.role{color:#565666;margin-right:6px}.content{white-space:pre-wrap}\
-.leaf{color:#e0af68}";
 
 #[derive(serde::Deserialize)]
 struct PtyQuery {
@@ -1932,17 +1670,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-            log_file: None,
+            ..Default::default()
         };
 
         let resumed = pty_command(
@@ -2026,17 +1755,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-            log_file: None,
+            ..Default::default()
         };
 
         // The vanished-cwd resume still resolves to claude --resume in the recorded cwd...
@@ -2082,17 +1802,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-            log_file: None,
+            ..Default::default()
         };
         let q = |session: Option<&str>| PtyQuery {
             attach: None,
@@ -2136,17 +1847,8 @@ mod tests {
 
         let cfg = Config {
             program: "bash".into(),
-            args: vec![],
-            cwd: None,
-            web_dir: None,
-            term_dir: None,
             projects_dir: Some(dir.path().to_path_buf()),
-            sessions_dir: None,
-            state_dir: None,
-            workspace_root: None,
-            dev: false,
-            rephrase_cmd: vec!["claude".to_string(), "-p".to_string()],
-            log_file: None,
+            ..Default::default()
         };
 
         // fork "before" u2 → rewind to the s1 boundary; u2 and its tail drop.
