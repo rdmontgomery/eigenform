@@ -74,7 +74,10 @@ fn scan_many_handles_missing_dirs_gracefully() {
 
     let roots: Vec<(Layer, PathBuf)> = vec![
         (Layer::Global, g.path().to_path_buf()),
-        (Layer::Repo { project: None }, g.path().join("does/not/exist")),
+        (
+            Layer::Repo { project: None },
+            g.path().join("does/not/exist"),
+        ),
     ];
     let all = scan_many(&roots).unwrap();
 

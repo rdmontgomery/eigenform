@@ -8,7 +8,11 @@ use clap::{Parser, Subcommand};
 const DEFAULT_PORT: u16 = 4317;
 
 #[derive(Parser, Debug)]
-#[command(name = "eigenform", version, about = "control surface over Claude Code sessions")]
+#[command(
+    name = "eigenform",
+    version,
+    about = "control surface over Claude Code sessions"
+)]
 struct Cli {
     /// With no subcommand, `eigenform` starts the daemon and opens the browser.
     #[command(subcommand)]
@@ -255,11 +259,23 @@ fn main() -> Result<()> {
             MemoryAction::Tree { cwd } => memory_tree(cwd),
             MemoryAction::List { all_projects } => memory_list(all_projects),
         },
-        Cmd::Inspect { cwd, all_projects, render } => inspect_cmd(cwd, all_projects, render),
+        Cmd::Inspect {
+            cwd,
+            all_projects,
+            render,
+        } => inspect_cmd(cwd, all_projects, render),
         Cmd::Surgery { action } => surgery(action),
         Cmd::Ptys { port } => ptys_list(port),
         Cmd::Candidates { workspace } => candidates_list(workspace),
-        Cmd::Daemon { port, cmd, term, workspace, dev, open, log_file } => daemon(port, cmd, term, workspace, dev, open, log_file),
+        Cmd::Daemon {
+            port,
+            cmd,
+            term,
+            workspace,
+            dev,
+            open,
+            log_file,
+        } => daemon(port, cmd, term, workspace, dev, open, log_file),
         Cmd::Stop { port } => stop(port),
         Cmd::Status { port } => status(port),
         Cmd::Sessions { action } => match action {
@@ -296,7 +312,9 @@ fn ptys_list(port: u16) -> Result<()> {
         }
     };
 
-    let rows = body.as_array().with_context(|| "expected JSON array from /api/pty")?;
+    let rows = body
+        .as_array()
+        .with_context(|| "expected JSON array from /api/pty")?;
     if rows.is_empty() {
         // No ptys registered — print nothing (not an error).
         return Ok(());
@@ -341,10 +359,13 @@ fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
     // Dedup delegated to eigenform_projects::unique_cwds (shared with daemon's candidates_route).
     let recents: Vec<PathBuf> = {
         let dir = projects_dir()?;
-        match eigenform_forest::list(&dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-            Ok(sessions) => {
-                eigenform_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
-            }
+        match eigenform_forest::list(
+            &dir,
+            eigenform_forest::Scope::AllProjects,
+            None,
+            chrono::Utc::now(),
+        ) {
+            Ok(sessions) => eigenform_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd)),
             Err(_) => vec![],
         }
     };
@@ -381,7 +402,8 @@ fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
 /// Print the corroborated live Forest — the CLI mirror of the app's rail.
 fn forest_list(live_only: bool) -> Result<()> {
     let now = chrono::Utc::now();
-    let rows = eigenform_forest::live_forest(&projects_dir()?, &sessions_dir()?, &state_dir()?, now);
+    let rows =
+        eigenform_forest::live_forest(&projects_dir()?, &sessions_dir()?, &state_dir()?, now);
     for r in rows {
         if live_only && !r.live {
             continue;
@@ -457,7 +479,10 @@ fn resolve_session(session: &str) -> Result<PathBuf> {
     match eigenform_forest::resolve(&dir, session) {
         Ok(p) => Ok(p),
         Err(eigenform_forest::ResolveError::Ambiguous(candidates)) => {
-            eprintln!("`{session}` is ambiguous — {} sessions match:", candidates.len());
+            eprintln!(
+                "`{session}` is ambiguous — {} sessions match:",
+                candidates.len()
+            );
             for c in &candidates {
                 let title = eigenform_forest::session_ref(c)
                     .title
@@ -500,8 +525,16 @@ fn sessions_list(
 
     let window = parse_since(since.as_deref())?;
     let now = chrono::Utc::now();
-    let sessions = eigenform_forest::list(&dir, scope, window, now).map_err(|e| anyhow::anyhow!("{e}"))?;
-    print!("{}", eigenform_render::render_text(&eigenform_render::sessions_view(&sessions, now, all_projects)));
+    let sessions =
+        eigenform_forest::list(&dir, scope, window, now).map_err(|e| anyhow::anyhow!("{e}"))?;
+    print!(
+        "{}",
+        eigenform_render::render_text(&eigenform_render::sessions_view(
+            &sessions,
+            now,
+            all_projects
+        ))
+    );
     Ok(())
 }
 
@@ -575,7 +608,10 @@ fn surgery(action: SurgeryAction) -> Result<()> {
     let uuid = eigenform_surgery::write(&new, projects_dir).map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("{uuid}");
     if let Some(src) = diff_src {
-        eprint!("{}", eigenform_render::render_text(&eigenform_render::fork_diff_view(&src, &new)));
+        eprint!(
+            "{}",
+            eigenform_render::render_text(&eigenform_render::fork_diff_view(&src, &new))
+        );
     }
     Ok(())
 }
@@ -609,7 +645,10 @@ fn daemon(
     // (feature `embed-assets`); a dev binary built without that feature serves API only.
     let term_dir = term.or_else(|| {
         let candidate = cwd.join("webterm");
-        candidate.join("dist/main.js").is_file().then_some(candidate)
+        candidate
+            .join("dist/main.js")
+            .is_file()
+            .then_some(candidate)
     });
 
     // Workspace root: explicit --workspace, else ~/projects if it exists, else None.
@@ -621,9 +660,7 @@ fn daemon(
 
     if term_dir.is_none() && cfg!(not(feature = "embed-assets")) {
         // Only meaningful for dev binaries; an installed (embedded) binary always has the app.
-        eprintln!(
-            "note: no eigenform build found (run `just build`); serving the API only"
-        );
+        eprintln!("note: no eigenform build found (run `just build`); serving the API only");
     }
 
     let serving_embedded = term_dir.is_none();
@@ -645,7 +682,11 @@ fn daemon(
     println!(
         "eigenform → {url}{}{}",
         if dev { "  (dev: live-reload on)" } else { "" },
-        if serving_embedded { "  (embedded build)" } else { "" },
+        if serving_embedded {
+            "  (embedded build)"
+        } else {
+            ""
+        },
     );
 
     if open {
@@ -740,7 +781,9 @@ fn spawn_detached_daemon(port: u16) -> Result<()> {
         .append(true)
         .open(&log_path)
         .with_context(|| format!("could not open daemon log {}", log_path.display()))?;
-    let log_err = log.try_clone().context("could not duplicate the log handle")?;
+    let log_err = log
+        .try_clone()
+        .context("could not duplicate the log handle")?;
 
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("daemon").arg("--port").arg(port.to_string());
@@ -754,7 +797,8 @@ fn spawn_detached_daemon(port: u16) -> Result<()> {
         // (SIGHUP to the shell's foreground group) doesn't reach the daemon.
         cmd.process_group(0);
     }
-    cmd.spawn().context("could not start the background daemon")?;
+    cmd.spawn()
+        .context("could not start the background daemon")?;
     Ok(())
 }
 
@@ -777,7 +821,10 @@ fn stop(port: u16) -> Result<()> {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    anyhow::bail!("sent SIGTERM to pid {} but it's still answering on port {port}", h.pid)
+    anyhow::bail!(
+        "sent SIGTERM to pid {} but it's still answering on port {port}",
+        h.pid
+    )
 }
 
 /// `eigenform status` — one line on whether a daemon is up.
@@ -820,7 +867,8 @@ fn open_browser(url: &str) {
     for (bin, prefix) in candidates {
         let mut c = std::process::Command::new(bin);
         c.args(prefix.iter().copied()).arg(url);
-        c.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        c.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         if c.spawn().is_ok() {
             return;
         }
@@ -831,7 +879,10 @@ fn sessions_diff(a: String, b: String, render: RenderFormat) -> Result<()> {
     require_text(render)?;
     let source = load_session(&resolve_session(&a)?)?;
     let fork = load_session(&resolve_session(&b)?)?;
-    print!("{}", eigenform_render::render_text(&eigenform_render::fork_diff_view(&source, &fork)));
+    print!(
+        "{}",
+        eigenform_render::render_text(&eigenform_render::fork_diff_view(&source, &fork))
+    );
     Ok(())
 }
 
@@ -861,7 +912,10 @@ fn tilde(path: &std::path::Path, home: &std::path::Path) -> String {
     }
 }
 
-fn skills_render_opts(home: &std::path::Path, note: Option<String>) -> eigenform_skills::RenderOpts {
+fn skills_render_opts(
+    home: &std::path::Path,
+    note: Option<String>,
+) -> eigenform_skills::RenderOpts {
     eigenform_skills::RenderOpts {
         width: term_width(),
         home: Some(home.to_path_buf()),
@@ -880,14 +934,21 @@ fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     let found = eigenform_skills::scan_many(&roots)
         .with_context(|| format!("scanning skills under home={:?} cwd={:?}", home, cwd))?;
 
-    print!("{}", eigenform_skills::render_tree(&found, &skills_render_opts(&home, None)));
+    print!(
+        "{}",
+        eigenform_skills::render_tree(&found, &skills_render_opts(&home, None))
+    );
     Ok(())
 }
 
 /// `eigenform inspect` — the unified config inventory. Skills + memory across
 /// resolution layers, token-budgeted, projected through the render crate's View IR
 /// to text or json (html is deferred until the browser consumes it).
-fn inspect_cmd(cwd_override: Option<PathBuf>, all_projects: bool, render: RenderFormat) -> Result<()> {
+fn inspect_cmd(
+    cwd_override: Option<PathBuf>,
+    all_projects: bool,
+    render: RenderFormat,
+) -> Result<()> {
     let home = home_dir().context("could not determine home directory")?;
     let data = if all_projects {
         eigenform_inspect::collect_all_projects(&home).map_err(|e| anyhow::anyhow!("{e}"))?
@@ -900,7 +961,10 @@ fn inspect_cmd(cwd_override: Option<PathBuf>, all_projects: bool, render: Render
     };
     match render {
         RenderFormat::Text => {
-            print!("{}", eigenform_render::render_text(&eigenform_render::inspect_view(&data)))
+            print!(
+                "{}",
+                eigenform_render::render_text(&eigenform_render::inspect_view(&data))
+            )
         }
         RenderFormat::Json => println!("{}", eigenform_render::inspect_json(&data)),
         RenderFormat::Html => anyhow::bail!(
@@ -931,7 +995,10 @@ fn skills_list(all_projects: bool) -> Result<()> {
     // Repo-layer tags name their project (`repo:<dir>`), so the per-project
     // mapping needs no roll call here — the summary carries the scan's scope.
     let note = format!("{} projects", projects.len());
-    print!("{}", eigenform_skills::render_tree(&found, &skills_render_opts(&home, Some(note))));
+    print!(
+        "{}",
+        eigenform_skills::render_tree(&found, &skills_render_opts(&home, Some(note)))
+    );
     Ok(())
 }
 
@@ -946,7 +1013,10 @@ fn memory_tree(cwd_override: Option<PathBuf>) -> Result<()> {
     let project = eigenform_projects::project_for_cwd(&projects_dir, &cwd)
         .with_context(|| format!("looking up project for cwd {:?}", cwd))?;
     let Some(project) = project else {
-        println!("no memory: no Claude Code project recorded for {}", cwd.display());
+        println!(
+            "no memory: no Claude Code project recorded for {}",
+            cwd.display()
+        );
         return Ok(());
     };
 
@@ -955,7 +1025,10 @@ fn memory_tree(cwd_override: Option<PathBuf>) -> Result<()> {
         .with_context(|| format!("scanning memory in {:?}", memory_dir))?;
 
     let label = tilde(&project.cwd, &home);
-    print!("{}", eigenform_memory::render_memory_tree(&label, &entries, term_width()));
+    print!(
+        "{}",
+        eigenform_memory::render_memory_tree(&label, &entries, term_width())
+    );
     Ok(())
 }
 
@@ -971,8 +1044,10 @@ fn memory_list(all_projects: bool) -> Result<()> {
 
     // Scan everything first so the summary can lead, then print only the
     // projects that actually hold memory — the empties are a single count.
-    let mut scanned: Vec<(&eigenform_projects::Project, Vec<eigenform_memory::MemoryEntry>)> =
-        Vec::new();
+    let mut scanned: Vec<(
+        &eigenform_projects::Project,
+        Vec<eigenform_memory::MemoryEntry>,
+    )> = Vec::new();
     for p in &projects {
         let memory_dir = projects_dir.join(&p.dir_name).join("memory");
         let entries = eigenform_memory::scan_memory_dir(&memory_dir)
@@ -1006,7 +1081,10 @@ fn memory_list(all_projects: bool) -> Result<()> {
         }
         println!();
         let label = tilde(&p.cwd, &home);
-        print!("{}", eigenform_memory::render_memory_tree(&label, entries, width));
+        print!(
+            "{}",
+            eigenform_memory::render_memory_tree(&label, entries, width)
+        );
     }
     Ok(())
 }
@@ -1017,7 +1095,11 @@ fn home_dir() -> Option<PathBuf> {
 
 /// Return `p` unchanged if it is already absolute; otherwise join it onto `cwd`.
 fn absolutize(cwd: &std::path::Path, p: PathBuf) -> PathBuf {
-    if p.is_absolute() { p } else { cwd.join(p) }
+    if p.is_absolute() {
+        p
+    } else {
+        cwd.join(p)
+    }
 }
 
 #[cfg(test)]
@@ -1031,7 +1113,10 @@ mod tests {
     fn absolutize_relative_is_joined_to_cwd() {
         let cwd = PathBuf::from("/home/user/myproject");
         let rel = PathBuf::from("webterm");
-        assert_eq!(absolutize(&cwd, rel), PathBuf::from("/home/user/myproject/webterm"));
+        assert_eq!(
+            absolutize(&cwd, rel),
+            PathBuf::from("/home/user/myproject/webterm")
+        );
     }
 
     #[test]
@@ -1045,7 +1130,10 @@ mod tests {
     fn absolutize_dot_relative_is_joined() {
         let cwd = PathBuf::from("/home/user/myproject");
         let dot = PathBuf::from("./webterm");
-        assert_eq!(absolutize(&cwd, dot), PathBuf::from("/home/user/myproject/webterm"));
+        assert_eq!(
+            absolutize(&cwd, dot),
+            PathBuf::from("/home/user/myproject/webterm")
+        );
     }
 
     fn utc(y: i32, mo: u32, d: u32, h: u32, m: u32, s: u32) -> chrono::DateTime<chrono::Utc> {

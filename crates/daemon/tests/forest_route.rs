@@ -5,7 +5,12 @@ use eigenform_daemon::{app, Config};
 
 const UUID: &str = "bbbb2222-0000-4000-8000-000000000002";
 
-fn fixture() -> (tempfile::TempDir, tempfile::TempDir, tempfile::TempDir, Config) {
+fn fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Config,
+) {
     let proj = tempfile::tempdir().unwrap();
     let sess = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
@@ -45,14 +50,19 @@ async fn start(cfg: Config) -> String {
 async fn get(url: &str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let rest = url.strip_prefix("http://").unwrap();
-    let (host, path) = rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap();
+    let (host, path) = rest
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap();
     let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
     let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).await.unwrap();
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await.unwrap();
     let text = String::from_utf8_lossy(&buf);
-    text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()
+    text.split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default()
 }
 
 #[tokio::test]
@@ -60,7 +70,8 @@ async fn forest_route_reports_a_live_ready_session_with_spark() {
     let (_p, _s, _st, cfg) = fixture();
     let base = start(cfg).await;
     let body = get(&format!("{base}/api/forest")).await;
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| panic!("json:\n{body}"));
+    let v: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or_else(|_| panic!("json:\n{body}"));
     let arr = v.as_array().expect("array");
     let entry = arr
         .iter()
@@ -68,11 +79,19 @@ async fn forest_route_reports_a_live_ready_session_with_spark() {
         .unwrap_or_else(|| panic!("our session present:\n{body}"));
     assert_eq!(entry["live"], true, "the test process's session is live");
     assert_eq!(entry["state"], "ready", "completed turn → ready");
-    assert_eq!(entry["spark"], serde_json::json!([77]), "output_tokens per turn");
+    assert_eq!(
+        entry["spark"],
+        serde_json::json!([77]),
+        "output_tokens per turn"
+    );
 }
 
 /// Read SSE `data:` payloads from `stream` until `want` of them arrive or ~`budget_ms` pass.
-async fn read_sse_data(stream: &mut tokio::net::TcpStream, want: usize, budget_ms: u64) -> Vec<String> {
+async fn read_sse_data(
+    stream: &mut tokio::net::TcpStream,
+    want: usize,
+    budget_ms: u64,
+) -> Vec<String> {
     use tokio::io::AsyncReadExt;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
     let mut acc = String::new();
@@ -105,20 +124,30 @@ async fn forest_watch_pushes_the_snapshot_then_pushes_again_on_change() {
     let host = base.strip_prefix("http://").unwrap().to_string();
 
     let mut stream = tokio::net::TcpStream::connect(&host).await.unwrap();
-    let req = format!("GET /api/watch/forest HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    let req =
+        format!("GET /api/watch/forest HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).await.unwrap();
 
     // The first event is the current snapshot, sent immediately — no waiting on a change.
     let first = read_sse_data(&mut stream, 1, 3000).await;
     assert_eq!(first.len(), 1, "initial snapshot pushed on connect");
     let v: serde_json::Value = serde_json::from_str(&first[0]).unwrap();
-    let entry = v.as_array().unwrap().iter().find(|e| e["uuid"] == UUID).expect("our session");
+    let entry = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["uuid"] == UUID)
+        .expect("our session");
     assert_eq!(entry["spark"], serde_json::json!([77]));
 
     // Another completed turn changes the spark → a second push carrying the new state.
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     let path = proj.path().join("-home-me-p").join(format!("{UUID}.jsonl"));
-    let mut f = tokio::fs::OpenOptions::new().append(true).open(&path).await.unwrap();
+    let mut f = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .await
+        .unwrap();
     f.write_all(
         b"{\"type\":\"user\",\"timestamp\":\"2026-06-06T10:01:00Z\",\"message\":{\"role\":\"user\"}}\n\
           {\"type\":\"assistant\",\"timestamp\":\"2026-06-06T10:01:01Z\",\"message\":{\"role\":\"assistant\",\"usage\":{\"output_tokens\":5}}}\n\
@@ -131,6 +160,15 @@ async fn forest_watch_pushes_the_snapshot_then_pushes_again_on_change() {
     let next = read_sse_data(&mut stream, 1, 6000).await;
     assert_eq!(next.len(), 1, "a change pushes a fresh snapshot");
     let v: serde_json::Value = serde_json::from_str(&next[0]).unwrap();
-    let entry = v.as_array().unwrap().iter().find(|e| e["uuid"] == UUID).expect("our session");
-    assert_eq!(entry["spark"], serde_json::json!([77, 5]), "new turn reflected in the push");
+    let entry = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["uuid"] == UUID)
+        .expect("our session");
+    assert_eq!(
+        entry["spark"],
+        serde_json::json!([77, 5]),
+        "new turn reflected in the push"
+    );
 }

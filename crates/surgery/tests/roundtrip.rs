@@ -10,15 +10,24 @@ use eigenform_surgery::Session;
 /// - the three turn roles (user, assistant, system)
 /// - typed last-prompt rows (leading placeholder + trailing, with a leafUuid)
 const MIXED: &str = concat!(
-    r#"{"type":"last-prompt","leafUuid":"00000000-0000-4000-8000-0000000000s1","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#, "\n",
-    r#"{"type":"mode","mode":"normal","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#, "\n",
-    r#"{"type":"attachment","uuid":"00000000-0000-4000-8000-0000000000a1","parentUuid":null,"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","attachment":{"type":"hook_success"}}"#, "\n",
-    r#"{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}"#, "\n",
-    r#"{"type":"user","uuid":"00000000-0000-4000-8000-0000000000u1","parentUuid":"00000000-0000-4000-8000-0000000000a1","isSidechain":false,"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","message":{"role":"user","content":"howdy"}}"#, "\n",
-    r#"{"type":"assistant","uuid":"00000000-0000-4000-8000-00000000as1","parentUuid":"00000000-0000-4000-8000-0000000000u1","isSidechain":false,"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#, "\n",
-    r#"{"type":"system","uuid":"00000000-0000-4000-8000-0000000000s1","parentUuid":"00000000-0000-4000-8000-00000000as1","isSidechain":false,"subtype":"turn_duration","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#, "\n",
-    r#"{"type":"pr-link","url":"https://example.test/pr/1","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#, "\n",
-    r#"{"type":"last-prompt","lastPrompt":"howdy","leafUuid":"00000000-0000-4000-8000-0000000000s1","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#, "\n",
+    r#"{"type":"last-prompt","leafUuid":"00000000-0000-4000-8000-0000000000s1","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#,
+    "\n",
+    r#"{"type":"mode","mode":"normal","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#,
+    "\n",
+    r#"{"type":"attachment","uuid":"00000000-0000-4000-8000-0000000000a1","parentUuid":null,"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","attachment":{"type":"hook_success"}}"#,
+    "\n",
+    r#"{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}"#,
+    "\n",
+    r#"{"type":"user","uuid":"00000000-0000-4000-8000-0000000000u1","parentUuid":"00000000-0000-4000-8000-0000000000a1","isSidechain":false,"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","message":{"role":"user","content":"howdy"}}"#,
+    "\n",
+    r#"{"type":"assistant","uuid":"00000000-0000-4000-8000-00000000as1","parentUuid":"00000000-0000-4000-8000-0000000000u1","isSidechain":false,"sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#,
+    "\n",
+    r#"{"type":"system","uuid":"00000000-0000-4000-8000-0000000000s1","parentUuid":"00000000-0000-4000-8000-00000000as1","isSidechain":false,"subtype":"turn_duration","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#,
+    "\n",
+    r#"{"type":"pr-link","url":"https://example.test/pr/1","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#,
+    "\n",
+    r#"{"type":"last-prompt","lastPrompt":"howdy","leafUuid":"00000000-0000-4000-8000-0000000000s1","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#,
+    "\n",
 );
 
 #[test]

@@ -12,16 +12,26 @@ fn session_from(rows: &[String]) -> Session {
 }
 
 fn user(uuid: &str, parent: &str, content: &str) -> String {
-    let parent = if parent.is_empty() { "null".to_string() } else { format!("\"{parent}\"") };
+    let parent = if parent.is_empty() {
+        "null".to_string()
+    } else {
+        format!("\"{parent}\"")
+    };
     let content = serde_json::to_string(content).unwrap();
-    format!(r#"{{"type":"user","uuid":"{uuid}","parentUuid":{parent},"isSidechain":false,"sessionId":"{SID}","message":{{"role":"user","content":{content}}}}}"#)
+    format!(
+        r#"{{"type":"user","uuid":"{uuid}","parentUuid":{parent},"isSidechain":false,"sessionId":"{SID}","message":{{"role":"user","content":{content}}}}}"#
+    )
 }
 fn assistant(uuid: &str, parent: &str, text: &str) -> String {
     let text = serde_json::to_string(text).unwrap();
-    format!(r#"{{"type":"assistant","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"sessionId":"{SID}","message":{{"role":"assistant","content":[{{"type":"text","text":{text}}}]}}}}"#)
+    format!(
+        r#"{{"type":"assistant","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"sessionId":"{SID}","message":{{"role":"assistant","content":[{{"type":"text","text":{text}}}]}}}}"#
+    )
 }
 fn system(uuid: &str, parent: &str, ms: u64) -> String {
-    format!(r#"{{"type":"system","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"subtype":"turn_duration","durationMs":{ms},"sessionId":"{SID}"}}"#)
+    format!(
+        r#"{{"type":"system","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"subtype":"turn_duration","durationMs":{ms},"sessionId":"{SID}"}}"#
+    )
 }
 fn last_prompt(leaf: &str) -> String {
     format!(r#"{{"type":"last-prompt","leafUuid":"{leaf}","sessionId":"{SID}"}}"#)
@@ -56,7 +66,10 @@ fn multiple_exchanges_are_top_level_siblings() {
         last_prompt("S2"),
     ]);
     let out = render_text(&session_view(&s));
-    assert!(out.starts_with("session abcd1234 · 2 exchanges\n"), "got: {out}");
+    assert!(
+        out.starts_with("session abcd1234 · 2 exchanges\n"),
+        "got: {out}"
+    );
     assert!(out.contains("├─ ● user       one"));
     assert!(out.contains("└─ ● user       two"));
     assert!(out.trim_end().ends_with("← leaf"));
@@ -65,11 +78,15 @@ fn multiple_exchanges_are_top_level_siblings() {
 /// An assistant row carrying only a thinking block (no text) — real sessions split
 /// thinking and text into separate rows.
 fn assistant_thinking(uuid: &str, parent: &str) -> String {
-    format!(r#"{{"type":"assistant","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"sessionId":"{SID}","message":{{"role":"assistant","content":[{{"type":"thinking","thinking":"hmm"}}]}}}}"#)
+    format!(
+        r#"{{"type":"assistant","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"sessionId":"{SID}","message":{{"role":"assistant","content":[{{"type":"thinking","thinking":"hmm"}}]}}}}"#
+    )
 }
 /// A non-turn_duration system row (e.g. an init/meta marker) — carries no durationMs.
 fn system_meta(uuid: &str, parent: &str) -> String {
-    format!(r#"{{"type":"system","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"subtype":"init","sessionId":"{SID}"}}"#)
+    format!(
+        r#"{{"type":"system","uuid":"{uuid}","parentUuid":"{parent}","isSidechain":false,"subtype":"init","sessionId":"{SID}"}}"#
+    )
 }
 
 #[test]
@@ -81,7 +98,11 @@ fn thinking_only_assistant_rows_are_omitted() {
         last_prompt("A1"),
     ]);
     let out = render_text(&session_view(&s));
-    assert_eq!(out.matches("◇ assistant").count(), 1, "only the text row shows:\n{out}");
+    assert_eq!(
+        out.matches("◇ assistant").count(),
+        1,
+        "only the text row shows:\n{out}"
+    );
     assert!(out.contains("real answer"));
 }
 
@@ -94,7 +115,10 @@ fn system_rows_without_duration_are_omitted() {
         last_prompt("A1"),
     ]);
     let out = render_text(&session_view(&s));
-    assert!(!out.contains("· system"), "non-duration system hidden:\n{out}");
+    assert!(
+        !out.contains("· system"),
+        "non-duration system hidden:\n{out}"
+    );
 }
 
 #[test]
@@ -108,8 +132,14 @@ fn leaf_marker_falls_back_to_last_visible_turn_when_the_leaf_is_hidden() {
         last_prompt("M1"),
     ]);
     let out = render_text(&session_view(&s));
-    let row = out.lines().find(|l| l.contains("← leaf")).expect("leaf marked somewhere");
-    assert!(row.contains("assistant"), "leaf fell back to assistant:\n{out}");
+    let row = out
+        .lines()
+        .find(|l| l.contains("← leaf"))
+        .expect("leaf marked somewhere");
+    assert!(
+        row.contains("assistant"),
+        "leaf fell back to assistant:\n{out}"
+    );
 }
 
 #[test]
@@ -119,7 +149,10 @@ fn long_content_is_truncated_to_one_line() {
     let out = render_text(&session_view(&s));
     let row = out.lines().find(|l| l.contains("user")).unwrap();
     assert!(row.contains('…'), "expected ellipsis, got: {row}");
-    assert!(!row.contains("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"), "not truncated: {row}");
+    assert!(
+        !row.contains("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+        "not truncated: {row}"
+    );
     assert!(row.chars().count() < 90, "row too long: {row}");
 }
 

@@ -24,7 +24,9 @@ fn corpus_dir() -> Option<PathBuf> {
     if let Ok(d) = std::env::var("EIGENFORM_CORPUS_DIR") {
         return Some(PathBuf::from(d));
     }
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".claude/projects"))
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".claude/projects"))
 }
 
 /// All `*.jsonl` under `projects/*/`, with size and mtime for sorting/budgeting.
@@ -109,7 +111,11 @@ fn corpus_round_trips_and_guards_cleanly_across_versions() {
         let session = Session::parse_str(&contents).expect("parse must not fail");
 
         // 1. byte-identical round-trip
-        assert_eq!(session.to_jsonl(), contents, "round-trip mismatch in {path:?}");
+        assert_eq!(
+            session.to_jsonl(),
+            contents,
+            "round-trip mismatch in {path:?}"
+        );
 
         // 2. guarded swap finds no stray for the file's own id
         if !session.session_id.is_empty() {

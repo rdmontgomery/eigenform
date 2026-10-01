@@ -19,10 +19,9 @@ fn render_text_draws_tree_connectors_and_glyphs() {
 
 #[test]
 fn nested_siblings_get_a_continuation_rail() {
-    let view = View::Tree(vec![Node::new("●", "u").with_children(vec![
-        Node::new("◇", "a"),
-        Node::new("·", "s"),
-    ])]);
+    let view = View::Tree(vec![
+        Node::new("●", "u").with_children(vec![Node::new("◇", "a"), Node::new("·", "s")])
+    ]);
 
     let expected = "\
 └─ ● u

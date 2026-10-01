@@ -27,7 +27,8 @@ fn canonical_roots_includes_repo_skills_dir_even_if_absent() {
 
     assert!(roots
         .iter()
-        .any(|(l, p)| matches!(l, Layer::Repo { project: None }) && p == &cwd.path().join(".claude/skills")));
+        .any(|(l, p)| matches!(l, Layer::Repo { project: None })
+            && p == &cwd.path().join(".claude/skills")));
 }
 
 #[test]
@@ -100,9 +101,9 @@ fn canonical_roots_finds_marketplaces_external_plugins_layout() {
     let cwd = tempdir().unwrap();
 
     // ~/.claude/plugins/marketplaces/<mp>/external_plugins/<plugin>/skills/
-    let p = home
-        .path()
-        .join(".claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/skills");
+    let p = home.path().join(
+        ".claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/skills",
+    );
     fs::create_dir_all(&p).unwrap();
 
     let roots = canonical_roots(home.path(), cwd.path());
@@ -123,8 +124,7 @@ fn canonical_roots_finds_marketplaces_plugins_layout() {
     fs::create_dir_all(&p).unwrap();
 
     let roots = canonical_roots(home.path(), cwd.path());
-    assert!(roots
-        .iter()
-        .any(|(l, dir)| matches!(l, Layer::Plugin { name } if name == "frontend-design")
-            && dir == &p));
+    assert!(roots.iter().any(
+        |(l, dir)| matches!(l, Layer::Plugin { name } if name == "frontend-design") && dir == &p
+    ));
 }

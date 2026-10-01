@@ -15,12 +15,24 @@ fn fixture() -> (tempfile::TempDir, Config) {
     std::fs::create_dir_all(&pdir).unwrap();
 
     let parent_lines = [
-        format!(r#"{{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/home/me/p","timestamp":"2026-06-03T10:00:00Z","sessionId":"{UUID}","message":{{"role":"user","content":"survey branches for PR candidates"}}}}"#),
-        format!(r#"{{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"sessionId":"{UUID}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_agent","name":"Agent","input":{{"description":"Survey branches"}}}}]}}}}"#),
-        format!(r#"{{"type":"user","uuid":"r1","parentUuid":"a1","isSidechain":false,"sessionId":"{UUID}","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_agent","content":[{{"type":"text","text":"Async agent launched successfully."}}]}}]}},"toolUseResult":{{"isAsync":true,"agentId":"{AGENT_ID}"}}}}"#),
-        format!(r#"{{"type":"last-prompt","lastPrompt":"survey branches for PR candidates","leafUuid":"r1","sessionId":"{UUID}"}}"#),
+        format!(
+            r#"{{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/home/me/p","timestamp":"2026-06-03T10:00:00Z","sessionId":"{UUID}","message":{{"role":"user","content":"survey branches for PR candidates"}}}}"#
+        ),
+        format!(
+            r#"{{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"sessionId":"{UUID}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_agent","name":"Agent","input":{{"description":"Survey branches"}}}}]}}}}"#
+        ),
+        format!(
+            r#"{{"type":"user","uuid":"r1","parentUuid":"a1","isSidechain":false,"sessionId":"{UUID}","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_agent","content":[{{"type":"text","text":"Async agent launched successfully."}}]}}]}},"toolUseResult":{{"isAsync":true,"agentId":"{AGENT_ID}"}}}}"#
+        ),
+        format!(
+            r#"{{"type":"last-prompt","lastPrompt":"survey branches for PR candidates","leafUuid":"r1","sessionId":"{UUID}"}}"#
+        ),
     ];
-    std::fs::write(pdir.join(format!("{UUID}.jsonl")), parent_lines.join("\n") + "\n").unwrap();
+    std::fs::write(
+        pdir.join(format!("{UUID}.jsonl")),
+        parent_lines.join("\n") + "\n",
+    )
+    .unwrap();
 
     let sub_dir = pdir.join(UUID).join("subagents");
     std::fs::create_dir_all(&sub_dir).unwrap();
@@ -28,7 +40,11 @@ fn fixture() -> (tempfile::TempDir, Config) {
         r#"{"type":"user","uuid":"su1","isSidechain":true,"sessionId":"sub","message":{"role":"user","content":"survey the branches"}}"#.to_string(),
         r#"{"type":"assistant","uuid":"sa1","isSidechain":true,"sessionId":"sub","message":{"role":"assistant","content":[{"type":"text","text":"three branches have unopened PRs"}]}}"#.to_string(),
     ];
-    std::fs::write(sub_dir.join(format!("agent-{AGENT_ID}.jsonl")), sub_lines.join("\n") + "\n").unwrap();
+    std::fs::write(
+        sub_dir.join(format!("agent-{AGENT_ID}.jsonl")),
+        sub_lines.join("\n") + "\n",
+    )
+    .unwrap();
     std::fs::write(
         sub_dir.join(format!("agent-{AGENT_ID}.meta.json")),
         r#"{"agentType":"general-purpose","description":"Survey branches for PR candidates","toolUseId":"toolu_agent","spawnDepth":1}"#,
@@ -67,7 +83,15 @@ async fn session_json_route_attaches_the_resolved_subagent() {
         .clone();
 
     assert_eq!(tool["subagent"]["agentType"], "general-purpose");
-    assert_eq!(tool["subagent"]["description"], "Survey branches for PR candidates");
-    let sub_exchanges = tool["subagent"]["exchanges"].as_array().expect("exchanges array");
-    assert_eq!(sub_exchanges[0]["assistant"], "three branches have unopened PRs");
+    assert_eq!(
+        tool["subagent"]["description"],
+        "Survey branches for PR candidates"
+    );
+    let sub_exchanges = tool["subagent"]["exchanges"]
+        .as_array()
+        .expect("exchanges array");
+    assert_eq!(
+        sub_exchanges[0]["assistant"],
+        "three branches have unopened PRs"
+    );
 }

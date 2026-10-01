@@ -15,7 +15,11 @@ use serde_json::json;
 
 /// Render a recent-session list: one row per session, newest at the bottom.
 pub fn sessions_view(sessions: &[SessionRef], now: DateTime<Utc>, show_project: bool) -> View {
-    let title = format!("{} session{}", sessions.len(), if sessions.len() == 1 { "" } else { "s" });
+    let title = format!(
+        "{} session{}",
+        sessions.len(),
+        if sessions.len() == 1 { "" } else { "s" }
+    );
 
     // `sessions` arrives recent-first; emit oldest→newest so the latest sits at the bottom.
     let lines = sessions
@@ -72,11 +76,18 @@ pub fn inspect_view(data: &InspectData) -> View {
 }
 
 fn layer_node(layer: &InspectLayer) -> Node {
-    let mut node = Node::new("▸", &format!("{}  {}", layer.label, fmt_tokens(layer.tokens())));
+    let mut node = Node::new(
+        "▸",
+        &format!("{}  {}", layer.label, fmt_tokens(layer.tokens())),
+    );
 
     if !layer.skills.is_empty() {
         let skill_tok: usize = layer.skills.iter().map(|s| s.tokens).sum();
-        let mut group = Node::label(&format!("skills ({})  {}", layer.skills.len(), fmt_tokens(skill_tok)));
+        let mut group = Node::label(&format!(
+            "skills ({})  {}",
+            layer.skills.len(),
+            fmt_tokens(skill_tok)
+        ));
         for s in &layer.skills {
             let status = if s.namespaced {
                 "namespaced"
@@ -97,7 +108,11 @@ fn layer_node(layer: &InspectLayer) -> Node {
 
     if !layer.memory.is_empty() {
         let mem_tok: usize = layer.memory.iter().map(|m| m.tokens).sum();
-        let mut group = Node::label(&format!("memory ({})  {}", layer.memory.len(), fmt_tokens(mem_tok)));
+        let mut group = Node::label(&format!(
+            "memory ({})  {}",
+            layer.memory.len(),
+            fmt_tokens(mem_tok)
+        ));
         for m in &layer.memory {
             let mut item = Node::new("▪", &format!("{}  {}", m.name, fmt_tokens(m.tokens)))
                 .with_marker(&format!("[{}]", m.kind));
@@ -367,7 +382,9 @@ fn tool_result_agent_id(session: &Session, tool_use_id: &str) -> Option<String> 
                 && block.get("tool_use_id").and_then(|t| t.as_str()) == Some(tool_use_id)
         });
         if matches {
-            return value["toolUseResult"]["agentId"].as_str().map(str::to_string);
+            return value["toolUseResult"]["agentId"]
+                .as_str()
+                .map(str::to_string);
         }
     }
     None
@@ -556,9 +573,15 @@ pub fn fork_diff_view(source: &Session, fork: &Session) -> View {
 
 /// One diff row: a 1-char status, the left (source) cell fitted to a column, `│`, then the
 /// right (fork) cell. A `None` side renders blank.
-fn diff_row(status: &str, left: Option<(&&Turn, &Option<String>)>, right: Option<(&&Turn, &Option<String>)>) -> String {
+fn diff_row(
+    status: &str,
+    left: Option<(&&Turn, &Option<String>)>,
+    right: Option<(&&Turn, &Option<String>)>,
+) -> String {
     let left_text = left.map(|(t, leaf)| diff_cell(t, leaf)).unwrap_or_default();
-    let right_text = right.map(|(t, leaf)| diff_cell(t, leaf)).unwrap_or_default();
+    let right_text = right
+        .map(|(t, leaf)| diff_cell(t, leaf))
+        .unwrap_or_default();
     format!("{status} {} │ {}", fit(&left_text, DIFF_COL), right_text)
 }
 
@@ -661,7 +684,11 @@ pub fn session_view(session: &Session) -> View {
 /// The conversational turns worth showing: user/assistant with text, system with a
 /// duration. Thinking-only and meta system rows are noise.
 fn visible_turns(session: &Session) -> Vec<&Turn> {
-    session.turns().into_iter().filter(|t| is_visible(t)).collect()
+    session
+        .turns()
+        .into_iter()
+        .filter(|t| is_visible(t))
+        .collect()
 }
 
 /// The visible turn that carries the resume head: the leaf if it maps to a visible turn,
@@ -727,7 +754,11 @@ fn turn_node(turn: &Turn, leaf: Option<&str>) -> Node {
 }
 
 fn short_id(session_id: &str) -> String {
-    session_id.split('-').next().unwrap_or(session_id).to_string()
+    session_id
+        .split('-')
+        .next()
+        .unwrap_or(session_id)
+        .to_string()
 }
 
 /// A turn's full message content with newlines preserved (text blocks joined by a blank
@@ -779,7 +810,10 @@ fn truncate(s: &str) -> String {
 /// A renderable view. Grows new variants (Section, Table, KeyValues, …) as views need
 /// them; today a titled document and a connector-drawn tree cover the session view.
 pub enum View {
-    Document { title: String, body: Vec<View> },
+    Document {
+        title: String,
+        body: Vec<View>,
+    },
     Tree(Vec<Node>),
     /// A flat list of pre-formatted rows (no tree connectors).
     Lines(Vec<String>),
@@ -949,7 +983,13 @@ mod session_json_tests {
     // ── tool input/output tests ──────────────────────────────────────────────
 
     /// Build an assistant turn containing one tool_use block (and optionally a text block).
-    fn assistant_with_tool(uuid: &str, tool_id: &str, name: &str, input_json: &str, text: &str) -> String {
+    fn assistant_with_tool(
+        uuid: &str,
+        tool_id: &str,
+        name: &str,
+        input_json: &str,
+        text: &str,
+    ) -> String {
         let input: serde_json::Value = serde_json::from_str(input_json).unwrap();
         let mut blocks = serde_json::json!([{
             "type": "tool_use",
@@ -966,7 +1006,8 @@ mod session_json_tests {
             "uuid": uuid,
             "sessionId": "abc12345-0000",
             "message": { "role": "assistant", "content": blocks }
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     /// Build a user turn that is entirely a tool_result (no visible text).
@@ -983,7 +1024,8 @@ mod session_json_tests {
                     "content": [{ "type": "text", "text": output }]
                 }]
             }
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -1005,7 +1047,10 @@ mod session_json_tests {
         assert_eq!(ex["tool"]["input"]["new_string"], "b");
         assert_eq!(ex["tool"]["output"], "ok, done");
         // truncated absent when content fits
-        assert!(ex["tool"]["truncated"].is_null(), "truncated absent when content fits");
+        assert!(
+            ex["tool"]["truncated"].is_null(),
+            "truncated absent when content fits"
+        );
     }
 
     #[test]
@@ -1017,7 +1062,10 @@ mod session_json_tests {
 
         let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
         // tool field must be absent (not null) for existing consumers
-        assert!(doc["exchanges"][0].get("tool").is_none(), "no tool field on plain text exchange");
+        assert!(
+            doc["exchanges"][0].get("tool").is_none(),
+            "no tool field on plain text exchange"
+        );
     }
 
     #[test]
@@ -1034,7 +1082,10 @@ mod session_json_tests {
         let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
         let tool = &doc["exchanges"][0]["tool"];
 
-        assert_eq!(tool["truncated"], true, "truncated flag set for oversized output");
+        assert_eq!(
+            tool["truncated"], true,
+            "truncated flag set for oversized output"
+        );
         let out = tool["output"].as_str().expect("output is a string");
         assert!(out.len() <= TOOL_CONTENT_BYTES, "output capped at 50KB");
         assert!(!out.is_empty(), "output not empty");
@@ -1044,7 +1095,10 @@ mod session_json_tests {
     fn tool_input_truncated_at_50kb_with_flag() {
         // Build an input JSON whose serialized form exceeds 50KB
         let big_value = "y".repeat(TOOL_CONTENT_BYTES + 1);
-        let input = format!(r#"{{"content":{}}}"#, serde_json::to_string(&big_value).unwrap());
+        let input = format!(
+            r#"{{"content":{}}}"#,
+            serde_json::to_string(&big_value).unwrap()
+        );
         let session = parse(&[
             r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"write it"}}"#,
             &assistant_with_tool("a1", "toolu_03", "Write", &input, ""),
@@ -1053,7 +1107,10 @@ mod session_json_tests {
         let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
         let tool = &doc["exchanges"][0]["tool"];
 
-        assert_eq!(tool["inputTruncated"], true, "inputTruncated flag set for oversized input");
+        assert_eq!(
+            tool["inputTruncated"], true,
+            "inputTruncated flag set for oversized input"
+        );
     }
 
     #[test]
@@ -1070,7 +1127,10 @@ mod session_json_tests {
         assert_eq!(doc["exchanges"][0]["user"], "render the transcript");
         assert_eq!(doc["exchanges"][0]["assistant"], "on it");
         assert_eq!(doc["exchanges"][0]["system"], "4.2s");
-        assert!(doc["exchanges"][0].get("tool").is_none(), "no tool field on plain exchange");
+        assert!(
+            doc["exchanges"][0].get("tool").is_none(),
+            "no tool field on plain exchange"
+        );
     }
 
     #[test]
@@ -1096,7 +1156,11 @@ mod session_json_tests {
             .iter()
             .filter_map(|e| e["tool"]["kind"].as_str())
             .collect();
-        assert_eq!(kinds, vec!["Read", "Edit", "Bash"], "all three tool calls are emitted in order");
+        assert_eq!(
+            kinds,
+            vec!["Read", "Edit", "Bash"],
+            "all three tool calls are emitted in order"
+        );
 
         // Each tool keeps its own paired output.
         let outputs: Vec<&str> = exchanges
@@ -1138,7 +1202,11 @@ mod session_json_tests {
             .iter()
             .filter_map(|e| e["tool"]["input"]["file_path"].as_str())
             .collect();
-        assert_eq!(paths, vec!["/a", "/b"], "both parallel tool calls are emitted");
+        assert_eq!(
+            paths,
+            vec!["/a", "/b"],
+            "both parallel tool calls are emitted"
+        );
         // Outputs pair correctly by tool_use_id, not position.
         let outputs: Vec<&str> = exchanges
             .iter()
@@ -1164,7 +1232,8 @@ mod session_json_tests {
                     "type": "advisor_result", "text": advisor_text
                 }}
             ]}
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -1189,10 +1258,17 @@ mod session_json_tests {
             r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"check this"}}"#,
             &assistant_with_advisor("a1", "srvtoolu_02", "Reshape items 2/3 as injection."),
         ]);
-        assert_eq!(session.turns().len(), 2, "no extra tool_result turn was added");
+        assert_eq!(
+            session.turns().len(),
+            2,
+            "no extra tool_result turn was added"
+        );
 
         let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
-        assert_eq!(doc["exchanges"][0]["tool"]["output"], "Reshape items 2/3 as injection.");
+        assert_eq!(
+            doc["exchanges"][0]["tool"]["output"],
+            "Reshape items 2/3 as injection."
+        );
     }
 
     // ── subagent injection tests ─────────────────────────────────────────────
@@ -1213,7 +1289,8 @@ mod session_json_tests {
                 }]
             },
             "toolUseResult": { "isAsync": true, "agentId": agent_id }
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     fn subagent_session() -> Session {
@@ -1229,21 +1306,36 @@ mod session_json_tests {
         // for an Agent tool_use — regression guard for existing callers (e.g. the daemon).
         let session = parse(&[
             r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"go survey"}}"#,
-            &assistant_with_tool("a1", "toolu_agent", "Agent", r#"{"description":"Survey branches"}"#, ""),
+            &assistant_with_tool(
+                "a1",
+                "toolu_agent",
+                "Agent",
+                r#"{"description":"Survey branches"}"#,
+                "",
+            ),
             &agent_launch_result_turn("r1", "toolu_agent", "ac884004"),
         ]);
 
         let doc: serde_json::Value = serde_json::from_str(&session_json(&session)).unwrap();
         let tool = &doc["exchanges"][0]["tool"];
         assert_eq!(tool["kind"], "Agent");
-        assert!(tool.get("subagent").is_none(), "no subagents map given, so nothing attached");
+        assert!(
+            tool.get("subagent").is_none(),
+            "no subagents map given, so nothing attached"
+        );
     }
 
     #[test]
     fn resolved_subagent_is_attached_with_its_own_exchanges() {
         let session = parse(&[
             r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"go survey"}}"#,
-            &assistant_with_tool("a1", "toolu_agent", "Agent", r#"{"description":"Survey branches"}"#, ""),
+            &assistant_with_tool(
+                "a1",
+                "toolu_agent",
+                "Agent",
+                r#"{"description":"Survey branches"}"#,
+                "",
+            ),
             &agent_launch_result_turn("r1", "toolu_agent", "ac884004"),
         ]);
 
@@ -1263,10 +1355,18 @@ mod session_json_tests {
 
         assert_eq!(tool["kind"], "Agent");
         assert_eq!(tool["subagent"]["agentType"], "general-purpose");
-        assert_eq!(tool["subagent"]["description"], "Survey branches for PR candidates");
-        let sub_exchanges = tool["subagent"]["exchanges"].as_array().expect("exchanges array");
+        assert_eq!(
+            tool["subagent"]["description"],
+            "Survey branches for PR candidates"
+        );
+        let sub_exchanges = tool["subagent"]["exchanges"]
+            .as_array()
+            .expect("exchanges array");
         assert_eq!(sub_exchanges[0]["user"], "survey the branches");
-        assert_eq!(sub_exchanges[0]["assistant"], "three branches have unopened PRs");
+        assert_eq!(
+            sub_exchanges[0]["assistant"],
+            "three branches have unopened PRs"
+        );
     }
 
     #[test]
@@ -1275,7 +1375,13 @@ mod session_json_tests {
         // (still running, or discovery hasn't caught up yet) degrades to no subagent field.
         let session = parse(&[
             r#"{"type":"user","uuid":"u1","sessionId":"abc12345-0000","message":{"role":"user","content":"go survey"}}"#,
-            &assistant_with_tool("a1", "toolu_agent", "Agent", r#"{"description":"Survey branches"}"#, ""),
+            &assistant_with_tool(
+                "a1",
+                "toolu_agent",
+                "Agent",
+                r#"{"description":"Survey branches"}"#,
+                "",
+            ),
             &agent_launch_result_turn("r1", "toolu_agent", "still-running"),
         ]);
         let subagents = std::collections::HashMap::new(); // empty — nothing resolved

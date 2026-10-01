@@ -70,12 +70,7 @@ fn render_empty_input_is_a_single_line() {
 
 #[test]
 fn render_omits_section_for_unused_kinds() {
-    let entries = vec![entry(
-        "only-feedback",
-        MemoryKind::Feedback,
-        "/f.md",
-        "x",
-    )];
+    let entries = vec![entry("only-feedback", MemoryKind::Feedback, "/f.md", "x")];
     let out = render(&entries);
 
     assert!(out.contains("feedback"));
