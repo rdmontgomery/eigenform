@@ -81,10 +81,7 @@ async fn output_while_detached_lands_in_the_next_snapshot() {
 #[tokio::test]
 async fn child_exit_marks_exited_but_keeps_the_entry_briefly() {
     let host = SessionHost::default();
-    // Outlive attach(): an exit broadcast before the subscriber registers is never seen.
-    let pty = host
-        .spawn("sh", &["-c", "sleep 0.3"], None, (80, 24))
-        .unwrap();
+    let pty = host.spawn("sh", &["-c", "true"], None, (80, 24)).unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(pty.exited_at().is_some(), "pump must mark exited on EOF");
     assert!(host.get(pty.id).is_some(), "kept for a final view");
@@ -93,10 +90,7 @@ async fn child_exit_marks_exited_but_keeps_the_entry_briefly() {
 #[tokio::test]
 async fn sweep_reaps_long_dead_entries() {
     let host = SessionHost::default();
-    // Outlive attach(): an exit broadcast before the subscriber registers is never seen.
-    let pty = host
-        .spawn("sh", &["-c", "sleep 0.3"], None, (80, 24))
-        .unwrap();
+    let pty = host.spawn("sh", &["-c", "true"], None, (80, 24)).unwrap();
     let id = pty.id;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(pty.exited_at().is_some(), "must have exited before sweep");
