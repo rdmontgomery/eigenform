@@ -21,3 +21,6 @@ Thumbs.db
 
 # worktrees
 /.worktrees/
+
+# BMAD personal overrides
+/_bmad/custom/config.user.toml
