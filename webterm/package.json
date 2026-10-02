@@ -6,7 +6,8 @@
     "build": "esbuild src/main.ts --bundle --outdir=dist --format=esm --minify",
     "watch": "esbuild src/main.ts --bundle --outdir=dist --format=esm --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test",
+    "test:browser": "node --test e2e/*.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -14,6 +15,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
+    "playwright-core": "1.56",
     "typescript": "^6.0.3"
   }
 }
