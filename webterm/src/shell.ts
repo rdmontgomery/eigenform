@@ -70,6 +70,7 @@ import { icon } from "./icons.ts";
 import { openInspect } from "./inspect.ts";
 import { openClaims } from "./claims.ts";
 import { el } from "./dom.ts";
+import { mountTabSearch } from "./tab-search.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -204,7 +205,21 @@ export function mountShell(appEl: HTMLElement): void {
     renderTabStrip();
   });
   const controls = el("div", "topbar-controls");
-  topbar.append(railBtn, tabStrip, controls);
+  // Find-a-tab filter (see tab-search.ts): highlights matches, dims the rest.
+  const tabSearch = mountTabSearch({
+    items: () =>
+      tabs.map((t) => ({
+        id: t.id,
+        label: t.descriptor.label,
+        cwd: t.descriptor.cwd,
+        uuid: t.descriptor.uuid,
+        ptyId: t.descriptor.ptyId,
+      })),
+    activate: (id) => activateTab(id),
+    onChange: () => renderTabStrip(),
+    onClose: () => activeTab()?.handle.term.focus(),
+  });
+  topbar.append(railBtn, tabSearch.el, tabStrip, controls);
 
   const termArea = el("div", "term-area");
   const termHeader = el("div", "term-header");
@@ -573,8 +588,11 @@ export function mountShell(appEl: HTMLElement): void {
   // derived from the model (TabEntry), so rebuilds carry no stale-DOM risk.
   function renderTabStrip() {
     tabStrip.innerHTML = "";
+    tabSearch.sync();
     for (const t of tabs) {
       const tab = el("div", "tab");
+      tab.dataset.tabId = t.id;
+      tab.classList.add(...tabSearch.classFor(t.id));
       // Every tab carries its project ink (the subtitle uses it); only the
       // active tab turns it into the top border.
       tab.style.setProperty("--tab-ink", inkVar(t.descriptor.cwd, t.descriptor.label));

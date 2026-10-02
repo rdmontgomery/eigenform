@@ -715,6 +715,52 @@ button { font: inherit; color: inherit; }
 }
 .tab--dead { opacity: 0.55; }
 
+/* ── Find tab (tab-search.ts) ──────────────────────────────────────────── */
+.tab-search {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  padding: 0 4px;
+}
+.tab-search-box {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: 2px;
+  padding: 4px 8px;
+  width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.tab-search--open .tab-search-box { display: flex; }
+.tab-search--miss .tab-search-box { border-color: var(--st-error); }
+.tab-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--tx);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+.tab-search-input::placeholder { color: var(--tx-3); }
+.tab-search-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-3);
+  flex-shrink: 0;
+}
+
+/* While searching: matches glow in their project ink, the rest recede. */
+.tab--nomatch { opacity: 0.28; }
+.tab--nomatch:hover { opacity: 0.6; }
+.tab--match { background: color-mix(in oklch, var(--tab-ink, var(--accent)) 14%, transparent); }
+.tab--match.tab--active { background: var(--term-bg); }
+.tab--match-sel { box-shadow: inset 0 0 0 2px var(--tab-ink, var(--accent)); }
+
 .tab--dragging { opacity: 0.4; }
 .tab--drag-before { box-shadow: inset 2px 0 0 0 var(--accent); }
 .tab--drag-after { box-shadow: inset -2px 0 0 0 var(--accent); }
