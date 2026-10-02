@@ -115,7 +115,8 @@ pub fn resolve(codex_home: &Path, query: &str) -> Result<ThreadStub, ResolveErro
         .into_iter()
         .filter(|s| s.id.starts_with(query))
         .collect();
-    let distinct: std::collections::BTreeSet<&str> = matches.iter().map(|s| s.id.as_str()).collect();
+    let distinct: std::collections::BTreeSet<&str> =
+        matches.iter().map(|s| s.id.as_str()).collect();
     match distinct.len() {
         0 => Err(ResolveError::NotFound),
         1 => {
@@ -199,7 +200,12 @@ static FACTS: Mutex<Option<HashMap<FactsKey, FileFacts>>> = Mutex::new(None);
 
 fn file_key(path: &Path) -> Option<FactsKey> {
     let md = fs::metadata(path).ok()?;
-    let mtime = md.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+    let mtime = md
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
     Some((path.to_path_buf(), mtime, md.len()))
 }
 
@@ -320,7 +326,11 @@ fn count_user_turns(path: &Path) -> usize {
 fn flatten_source(v: &Value) -> String {
     match v {
         Value::String(s) => s.to_lowercase(),
-        Value::Object(m) => m.keys().next().map(|k| k.to_lowercase()).unwrap_or_default(),
+        Value::Object(m) => m
+            .keys()
+            .next()
+            .map(|k| k.to_lowercase())
+            .unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -368,7 +378,10 @@ pub fn threads(codex_home: &Path) -> Vec<CodexThread> {
             }
         }
     }
-    let mut rows: Vec<CodexThread> = by_id.values().map(|s| thread(codex_home, s, &locks)).collect();
+    let mut rows: Vec<CodexThread> = by_id
+        .values()
+        .map(|s| thread(codex_home, s, &locks))
+        .collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.recency));
     rows
 }
@@ -399,9 +412,12 @@ impl WriterLocks {
             if fields.len() < 6 || fields[1] != "FLOCK" {
                 continue;
             }
-            let Ok(pid) = fields[4].parse::<u32>() else { continue };
+            let Ok(pid) = fields[4].parse::<u32>() else {
+                continue;
+            };
             let mut dev_ino = fields[5].split(':');
-            let (Some(maj), Some(min), Some(ino)) = (dev_ino.next(), dev_ino.next(), dev_ino.next())
+            let (Some(maj), Some(min), Some(ino)) =
+                (dev_ino.next(), dev_ino.next(), dev_ino.next())
             else {
                 continue;
             };
@@ -419,7 +435,9 @@ impl WriterLocks {
 
     /// The pid holding `codex_home/thread-writer-locks/<id>.lock`, if any.
     pub fn holder(&self, codex_home: &Path, id: &str) -> Option<u32> {
-        let path = codex_home.join("thread-writer-locks").join(format!("{id}.lock"));
+        let path = codex_home
+            .join("thread-writer-locks")
+            .join(format!("{id}.lock"));
         let (dev, ino) = dev_ino(&path)?;
         self.held.get(&(dev, ino)).copied()
     }
@@ -530,7 +548,10 @@ pub fn session_json(thread_id: &str, contents: &str) -> String {
                     "function_call" | "custom_tool_call" | "local_shell_call" | "web_search_call",
                 ) => {
                     for tool in tools_of(p, &outputs, &cwd) {
-                        let needs_new = exchanges.last().map(|e| e.get("tool").is_some()).unwrap_or(true);
+                        let needs_new = exchanges
+                            .last()
+                            .map(|e| e.get("tool").is_some())
+                            .unwrap_or(true);
                         if needs_new {
                             exchanges.push(json!({ "user": "", "tool": tool }));
                         } else {
@@ -574,7 +595,11 @@ fn tools_of(p: &Value, outputs: &HashMap<String, String>, cwd: &Path) -> Vec<Val
     match p["type"].as_str() {
         Some("web_search_call") => {
             let query = p["action"]["query"].as_str().unwrap_or_default();
-            vec![tool("WebSearch", json!({ "query": query, "codexTool": "web_search" }), output)]
+            vec![tool(
+                "WebSearch",
+                json!({ "query": query, "codexTool": "web_search" }),
+                output,
+            )]
         }
         Some("local_shell_call") => {
             let action = &p["action"];
@@ -602,7 +627,11 @@ fn tools_of(p: &Value, outputs: &HashMap<String, String>, cwd: &Path) -> Vec<Val
                 .unwrap_or(Value::Null);
             match name {
                 "shell" | "container.exec" | "shell_command" | "exec_command" | "local_shell" => {
-                    let cmd = if args["cmd"].is_null() { &args["command"] } else { &args["cmd"] };
+                    let cmd = if args["cmd"].is_null() {
+                        &args["command"]
+                    } else {
+                        &args["cmd"]
+                    };
                     let mut input = json!({ "command": command_string(cmd), "codexTool": name });
                     if let Some(wd) = args["workdir"].as_str() {
                         input["cwd"] = json!(wd);
@@ -610,12 +639,19 @@ fn tools_of(p: &Value, outputs: &HashMap<String, String>, cwd: &Path) -> Vec<Val
                     vec![tool("Bash", input, output)]
                 }
                 "apply_patch" => {
-                    let raw = args["input"].as_str().or(args["patch"].as_str()).unwrap_or_default();
+                    let raw = args["input"]
+                        .as_str()
+                        .or(args["patch"].as_str())
+                        .unwrap_or_default();
                     patch_tools(raw, cwd, output)
                 }
                 "view_image" => {
                     let path = args["path"].as_str().unwrap_or_default();
-                    vec![tool("Read", json!({ "file_path": absolutize(path, cwd), "codexTool": name }), output)]
+                    vec![tool(
+                        "Read",
+                        json!({ "file_path": absolutize(path, cwd), "codexTool": name }),
+                        output,
+                    )]
                 }
                 _ => {
                     let input = if args.is_null() { json!({}) } else { args };
@@ -647,7 +683,10 @@ fn patch_tools(patch: &str, cwd: &Path, output: Option<&str>) -> Vec<Value> {
             ("*** Delete File: ", "Edit"),
         ]
         .iter()
-        .find_map(|(prefix, kind)| line.strip_prefix(prefix).map(|p| (*kind, p.trim().to_string())));
+        .find_map(|(prefix, kind)| {
+            line.strip_prefix(prefix)
+                .map(|p| (*kind, p.trim().to_string()))
+        });
         if let Some((kind, path)) = header {
             flush(current.take(), &mut tools);
             current = Some((kind, path, format!("{line}\n")));
@@ -814,7 +853,9 @@ fn complete_lines(window: &str, skip_first: bool) -> impl Iterator<Item = Value>
 }
 
 fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
 fn mtime_of(path: &Path) -> DateTime<Utc> {
@@ -831,7 +872,9 @@ mod tests {
     #[test]
     fn file_name_yields_thread_id() {
         assert_eq!(
-            thread_id_from_file_name("rollout-2026-10-02T09-14-03-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl"),
+            thread_id_from_file_name(
+                "rollout-2026-10-02T09-14-03-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl"
+            ),
             Some("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")
         );
         // A reverted thread keeps its stable id before the `_<rollout_id>` suffix.
@@ -839,7 +882,10 @@ mod tests {
             thread_id_from_file_name("rollout-2026-10-02T09-14-03-aaaa_bbbb.jsonl"),
             Some("aaaa")
         );
-        assert_eq!(thread_id_from_file_name("rollout-2026-10-02T09-14-03-x.jsonl.zst"), None);
+        assert_eq!(
+            thread_id_from_file_name("rollout-2026-10-02T09-14-03-x.jsonl.zst"),
+            None
+        );
         assert_eq!(thread_id_from_file_name("notes.jsonl"), None);
     }
 
@@ -862,7 +908,10 @@ mod tests {
 
     #[test]
     fn command_string_unwraps_bash_lc() {
-        assert_eq!(command_string(&json!(["bash", "-lc", "cargo test"])), "cargo test");
+        assert_eq!(
+            command_string(&json!(["bash", "-lc", "cargo test"])),
+            "cargo test"
+        );
         assert_eq!(command_string(&json!(["rg", "foo"])), "rg foo");
         assert_eq!(command_string(&json!("ls")), "ls");
     }

@@ -17,11 +17,21 @@ fn fixture() -> (tempfile::TempDir, Config) {
     let pdir = projects.join("-home-me-p");
     std::fs::create_dir_all(&pdir).unwrap();
     let parent = [
-        format!(r#"{{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/home/me/p","timestamp":"2026-10-02T09:00:00Z","sessionId":"{PARENT}","message":{{"role":"user","content":"get a second opinion from codex"}}}}"#),
-        format!(r#"{{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"sessionId":"{PARENT}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{{"command":"codex-worker spawn retry-fix -- 'fix the flaky retry test'"}}}}]}}}}"#),
-        format!(r#"{{"type":"user","uuid":"r1","parentUuid":"a1","isSidechain":false,"sessionId":"{PARENT}","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_bash","content":"worker: retry-fix\ncodex-thread: {THREAD}\nworktree: /w/repo-wt"}}]}}}}"#),
+        format!(
+            r#"{{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/home/me/p","timestamp":"2026-10-02T09:00:00Z","sessionId":"{PARENT}","message":{{"role":"user","content":"get a second opinion from codex"}}}}"#
+        ),
+        format!(
+            r#"{{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"sessionId":"{PARENT}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{{"command":"codex-worker spawn retry-fix -- 'fix the flaky retry test'"}}}}]}}}}"#
+        ),
+        format!(
+            r#"{{"type":"user","uuid":"r1","parentUuid":"a1","isSidechain":false,"sessionId":"{PARENT}","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_bash","content":"worker: retry-fix\ncodex-thread: {THREAD}\nworktree: /w/repo-wt"}}]}}}}"#
+        ),
     ];
-    std::fs::write(pdir.join(format!("{PARENT}.jsonl")), parent.join("\n") + "\n").unwrap();
+    std::fs::write(
+        pdir.join(format!("{PARENT}.jsonl")),
+        parent.join("\n") + "\n",
+    )
+    .unwrap();
 
     // The Codex worker's rollout.
     let codex = dir.path().join("codex");
@@ -83,9 +93,13 @@ async fn session_route_renders_a_codex_thread() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;
     let doc: serde_json::Value =
-        serde_json::from_str(&helpers::http_get(&base, "/api/session/0199a1b2/json").await).unwrap();
+        serde_json::from_str(&helpers::http_get(&base, "/api/session/0199a1b2/json").await)
+            .unwrap();
     assert_eq!(doc["engine"], "codex");
-    assert_eq!(doc["exchanges"][0]["assistant"], "fixed: backoff instead of a fixed sleep");
+    assert_eq!(
+        doc["exchanges"][0]["assistant"],
+        "fixed: backoff instead of a fixed sleep"
+    );
 }
 
 #[tokio::test]
@@ -93,7 +107,8 @@ async fn parent_bash_call_nests_the_codex_worker_transcript() {
     let (_d, cfg) = fixture();
     let base = start(cfg).await;
     let doc: serde_json::Value =
-        serde_json::from_str(&helpers::http_get(&base, "/api/session/cccc3333/json").await).unwrap();
+        serde_json::from_str(&helpers::http_get(&base, "/api/session/cccc3333/json").await)
+            .unwrap();
     let tool = doc["exchanges"]
         .as_array()
         .unwrap()

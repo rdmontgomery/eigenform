@@ -257,7 +257,8 @@ fn attach_codex_workers(cfg: &Config, json: String) -> String {
         };
         let row = eigenform_codex::thread(home, &stub, &locks);
         let sub: serde_json::Value =
-            serde_json::from_str(&eigenform_codex::session_json(&stub.id, &contents)).unwrap_or_default();
+            serde_json::from_str(&eigenform_codex::session_json(&stub.id, &contents))
+                .unwrap_or_default();
         tool["subagent"] = serde_json::json!({
             "agentType": "codex",
             "description": row.title,
@@ -273,7 +274,8 @@ fn attach_codex_workers(cfg: &Config, json: String) -> String {
 fn codex_thread_marker(text: &str) -> Option<String> {
     text.lines().find_map(|l| {
         let id = l.trim().strip_prefix(CODEX_THREAD_MARKER)?.trim();
-        (!id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')).then(|| id.to_string())
+        (!id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
+            .then(|| id.to_string())
     })
 }
 
@@ -1077,7 +1079,8 @@ async fn pty_ws(
     }
 
     if let Some(pid) = codex_resume_leased(&state.config, &query) {
-        let reason = format!("codex thread is held by a running worker (pid {pid}); wait for it to finish");
+        let reason =
+            format!("codex thread is held by a running worker (pid {pid}); wait for it to finish");
         state.events.record(
             "resume-refused",
             serde_json::json!({ "reason": reason, "session": query.session, "pid": pid }),
@@ -1307,7 +1310,11 @@ fn session_resume_unresolved(cfg: &Config, query: &PtyQuery) -> bool {
 fn codex_thread(cfg: &Config, query: &str) -> Option<eigenform_codex::CodexThread> {
     let home = cfg.codex_home.as_deref()?;
     let stub = eigenform_codex::resolve(home, query).ok()?;
-    Some(eigenform_codex::thread(home, &stub, &eigenform_codex::WriterLocks::probe()))
+    Some(eigenform_codex::thread(
+        home,
+        &stub,
+        &eigenform_codex::WriterLocks::probe(),
+    ))
 }
 
 /// The pid of a live writer on the Codex thread a `session=` resume names. Codex lets
@@ -1874,7 +1881,13 @@ mod tests {
             codex_home: Some(dir.path().to_path_buf()),
             ..Default::default()
         };
-        let q = PtyQuery { attach: None, session: Some("0199a1".into()), new: None, term: None, create: 0 };
+        let q = PtyQuery {
+            attach: None,
+            session: Some("0199a1".into()),
+            new: None,
+            term: None,
+            create: 0,
+        };
 
         assert!(!session_resume_unresolved(&cfg, &q));
         let cmd = pty_command(&cfg, &q);
@@ -1883,7 +1896,11 @@ mod tests {
         assert_eq!(cmd.cwd.as_deref(), Some(std::path::Path::new("/w/repo")));
         assert_eq!(codex_resume_leased(&cfg, &q), None, "no writer → resumable");
 
-        if std::process::Command::new("flock").arg("--version").output().is_ok() {
+        if std::process::Command::new("flock")
+            .arg("--version")
+            .output()
+            .is_ok()
+        {
             let locks = dir.path().join("thread-writer-locks");
             std::fs::create_dir_all(&locks).unwrap();
             let lock = locks.join(format!("{id}.lock"));
@@ -1902,11 +1919,20 @@ mod tests {
             }
             holder.kill().ok();
             holder.wait().ok();
-            assert!(leased.is_some(), "a held writer lock must refuse the resume");
+            assert!(
+                leased.is_some(),
+                "a held writer lock must refuse the resume"
+            );
         }
 
         // An unknown id is neither Claude nor Codex → refused, not shelled.
-        let unknown = PtyQuery { attach: None, session: Some("ffff".into()), new: None, term: None, create: 0 };
+        let unknown = PtyQuery {
+            attach: None,
+            session: Some("ffff".into()),
+            new: None,
+            term: None,
+            create: 0,
+        };
         assert!(session_resume_unresolved(&cfg, &unknown));
     }
 

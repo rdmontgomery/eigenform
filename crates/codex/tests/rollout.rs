@@ -30,7 +30,11 @@ fn write_home(lines: &[String]) -> (tempfile::TempDir, PathBuf) {
     let path = day.join(format!("rollout-2026-10-02T09-14-03-{ID}.jsonl"));
     fs::write(&path, lines.join("\n") + "\n").unwrap();
     // A compressed cold rollout is skipped, not misread.
-    fs::write(day.join("rollout-2026-10-01T00-00-00-ffff.jsonl.zst"), b"\x28\xb5\x2f\xfd").unwrap();
+    fs::write(
+        day.join("rollout-2026-10-01T00-00-00-ffff.jsonl.zst"),
+        b"\x28\xb5\x2f\xfd",
+    )
+    .unwrap();
     (home, path)
 }
 
@@ -57,7 +61,10 @@ fn thread_row_reads_meta_title_model_and_recency() {
     assert_eq!(t.cwd, Path::new("/w/repo"));
     assert_eq!(t.source, "exec");
     assert!(t.headless, "codex exec is headless");
-    assert_eq!(t.title.as_deref(), Some("Fix the flaky retry test in crates/net"));
+    assert_eq!(
+        t.title.as_deref(),
+        Some("Fix the flaky retry test in crates/net")
+    );
     assert_eq!(t.model.as_deref(), Some("gpt-5.5-codex"));
     assert_eq!(t.turns, 1);
     assert_eq!(t.recency.to_rfc3339(), "2026-10-02T09:14:20.100+00:00");
@@ -80,8 +87,14 @@ fn session_json_maps_codex_tools_onto_the_drawer_shape() {
     assert_eq!(ex[0]["tool"]["input"]["command"], "cargo test -p net retry");
     assert_eq!(ex[0]["tool"]["output"], "test retry ... FAILED");
     assert_eq!(ex[1]["tool"]["kind"], "Edit");
-    assert_eq!(ex[1]["tool"]["input"]["file_path"], "/w/repo/crates/net/src/retry.rs");
-    assert!(ex[1]["assistant"].as_str().unwrap().contains("backoff schedule"));
+    assert_eq!(
+        ex[1]["tool"]["input"]["file_path"],
+        "/w/repo/crates/net/src/retry.rs"
+    );
+    assert!(ex[1]["assistant"]
+        .as_str()
+        .unwrap()
+        .contains("backoff schedule"));
     assert_eq!(ex.last().unwrap()["leaf"], true);
     assert_eq!(v["total"], ex.len());
 }
