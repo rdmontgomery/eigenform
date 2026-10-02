@@ -952,7 +952,14 @@ button { font: inherit; color: inherit; }
 .term-pane {
   position: absolute;
   inset: 0;
-  padding: 6px 8px 0 8px;   /* breathe: page margin; right gutter clears the bar */
+  /* FitAddon sizes the grid from this element's computed height/width, and
+     under the global border-box that figure *includes* the padding — so it
+     budgeted rows into the top gutter and pushed the last one (claude's status
+     line) up to a gutter's height past the bottom edge. content-box makes the
+     computed size the space .xterm actually gets; the leftover after whole
+     rows then lands below the grid, never under it. */
+  box-sizing: content-box;
+  padding: 6px 8px 8px 8px; /* breathe: page margin; right gutter clears the bar */
 }
 
 /* ── Inspect dock — reach map (top) + transcript (bottom), docked right ───── */
