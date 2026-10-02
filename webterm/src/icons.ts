@@ -25,6 +25,8 @@ const PATHS: Record<string, string> = {
   copy: '<path d="M9 9h10v10H9zM5 15V5h10"/>',
   fork: '<path d="M6 4v8M18 4v3a4 4 0 0 1-4 4H6"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="4" r="2"/><circle cx="6" cy="4" r="2"/>',
   stop: '<path d="M7 7h10v10H7z"/>',
+  // snooze — a clock face
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   // tool-call type icons + outliner chevrons (design pass 2026-06-12)
   terminal: '<path d="M5 7l5 5-5 5M13 17h6"/>',
   doc: '<path d="M7 3h7l4 4v14H7zM14 3v4h4"/>',

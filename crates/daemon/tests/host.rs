@@ -145,7 +145,10 @@ async fn kill_of_unknown_id_is_not_found() {
 #[tokio::test]
 async fn attached_subscriber_receives_the_exit_text_frame() {
     let host = SessionHost::default();
-    let pty = host.spawn("sh", &["-c", "true"], None, (80, 24)).unwrap();
+    // Outlive attach(): an exit broadcast before the subscriber registers is never seen.
+    let pty = host
+        .spawn("sh", &["-c", "sleep 0.3"], None, (80, 24))
+        .unwrap();
     let (_, mut rx) = pty.attach();
     // The pump broadcasts an exit Text frame when the child dies.
     let got = tokio::time::timeout(Duration::from_secs(5), async {

@@ -15,6 +15,7 @@
 //! - `watch` — `/api/watch/:uuid` change pings and the dev live-reload stream
 //! - `launcher` — `/api/candidates` and the `/api/path` probe
 //! - `inspect` — `/api/inspect`, the skills + memory inventory
+//! - `snooze` — `/api/snoozes`, tabs closed until a wake time (persisted)
 //! - [`events`] — the observability bus and `/api/events` (+ `/stream`)
 //! - [`host`] — the [`host::SessionHost`] pty registry; `paths` — tilde/normalize helpers
 
@@ -36,6 +37,7 @@ mod paths;
 pub mod plan_gate;
 mod pty;
 mod session;
+pub mod snooze;
 mod watch;
 
 pub use pty::Pty;
@@ -122,6 +124,8 @@ pub struct AppState {
     pub events: Arc<events::EventBus>,
     /// Plan reviews parked by the `ExitPlanMode` hook, awaiting a human decision.
     pub plan_gate: Arc<plan_gate::PlanGate>,
+    /// Snoozed tabs awaiting their wake time (persisted under `state_dir`).
+    pub snoozes: Arc<snooze::SnoozeStore>,
 }
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
@@ -166,6 +170,14 @@ pub fn app(config: Config) -> Router {
             axum::routing::delete(claims::claim_delete_route),
         )
         .route("/api/inspect", get(inspect::inspect_route))
+        .route(
+            "/api/snoozes",
+            get(snooze::snoozes_route).post(snooze::snooze_create_route),
+        )
+        .route(
+            "/api/snoozes/{id}",
+            axum::routing::delete(snooze::snooze_delete_route),
+        )
         .route("/api/candidates", get(launcher::candidates_route))
         .route("/api/path", get(launcher::path_probe_route))
         .route("/api/health", get(health_route))
@@ -199,6 +211,7 @@ pub fn app(config: Config) -> Router {
     let events = Arc::new(events::EventBus::new(config.log_file.as_deref()));
     let state = AppState {
         host: Arc::new(host::SessionHost::with_events(Arc::clone(&events))),
+        snoozes: Arc::new(snooze::SnoozeStore::open(config.state_dir.as_deref())),
         config: Arc::new(config),
         events,
         plan_gate: Arc::new(plan_gate::PlanGate::default()),

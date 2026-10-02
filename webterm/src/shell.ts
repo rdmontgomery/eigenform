@@ -8,6 +8,7 @@
  *   dock.ts        inspect dock: reach map + transcript + events, splitters
  *   appearance.ts  color scheme + terminal font, their popovers, ⌘ zoom keys
  *   status.ts      status-dot / ink presentation shared by rail + tab strip
+ *   snooze-ui.ts   tab snooze menu + snoozed-tabs shelf (snooze.ts: pure helpers)
  *
  * Layout (eigenform warm-ink design, Claude Design handoff 2026-06-12):
  *   rail (brand · search · grouped sessions · footer)
@@ -71,6 +72,8 @@ import { openInspect } from "./inspect.ts";
 import { openClaims } from "./claims.ts";
 import { el } from "./dom.ts";
 import { mountTabSearch } from "./tab-search.ts";
+import { dueSnoozes, snoozableTab, type Snooze } from "./snooze.ts";
+import { openSnoozeMenu, openSnoozeShelf } from "./snooze-ui.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -106,6 +109,8 @@ interface TabEntry {
   reconnectAttempt: number;
   /** Pending reconnect timer id, or null. */
   reconnectTimer: number | null;
+  /** true when a snooze just reopened this tab and it hasn't been looked at yet. */
+  woke: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +128,11 @@ interface TabEntry {
  * path — must be called exactly once per page load.
  */
 export function mountShell(appEl: HTMLElement): void {
+  /** Snoozed tabs as the daemon last reported them (see the Snooze section). */
+  let snoozes: Snooze[] = [];
+  /** Page title without the wake marker. */
+  const baseTitle = document.title;
+
   // ------------------------------------------------------------------
   // Appearance — scheme + typography (applied before any layout so first
   // paint is correct); the shell supplies the per-terminal side effects.
@@ -388,6 +398,7 @@ export function mountShell(appEl: HTMLElement): void {
       t.termEl.style.display = isActive ? "" : "none";
       if (isActive) {
         activeTabId = id;
+        t.woke = false;
         // Re-fit on becoming visible so xterm dimensions are correct.
         requestAnimationFrame(() => {
           try { t.handle.fit.fit(); } catch { /* zero-size element — ok */ }
@@ -398,6 +409,7 @@ export function mountShell(appEl: HTMLElement): void {
     renderTermHeader();
     syncDock();
     railView.render();
+    syncWakeTitle();
   }
 
   function closeTab(id: string) {
@@ -432,6 +444,7 @@ export function mountShell(appEl: HTMLElement): void {
     renderTermHeader();
     syncDock();
     railView.render();
+    syncWakeTitle();
   }
 
   async function killTab(id: string) {
@@ -567,6 +580,23 @@ export function mountShell(appEl: HTMLElement): void {
     });
 
     controls.append(themeBtn, fontBtn, configBtn, claimsBtn, sep, artifactBtn, drawerBtn);
+
+    // Snoozed-tabs shelf — only present while something is snoozed.
+    if (snoozes.length > 0) {
+      const shelfBtn = el("button", "icon-btn snooze-shelf-btn");
+      shelfBtn.title = `Snoozed tabs (${snoozes.length})`;
+      shelfBtn.append(icon("clock", 16));
+      const count = el("span", "snooze-count");
+      count.textContent = String(snoozes.length);
+      shelfBtn.append(count);
+      shelfBtn.addEventListener("click", () =>
+        openSnoozeShelf(shelfBtn, snoozes, {
+          onWake: (s) => void wakeSnooze(s, true),
+          onCancel: (s) => void cancelSnooze(s),
+        }),
+      );
+      controls.prepend(shelfBtn);
+    }
   }
 
   function showClaims() {
@@ -598,6 +628,7 @@ export function mountShell(appEl: HTMLElement): void {
       tab.style.setProperty("--tab-ink", inkVar(t.descriptor.cwd, t.descriptor.label));
       if (t.id === activeTabId) tab.classList.add("tab--active");
       if (t.dead) tab.classList.add("tab--dead");
+      if (t.woke) tab.classList.add("tab--woke");
 
       // Drag-to-reorder: native HTML5 DnD, no library. The dragged tab's id
       // rides in dragTabId (closure state) rather than dataTransfer alone,
@@ -671,6 +702,14 @@ export function mountShell(appEl: HTMLElement): void {
         void killTab(t.id);
       });
 
+      const snooze = el("button", "tab-snooze");
+      snooze.title = "Snooze — close now, reopen later";
+      snooze.append(icon("clock", 11, 2));
+      snooze.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openSnoozeMenu(snooze, t.descriptor.label, (until) => void snoozeTab(t.id, until));
+      });
+
       const close = el("button", "tab-close");
       close.title = "Detach — close tab, pty stays alive";
       close.append(icon("x", 11, 2));
@@ -686,7 +725,7 @@ export function mountShell(appEl: HTMLElement): void {
         termIco.append(icon("terminal", 11, 2));
         tab.append(termIco);
       }
-      tab.append(textEl, kill, close);
+      tab.append(textEl, snooze, kill, close);
       tab.addEventListener("click", () => activateTab(t.id));
       tabStrip.append(tab);
     }
@@ -739,13 +778,22 @@ export function mountShell(appEl: HTMLElement): void {
   // Open tab helpers
   // ------------------------------------------------------------------
 
-  function openTabWithQuery(query: string, desc: TabDescriptor): TabEntry {
+  /**
+   * Open a tab (or focus it if already open). `background` opens it without
+   * stealing focus from the active tab — how a woken snooze comes back.
+   */
+  function openTabWithQuery(
+    query: string,
+    desc: TabDescriptor,
+    opts: { background?: boolean } = {},
+  ): TabEntry {
     const tabId = desc.ptyId ?? desc.uuid ?? `ephemeral-${Date.now()}`;
+    const background = opts.background === true && activeTabId !== null;
 
     // Reuse existing tab if already open.
     const existing = tabs.find((t) => t.id === tabId);
     if (existing) {
-      activateTab(tabId);
+      if (!background) activateTab(tabId);
       return existing;
     }
 
@@ -771,11 +819,17 @@ export function mountShell(appEl: HTMLElement): void {
       reconnecting: false,
       reconnectAttempt: 0,
       reconnectTimer: null,
+      woke: false,
     };
 
     connectEntry(entry, query, desc.ptyId);
     tabs.push(entry);
     saveTabs();
+    if (background) {
+      termEl.style.display = "none";
+      renderTabStrip();
+      return entry;
+    }
     activateTab(entry.id);
 
     requestAnimationFrame(() => {
@@ -1153,6 +1207,90 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
+  // Snooze — close a tab until a wake time. The daemon stores the snooze
+  // (/api/snoozes, persisted); this page polls, and when one is due claims it
+  // (DELETE — only one window wins) and reopens the tab in the background with
+  // a flash and a ⏰ in the page title until it's looked at.
+  // ------------------------------------------------------------------
+
+  const SNOOZE_POLL_MS = 15_000;
+
+  async function snoozeTab(id: string, until: number) {
+    const t = tabs.find((t) => t.id === id);
+    if (!t) return;
+    try {
+      const res = await fetch("/api/snoozes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ until, tab: snoozableTab(t.descriptor) }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      snoozes = [...snoozes, (await res.json()) as Snooze].sort((a, b) => a.until - b.until);
+    } catch (e) {
+      alert(`Couldn't snooze this tab: ${e instanceof Error ? e.message : e}`);
+      return;
+    }
+    closeTab(id);
+    renderControls();
+  }
+
+  async function cancelSnooze(s: Snooze) {
+    snoozes = snoozes.filter((x) => x.id !== s.id);
+    renderControls();
+    try {
+      await fetch(`/api/snoozes/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+    } catch {
+      // Best-effort; the next poll re-syncs.
+    }
+  }
+
+  /** Claim snooze `s` and reopen its tab. `focus` = woken by hand (switch to it). */
+  async function wakeSnooze(s: Snooze, focus: boolean) {
+    snoozes = snoozes.filter((x) => x.id !== s.id);
+    renderControls();
+    let ptys: PtyInfo[] = [];
+    try {
+      const res = await fetch(`/api/snoozes/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+      if (!res.ok) return; // another window already woke it
+      ptys = (await (await fetch("/api/pty")).json()) as PtyInfo[];
+    } catch {
+      return;
+    }
+    const [act] = reconcileTabs([s.tab], ptys);
+    let entry: TabEntry | null = null;
+    if (act?.action === "attach") {
+      entry = openTabWithQuery(`?attach=${act.descriptor.ptyId}`, act.descriptor, { background: !focus });
+    } else if (act?.action === "resume") {
+      entry = openTabWithQuery(`?session=${act.descriptor.uuid}`, act.descriptor, { background: !focus });
+    } else {
+      // A plain terminal whose pty has since exited: nothing left to reopen.
+      alert(`Snoozed tab “${s.tab.label}” woke, but its terminal has exited.`);
+      return;
+    }
+    if (!focus && entry.id !== activeTabId) {
+      entry.woke = true;
+      renderTabStrip();
+    }
+    syncWakeTitle();
+  }
+
+  async function refreshSnoozes() {
+    try {
+      snoozes = (await (await fetch("/api/snoozes")).json()) as Snooze[];
+    } catch {
+      return; // daemon unreachable — keep the last list
+    }
+    renderControls();
+    for (const s of dueSnoozes(snoozes, Date.now())) await wakeSnooze(s, false);
+  }
+
+  /** ⏰ in the page title while any woken tab is still unseen. */
+  function syncWakeTitle() {
+    const n = tabs.filter((t) => t.woke).length;
+    document.title = n > 0 ? `⏰ ${n} woke · ${baseTitle}` : baseTitle;
+  }
+
+  // ------------------------------------------------------------------
   // Boot: restore persisted tabs, initial roster, start poll.
   // ------------------------------------------------------------------
 
@@ -1190,9 +1328,15 @@ export function mountShell(appEl: HTMLElement): void {
     renderTabStrip();
     renderTermHeader();
     syncDock();
+    // After restore, so a snooze that came due while the page was closed wakes
+    // into the restored strip (and finds its tab if it was reopened by hand).
+    void refreshSnoozes();
   }
 
   void boot();
+  // Snoozes keep polling while the page is hidden: a wake is exactly when the
+  // ⏰ title matters (browsers throttle hidden timers, but still fire them).
+  setInterval(() => void refreshSnoozes(), SNOOZE_POLL_MS);
 
   // Forest arrives by push; only the cheap pty list is polled. Both stop while the
   // page is hidden and resume (with an immediate refresh) when it's shown again.
@@ -1211,6 +1355,7 @@ export function mountShell(appEl: HTMLElement): void {
       openForestStream();
       void refreshRoster();
       void refreshReviews();
+      void refreshSnoozes();
       pollInterval = setInterval(() => void refreshRoster(), 3000);
       reviewInterval = setInterval(() => void refreshReviews(), 1500);
     }
