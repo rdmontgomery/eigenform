@@ -168,6 +168,10 @@ async fn closing_the_socket_leaves_the_pty_listed() {
         row.get("lastActivity").is_some(),
         "row must carry `lastActivity`: {row}"
     );
+    assert!(
+        row.get("lastInput").is_some(),
+        "row must carry `lastInput`: {row}"
+    );
     assert!(row.get("state").is_some(), "row must carry `state`: {row}");
     // The classifier replaced the "unknown" placeholder (Task 1.9). A freshly-spawned
     // sh pty is either still streaming its prompt (working) or quiet (idle) — never

@@ -672,6 +672,10 @@ pub struct PtyMeta {
     pub uuid: Option<String>,
     /// Last time the pty produced output — drives the idle/working state detector.
     pub last_activity: SystemTime,
+    /// Last time a person typed into the pty (spawn counts as the first use). Drives
+    /// the rail's recency order: unlike `last_activity` it does not churn on spinner
+    /// frames, and unlike `spawned_at` it moves when you come back to a session.
+    pub last_input: SystemTime,
     /// Set when the child exits; `None` while running.
     pub exited_at: Option<SystemTime>,
     /// OS pid of the child, for `sessions/<pid>.json` reconciliation (Task 1.8).
@@ -684,6 +688,7 @@ pub struct PtyMeta {
 pub struct MetaSnapshot {
     pub uuid: Option<String>,
     pub last_activity: SystemTime,
+    pub last_input: SystemTime,
     pub exited_at: Option<SystemTime>,
 }
 
@@ -748,6 +753,7 @@ impl LivePty {
             meta: Mutex::new(PtyMeta {
                 uuid: None,
                 last_activity: now,
+                last_input: now,
                 exited_at: None,
                 child_pid,
             }),
@@ -825,6 +831,7 @@ impl LivePty {
         MetaSnapshot {
             uuid: meta.uuid.clone(),
             last_activity: meta.last_activity,
+            last_input: meta.last_input,
             exited_at: meta.exited_at,
         }
     }
@@ -890,12 +897,20 @@ impl LivePty {
         self.broadcast_text(r#"{"type":"exit"}"#.to_string());
     }
 
-    /// Send input bytes to the child's stdin (keystrokes from an attached client).
+    /// Send input bytes to the child's stdin (keystrokes from an attached client), and
+    /// stamp `last_input` when they came from a person rather than the terminal itself
+    /// (see [`is_user_input`]). `pty` is released before `meta` is taken.
     pub fn write_input(&self, bytes: &[u8]) -> anyhow::Result<()> {
         self.pty
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .write_input(bytes)?;
+        if is_user_input(bytes) {
+            self.meta
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .last_input = SystemTime::now();
+        }
         Ok(())
     }
 
@@ -916,6 +931,76 @@ impl LivePty {
     }
 }
 
+/// Whether a stdin chunk is a person using the session, as opposed to the terminal
+/// emulator answering the app on its own: focus in/out (`CSI I`/`CSI O`, sent on every
+/// tab switch once claude enables focus reporting), cursor-position and status reports
+/// (`CSI … R`, `CSI … n`), device attributes (`CSI ? … c`, `CSI > … c`), mode reports
+/// (`CSI … $ y`), window reports (`CSI … t`), OSC/DCS/APC replies, and SGR mouse
+/// *motion* (hover). Those arrive whenever a tab is attached or focused, so counting
+/// them would bump a session you merely looked at. Anything else (a printable byte,
+/// Enter, an arrow or function key, a click or wheel) is use.
+pub fn is_user_input(bytes: &[u8]) -> bool {
+    const ESC: u8 = 0x1b;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != ESC {
+            return true;
+        }
+        match bytes.get(i + 1) {
+            // String sequences (OSC `]`, DCS `P`, APC `_`): skip to BEL or ST.
+            Some(b']' | b'P' | b'_') => {
+                let mut j = i + 2;
+                loop {
+                    match bytes.get(j) {
+                        None => return false,
+                        Some(0x07) => break,
+                        Some(&ESC) if bytes.get(j + 1) == Some(&b'\\') => {
+                            j += 1;
+                            break;
+                        }
+                        _ => j += 1,
+                    }
+                }
+                i = j + 1;
+            }
+            Some(b'[') => {
+                let start = i + 2;
+                let mut j = start;
+                // Parameter (0x30–0x3f) and intermediate (0x20–0x2f) bytes, then a final.
+                while matches!(bytes.get(j), Some(0x20..=0x3f)) {
+                    j += 1;
+                }
+                let Some(&fin) = bytes.get(j) else {
+                    return true;
+                };
+                let body = &bytes[start..j];
+                let report = match fin {
+                    b'I' | b'O' => body.is_empty(),
+                    b'R' | b'n' | b't' => true,
+                    b'c' => matches!(body.first(), Some(b'?' | b'>')),
+                    b'y' => body.last() == Some(&b'$'),
+                    b'M' | b'm' if body.first() == Some(&b'<') => {
+                        // SGR mouse: the motion flag (32) on the button code marks hover.
+                        let code = body[1..].split(|&b| b == b';').next().unwrap_or(&[]);
+                        std::str::from_utf8(code)
+                            .ok()
+                            .and_then(|c| c.parse::<u32>().ok())
+                            .is_some_and(|b| b & 32 != 0)
+                    }
+                    _ => false,
+                };
+                if !report {
+                    return true;
+                }
+                i = j + 1;
+            }
+            // A bare ESC, or ESC + key (Alt chords, SS3 arrows): a person did that.
+            _ => return true,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,6 +1017,72 @@ mod tests {
     fn live_pty(host: &SessionHost, cwd: Option<PathBuf>) -> PtyId {
         let pty = crate::Pty::spawn("cat", &[], cwd.as_deref(), (80, 24)).expect("spawn cat");
         host.insert(|id| LivePty::new(id, pty, cwd, (80, 24))).id
+    }
+
+    #[test]
+    fn typing_is_user_input() {
+        for b in [
+            &b"a"[..],
+            b"\r",
+            b"\x03",
+            b"\x1b",
+            b"\x1b[A",
+            b"\x1bOA",
+            b"\x1b[15~",
+            b"\x1bb",
+        ] {
+            assert!(is_user_input(b), "{b:?} is a person typing");
+        }
+        // A click (press) and a wheel tick are use; so is a report followed by a key.
+        assert!(is_user_input(b"\x1b[<0;10;5M"));
+        assert!(is_user_input(b"\x1b[<64;10;5M"));
+        assert!(is_user_input(b"\x1b[I\x1b[A"));
+    }
+
+    #[test]
+    fn terminal_reports_are_not_user_input() {
+        for b in [
+            &b"\x1b[I"[..],                      // focus in
+            b"\x1b[O",                           // focus out
+            b"\x1b[I\x1b[O",                     // both, one chunk
+            b"\x1b[12;40R",                      // cursor position report
+            b"\x1b[0n",                          // status report
+            b"\x1b[?1;2c",                       // DA1
+            b"\x1b[>0;276;0c",                   // DA2
+            b"\x1b[?2026;2$y",                   // DECRPM
+            b"\x1b[8;24;80t",                    // window size report
+            b"\x1b]11;rgb:0000/0000/0000\x1b\\", // OSC colour reply, ST
+            b"\x1b]10;rgb:ffff/ffff/ffff\x07",   // OSC colour reply, BEL
+            b"\x1bP1$r0m\x1b\\",                 // DCS reply
+            b"\x1b[<35;10;5M",                   // SGR mouse hover
+            b"",
+        ] {
+            assert!(
+                !is_user_input(b),
+                "{b:?} is the terminal answering, not a person"
+            );
+        }
+    }
+
+    #[test]
+    fn last_input_moves_on_typing_not_on_reports() {
+        let host = SessionHost::default();
+        let id = live_pty(&host, None);
+        let live = host.get(id).unwrap();
+        let spawned = live.meta_snapshot().last_input;
+        assert_eq!(spawned, live.spawned_at, "spawn is the first use");
+        std::thread::sleep(Duration::from_millis(5));
+        live.write_input(b"\x1b[I").unwrap();
+        assert_eq!(
+            live.meta_snapshot().last_input,
+            spawned,
+            "focus report is not use"
+        );
+        live.write_input(b"x").unwrap();
+        assert!(
+            live.meta_snapshot().last_input > spawned,
+            "a keystroke is use"
+        );
     }
 
     #[test]

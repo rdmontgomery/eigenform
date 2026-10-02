@@ -249,9 +249,9 @@ pub(crate) async fn pty_list_route(State(state): State<AppState>) -> Response {
         .list()
         .iter()
         .map(|live| {
-            let (uuid, last_activity) = {
+            let (uuid, last_activity, last_input) = {
                 let meta = live.meta_snapshot();
-                (meta.uuid, meta.last_activity)
+                (meta.uuid, meta.last_activity, meta.last_input)
             };
             // The classifier owns the exited short-circuit now (precedence: exited →
             // working → waiting → idle); `state()` takes shared then meta sequentially.
@@ -264,6 +264,7 @@ pub(crate) async fn pty_list_route(State(state): State<AppState>) -> Response {
                 "state": state,
                 "spawnedAt": to_iso(live.spawned_at),
                 "lastActivity": to_iso(last_activity),
+                "lastInput": to_iso(last_input),
             })
         })
         .collect();
