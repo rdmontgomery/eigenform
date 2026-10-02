@@ -112,6 +112,14 @@ enum Cmd {
         #[arg(long, default_value_t = DEFAULT_PORT)]
         port: u16,
     },
+    /// print the ~/.claude/settings.json hook that routes plan approval (ExitPlanMode)
+    /// through eigenform's artifact pane. Merge it into your settings yourself; when the
+    /// daemon isn't running, Claude Code falls back to its own approval prompt.
+    PlanGate {
+        /// daemon port the hook should call
+        #[arg(long, default_value_t = DEFAULT_PORT)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -278,6 +286,16 @@ fn main() -> Result<()> {
         } => daemon(port, cmd, term, workspace, dev, open, log_file),
         Cmd::Stop { port } => stop(port),
         Cmd::Status { port } => status(port),
+        Cmd::PlanGate { port } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&eigenform_daemon::plan_gate::settings_snippet(port))?
+            );
+            eprintln!(
+                "merge the above into ~/.claude/settings.json (or a project's .claude/settings.json)"
+            );
+            Ok(())
+        }
         Cmd::Sessions { action } => match action {
             SessionsAction::Show { session, render } => sessions_show(session, render),
             SessionsAction::Diff { a, b, render } => sessions_diff(a, b, render),
@@ -677,6 +695,7 @@ fn daemon(
         workspace_root,
         dev,
         log_file,
+        plan_review_hold_secs: 0,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let url = format!("http://{addr}");

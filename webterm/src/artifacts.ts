@@ -42,6 +42,17 @@ export interface ArtifactRow {
   url: string;
 }
 
+/** One row from GET /api/plan-reviews: a plan Claude is waiting on (plan gate). */
+export interface PlanReview {
+  id: string;
+  sessionId: string | null;
+  cwd: string | null;
+  toolUseId: string | null;
+  /** The plan file's path, or "tool_input.plan" when the plan came inline. */
+  source: string;
+  createdAt: string;
+}
+
 export interface Selection {
   path: string | null;
   pinned: boolean;
@@ -77,6 +88,8 @@ export function artifactLabel(row: ArtifactRow): string {
 export interface ArtifactPaneHandle {
   /** Follow a session (null = no session: empty state). */
   setSession(uuid: string | null): void;
+  /** Plans awaiting review (plan gate). One for this pane's session takes over the pane. */
+  setReviews(reviews: PlanReview[]): void;
   close(): void;
 }
 
@@ -111,7 +124,9 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
   frame.setAttribute("referrerpolicy", "no-referrer");
   const empty = el("div", "artifact-empty");
   const annHost = el("div", "artifact-annotate");
-  root.append(head, frame, annHost, empty);
+  const reviewBanner = el("div", "artifact-review-banner");
+  reviewBanner.style.display = "none";
+  root.append(reviewBanner, head, frame, annHost, empty);
   host.append(root);
 
   let uuid: string | null = null;
@@ -121,6 +136,60 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
   let unsubscribe: (() => void) | null = null;
   let seq = 0;
   let annotating = false;
+  let reviews: PlanReview[] = [];
+  let reviewView: { id: string; handle: AnnotatorHandle } | null = null;
+  function closeReview() {
+    reviewView?.handle.close();
+    reviewView = null;
+  }
+
+  async function decide(id: string, kind: string, message?: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/plan-reviews/${encodeURIComponent(id)}/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: kind, message: message ?? "" }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Show the pending plan review for this session, if any. True when it owns the pane. */
+  function renderReview(): boolean {
+    const review = uuid ? reviews.find((r) => r.sessionId === uuid) : undefined;
+    if (!review) {
+      closeReview();
+      reviewBanner.style.display = "none";
+      return false;
+    }
+    closeAnnotator();
+    head.style.display = "none";
+    frame.style.display = "none";
+    empty.style.display = "none";
+    annHost.style.display = "";
+    reviewBanner.style.display = "";
+    reviewBanner.textContent =
+      "Plan review: Claude is waiting on this plan. Mark it up, then approve or send it back.";
+    if (reviewView?.id !== review.id) {
+      closeReview();
+      const inline = review.source === "tool_input.plan" || review.source === "none";
+      reviewView = {
+        id: review.id,
+        handle: mountAnnotator(annHost, {
+          uuid: uuid!,
+          path: inline ? "plan" : review.source,
+          rawUrl: `/api/plan-reviews/${encodeURIComponent(review.id)}/plan`,
+          stage: opts.stage,
+          storageKey: `eigenform:annot:v1:review:${uuid}:${review.toolUseId ?? review.id}`,
+          header: "Plan feedback. Revise the plan to address each point, then present it again:",
+          review: { decide: (kind, message) => decide(review.id, kind, message) },
+        }),
+      };
+    }
+    return true;
+  }
   let annotator: { handle: AnnotatorHandle; path: string; mtime: string | null } | null = null;
 
   function closeAnnotator() {
@@ -129,6 +198,7 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
   }
 
   function render() {
+    if (renderReview()) return;
     sel = pickArtifact(rows, sel);
     const row = rows.find((r) => r.path === sel.path) ?? null;
 
@@ -245,6 +315,7 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
       sel = { path: null, pinned: false };
       annotating = false;
       closeAnnotator();
+      closeReview();
       rows = [];
       render();
       if (next) {
@@ -252,10 +323,17 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
         void refresh();
       }
     },
+    setReviews(next) {
+      const key = (l: PlanReview[]) => l.map((r) => r.id).join(",");
+      if (key(next) === key(reviews)) return;
+      reviews = next;
+      render();
+    },
     close() {
       unsubscribe?.();
       unsubscribe = null;
       closeAnnotator();
+      closeReview();
       root.remove();
     },
   };

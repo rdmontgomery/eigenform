@@ -18,6 +18,18 @@ export interface AnnotatorOpts {
   rawUrl: string;
   /** Type the critique into the active terminal, unsent. False if there's no live pty. */
   stage(text: string): boolean;
+  /** Override the localStorage key the marks persist under (default: session + path). */
+  storageKey?: string;
+  /**
+   * Plan-gate mode: Claude is waiting on this plan (ExitPlanMode). The footer offers
+   * Approve / Send back / Decide in terminal instead of staging. Send back delivers the
+   * compiled critique as the plan feedback Claude revises against.
+   */
+  review?: {
+    decide(kind: "approve" | "send_back" | "terminal", message?: string): Promise<boolean>;
+  };
+  /** First line of the compiled critique (default names the file and asks for a revision). */
+  header?: string;
 }
 
 export interface AnnotatorHandle {
@@ -58,7 +70,7 @@ function save(key: string, s: Saved) {
 const KIND_LABEL: Record<AnnotationKind, string> = { comment: "comment", delete: "delete", replace: "replace" };
 
 export function mountAnnotator(host: HTMLElement, opts: AnnotatorOpts): AnnotatorHandle {
-  const key = `${LS_PREFIX}${opts.uuid}:${opts.path}`;
+  const key = opts.storageKey ?? `${LS_PREFIX}${opts.uuid}:${opts.path}`;
   let state = load(key);
   let blocks: Block[] = [];
   let seq = 0;
@@ -284,7 +296,7 @@ export function mountAnnotator(host: HTMLElement, opts: AnnotatorOpts): Annotato
     general.addEventListener("input", () => {
       state.general = general.value;
       persist();
-      stageBtn.disabled = state.anns.length === 0 && state.general.trim() === "";
+      if (!opts.review) stageBtn.disabled = state.anns.length === 0 && state.general.trim() === "";
     });
     const actions = el("div", "ann-actions");
     const clear = el("button", "ann-btn");
@@ -296,12 +308,14 @@ export function mountAnnotator(host: HTMLElement, opts: AnnotatorOpts): Annotato
       status.textContent = "";
       renderAll();
     });
+    const empty = state.anns.length === 0 && state.general.trim() === "";
+    const n = state.anns.length;
     const stageBtn = el("button", "ann-btn ann-btn--primary");
-    stageBtn.textContent = `Stage in terminal${state.anns.length ? ` (${state.anns.length})` : ""}`;
+    stageBtn.textContent = `Stage in terminal${n ? ` (${n})` : ""}`;
     stageBtn.title = "Types the compiled critique into the terminal input. It is NOT sent: review it there, then press Enter.";
-    stageBtn.disabled = state.anns.length === 0 && state.general.trim() === "";
+    stageBtn.disabled = empty;
     stageBtn.addEventListener("click", () => {
-      const text = compileFeedback(opts.path, state.anns, state.general);
+      const text = compileFeedback(opts.path, state.anns, state.general, opts.header);
       if (!opts.stage(text)) {
         status.textContent = "No live terminal in this tab to stage into.";
         return;
@@ -313,6 +327,48 @@ export function mountAnnotator(host: HTMLElement, opts: AnnotatorOpts): Annotato
       renderAll();
       status.textContent = "Staged in the terminal, not sent. Review it there and press Enter.";
     });
+
+    if (opts.review) {
+      const review = opts.review;
+      const decide = async (kind: "approve" | "send_back" | "terminal", message?: string) => {
+        for (const b of [terminalBtn, sendBtn, approveBtn]) b.disabled = true;
+        if (await review.decide(kind, message)) {
+          state = { anns: [], general: "" };
+          persist();
+          status.textContent =
+            kind === "approve"
+              ? "Approved. Claude is proceeding."
+              : kind === "send_back"
+                ? "Sent back. Claude is revising the plan against your notes."
+                : "Handed to the terminal's own approval prompt.";
+        } else {
+          status.textContent = "This review is no longer pending (decided elsewhere, or Claude stopped waiting).";
+        }
+      };
+      const terminalBtn = el("button", "ann-btn");
+      terminalBtn.textContent = "Decide in terminal";
+      terminalBtn.title = "No decision here: Claude Code shows its own approval prompt.";
+      terminalBtn.addEventListener("click", () => void decide("terminal"));
+      const sendBtn = el("button", "ann-btn");
+      sendBtn.textContent = `Send back${n ? ` (${n})` : ""}`;
+      sendBtn.title = "Reject the plan with your marks as the feedback Claude revises against.";
+      sendBtn.disabled = empty;
+      sendBtn.addEventListener("click", () =>
+        void decide("send_back", compileFeedback(opts.path, state.anns, state.general, opts.header)),
+      );
+      const approveBtn = el("button", "ann-btn ann-btn--primary");
+      approveBtn.textContent = "Approve";
+      approveBtn.addEventListener("click", () => {
+        if (!empty && !confirm(`Approve and discard your ${n} mark(s)? (Send back delivers them.)`)) return;
+        void decide("approve");
+      });
+      general.addEventListener("input", () => {
+        sendBtn.disabled = state.anns.length === 0 && state.general.trim() === "";
+      });
+      actions.append(clear, terminalBtn, sendBtn, approveBtn);
+      foot.append(list, general, actions, status);
+      return;
+    }
     actions.append(clear, stageBtn);
     foot.append(list, general, actions, status);
   }

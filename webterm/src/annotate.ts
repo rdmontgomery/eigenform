@@ -187,12 +187,12 @@ function clip(s: string): string {
  * Compile marks into one critique, in document order. The header names the file so
  * the agent edits the right thing; each item quotes the text it's about.
  */
-export function compileFeedback(path: string, anns: Annotation[], general: string): string {
+export function compileFeedback(path: string, anns: Annotation[], general: string, header?: string): string {
   const name = path.split("/").pop() ?? path;
   const ordered = [...anns].sort((a, b) =>
     a.orphaned === b.orphaned ? a.block - b.block || a.start - b.start : a.orphaned ? 1 : -1,
   );
-  const lines: string[] = [`Review notes on ${name} (${path}). Address each, then show me the revised file:`];
+  const lines: string[] = [header ?? `Review notes on ${name} (${path}). Address each, then show me the revised file:`];
   ordered.forEach((a, i) => {
     const where = a.section ? ` [§ ${clip(a.section)}]` : "";
     const q = `"${clip(a.quote)}"`;

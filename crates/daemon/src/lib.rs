@@ -24,6 +24,7 @@ use serde::Deserialize;
 pub mod artifacts;
 pub mod events;
 pub mod host;
+pub mod plan_gate;
 
 /// Webterm assets baked into the binary so an installed `eigenform` is self-contained
 /// (no Node, no build, no `--term` flag). Only compiled with `--features embed-assets`,
@@ -90,6 +91,10 @@ pub struct Config {
     /// Optional JSONL sink for the structured event stream (`--log-file <path>`).
     /// Each recorded event is appended as one JSON line, best-effort; None = no file.
     pub log_file: Option<PathBuf>,
+    /// How long the plan gate holds an `ExitPlanMode` hook awaiting a decision before
+    /// answering "no decision" (the terminal prompt takes over). 0 = the default
+    /// ([`plan_gate::DEFAULT_HOLD`]).
+    pub plan_review_hold_secs: u64,
 }
 
 /// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
@@ -101,6 +106,8 @@ pub struct AppState {
     pub host: Arc<host::SessionHost>,
     /// Structured observability event bus (ring buffer + SSE + optional log file).
     pub events: Arc<events::EventBus>,
+    /// Plan reviews parked by the `ExitPlanMode` hook, awaiting a human decision.
+    pub plan_gate: Arc<plan_gate::PlanGate>,
 }
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
@@ -115,6 +122,13 @@ pub fn app(config: Config) -> Router {
         .route("/api/session/:uuid/fork", post(fork_route))
         .route("/api/session/:uuid/artifacts", get(artifacts_route))
         .route("/artifact/:uuid/*path", get(artifact_file_route))
+        .route("/api/hooks/plan-review", post(plan_review_hook_route))
+        .route("/api/plan-reviews", get(plan_reviews_route))
+        .route("/api/plan-reviews/:id/plan", get(plan_review_text_route))
+        .route(
+            "/api/plan-reviews/:id/decision",
+            post(plan_review_decision_route),
+        )
         .route("/api/forest", get(forest_route))
         .route("/api/watch/forest", get(forest_watch_route))
         .route("/api/claims", get(claims_route))
@@ -158,6 +172,7 @@ pub fn app(config: Config) -> Router {
         host: Arc::new(host::SessionHost::with_events(Arc::clone(&events))),
         config: Arc::new(config),
         events,
+        plan_gate: Arc::new(plan_gate::PlanGate::default()),
     };
     router.with_state(state)
 }
@@ -235,6 +250,135 @@ fn session_json_cached(cfg: &Config, uuid: &str) -> Option<Arc<str>> {
             attach_codex_workers(cfg, json)
         })
         .ok()
+}
+
+/// `POST /api/hooks/plan-review` — Claude Code's `PermissionRequest` HTTP hook for
+/// `ExitPlanMode` (see [`plan_gate`]). Parks the plan for review in the pane and holds
+/// the request until a decision, the hold timeout, or Claude Code cancelling the hook.
+/// The response is the hook's decision JSON, or an empty 200 for "no decision".
+async fn plan_review_hook_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // Claude Code sends no Origin. A browser always does on a cross-site POST.
+    if !origin_is_local(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin").into_response();
+    }
+    let Ok(input) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return (StatusCode::OK, "").into_response(); // malformed → no decision
+    };
+    let hold = match state.config.plan_review_hold_secs {
+        0 => plan_gate::DEFAULT_HOLD,
+        s => std::time::Duration::from_secs(s),
+    };
+    if input["tool_name"] == "ExitPlanMode" {
+        state.events.record(
+            "plan-review-pending",
+            serde_json::json!({ "session": input["session_id"], "toolUseId": input["tool_use_id"] }),
+        );
+    }
+    let (review, body) = state.plan_gate.hold(&input, hold).await;
+    if let Some(r) = review {
+        let outcome = if body.contains(r#""behavior":"allow""#) {
+            "approved"
+        } else if body.is_empty() {
+            "terminal"
+        } else {
+            "sent-back"
+        };
+        state.events.record(
+            "plan-review-decided",
+            serde_json::json!({ "session": r.session_id, "outcome": outcome }),
+        );
+    }
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response()
+}
+
+/// `GET /api/plan-reviews` — plans waiting on a human, oldest first (no plan text).
+async fn plan_reviews_route(State(state): State<AppState>) -> Response {
+    let rows: Vec<serde_json::Value> = state
+        .plan_gate
+        .list()
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "sessionId": r.session_id,
+                "cwd": r.cwd,
+                "toolUseId": r.tool_use_id,
+                "source": r.source,
+                "createdAt": r.created_at,
+            })
+        })
+        .collect();
+    axum::Json(rows).into_response()
+}
+
+/// `GET /api/plan-reviews/:id/plan` — the plan under review, as plain text. The pane
+/// renders it with textContent only (it's agent-written).
+async fn plan_review_text_route(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    match state.plan_gate.plan(&id) {
+        Some(text) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                ),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+            ],
+            text,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such review").into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PlanDecisionBody {
+    /// `approve` | `send_back` | `terminal`
+    decision: String,
+    #[serde(default)]
+    message: String,
+}
+
+/// `POST /api/plan-reviews/:id/decision` — the human's verdict, from the pane. Local
+/// origin AND a JSON content type are required: the content type forces a CORS
+/// preflight on any cross-site attempt, which this daemon never grants.
+async fn plan_review_decision_route(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let json_ct = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"));
+    if !origin_is_local(&headers) || !json_ct {
+        return (StatusCode::FORBIDDEN, "local JSON requests only").into_response();
+    }
+    let Ok(b) = serde_json::from_slice::<PlanDecisionBody>(&body) else {
+        return (StatusCode::BAD_REQUEST, "bad decision body").into_response();
+    };
+    let d = match b.decision.as_str() {
+        "approve" => plan_gate::Decision::Approve,
+        "send_back" if !b.message.trim().is_empty() => plan_gate::Decision::SendBack(b.message),
+        "terminal" => plan_gate::Decision::Terminal,
+        _ => return (StatusCode::BAD_REQUEST, "unknown decision").into_response(),
+    };
+    if state.plan_gate.decide(&id, d) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (StatusCode::CONFLICT, "review no longer pending").into_response()
+    }
 }
 
 /// `GET /api/session/:uuid/artifacts` — the renderable files (HTML, SVG, markdown,

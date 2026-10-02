@@ -66,7 +66,7 @@ import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
 import { mountArtifactPane } from "./artifacts.ts";
 import { stagedPayload } from "./annotate.ts";
-import type { ArtifactPaneHandle } from "./artifacts.ts";
+import type { ArtifactPaneHandle, PlanReview } from "./artifacts.ts";
 import type { DrawerHandle } from "./drawer.ts";
 import { mountReachMap } from "./reachmap.ts";
 import type { ReachHandle } from "./reachmap.ts";
@@ -679,8 +679,47 @@ export function mountShell(appEl: HTMLElement): void {
     return true;
   }
 
+  // Plan gate: plans Claude is waiting on (ExitPlanMode hook parked in the daemon).
+  let planReviews: PlanReview[] = [];
+  async function refreshReviews() {
+    try {
+      const res = await fetch("/api/plan-reviews");
+      planReviews = res.ok ? ((await res.json()) as PlanReview[]) : [];
+      if (autoOpenForReview()) {
+        syncArtifactPane();
+        renderControls();
+        fitActive();
+      }
+      artifactPane?.setReviews(planReviews);
+      renderRail();
+    } catch {
+      // daemon unreachable — keep the last list
+    }
+  }
+
+  /** Review ids the pane has already been opened for — each opens it at most once, so
+   *  closing the pane during a review sticks. */
+  const autoOpened = new Set<string>();
+
+  /** Open the pane (state only) when the active session has a plan waiting that hasn't
+   *  opened it before — whether the review arrived first or the tab did. */
+  function autoOpenForReview(): boolean {
+    const active = activeTab()?.descriptor.uuid;
+    const review = planReviews.find((r) => r.sessionId === active && !autoOpened.has(r.id));
+    if (!review) return false;
+    autoOpened.add(review.id);
+    if (artifactOpen) return false;
+    artifactOpen = true;
+    localStorage.setItem(LS_ARTIFACT, "1");
+    return true;
+  }
+
   /** Reconcile the artifact pane against (artifactOpen, active tab's uuid). */
   function syncArtifactPane() {
+    if (autoOpenForReview()) {
+      renderControls();
+      fitActive();
+    }
     const open = artifactOpen && tabs.length > 0;
     artifactHost.style.display = open ? "flex" : "none";
     artifactResizer.style.display = open ? "" : "none";
@@ -691,6 +730,7 @@ export function mountShell(appEl: HTMLElement): void {
     }
     artifactPane ??= mountArtifactPane(artifactHost, { stage: stageIntoActive });
     artifactPane.setSession(activeTab()?.descriptor.uuid ?? null);
+    artifactPane.setReviews(planReviews);
   }
 
   function setDrawerOpen(open: boolean) {
@@ -1913,6 +1953,12 @@ export function mountShell(appEl: HTMLElement): void {
     const project = el("span", "rail-row-project");
     project.textContent = row.cwdChip;
     meta.append(project);
+    if (row.uuid && planReviews.some((r) => r.sessionId === row.uuid)) {
+      const pending = el("span", "rail-row-review");
+      pending.textContent = "plan review";
+      pending.title = "Claude is waiting on plan approval: open the session to review it";
+      meta.append(pending);
+    }
     if (row.engine) {
       const engine = el("span", "rail-row-engine");
       engine.textContent = row.engine;
@@ -2104,14 +2150,21 @@ export function mountShell(appEl: HTMLElement): void {
   // page is hidden and resume (with an immediate refresh) when it's shown again.
   openForestStream();
   let pollInterval = setInterval(() => void refreshRoster(), 3000);
+  // Plan reviews are in-memory on the daemon (cheap) and Claude is blocked on them:
+  // poll faster than the roster.
+  let reviewInterval = setInterval(() => void refreshReviews(), 1500);
+  void refreshReviews();
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       clearInterval(pollInterval);
+      clearInterval(reviewInterval);
       closeForestStream();
     } else {
       openForestStream();
       void refreshRoster();
+      void refreshReviews();
       pollInterval = setInterval(() => void refreshRoster(), 3000);
+      reviewInterval = setInterval(() => void refreshReviews(), 1500);
     }
   });
 }
