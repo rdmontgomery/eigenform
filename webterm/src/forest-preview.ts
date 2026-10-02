@@ -15,6 +15,7 @@
 import { mountDrawer, type DrawerHandle } from "./drawer.ts";
 import { relativeRecency, inkFor } from "./shell-helpers.ts";
 import type { RosterRow } from "./roster.ts";
+import { el } from "./dom.ts";
 
 export interface ForestPreviewOptions {
   /** Commit: launch/resume the previewed session. */
@@ -189,11 +190,3 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
 }
 
 // Local DOM helper (same pattern as shell.ts / drawer.ts — kept independent).
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  cls?: string,
-): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
-}

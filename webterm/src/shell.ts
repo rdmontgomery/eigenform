@@ -76,6 +76,7 @@ import { subscribeWatch } from "./watch.ts";
 import { extractUrls, linkLabel } from "./links.ts";
 import type { LinkEntry } from "./links.ts";
 import type { Exchange } from "./turns.ts";
+import { el } from "./dom.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -2023,17 +2024,4 @@ export function mountShell(appEl: HTMLElement): void {
       pollInterval = setInterval(() => void refreshRoster(), 3000);
     }
   });
-}
-
-// ---------------------------------------------------------------------------
-// DOM utility
-// ---------------------------------------------------------------------------
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  cls?: string,
-): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
 }
