@@ -65,6 +65,7 @@ import {
 import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
 import { mountArtifactPane } from "./artifacts.ts";
+import { stagedPayload } from "./annotate.ts";
 import type { ArtifactPaneHandle } from "./artifacts.ts";
 import type { DrawerHandle } from "./drawer.ts";
 import { mountReachMap } from "./reachmap.ts";
@@ -665,6 +666,19 @@ export function mountShell(appEl: HTMLElement): void {
     fitActive();
   }
 
+  /**
+   * Type `text` into the active tab's terminal input WITHOUT submitting it (see
+   * stagedPayload: bracketed paste when the TUI enabled it, else one flattened line).
+   * The human reviews it in place and presses Enter. False when there's no live pty.
+   */
+  function stageIntoActive(text: string): boolean {
+    const t = activeTab();
+    if (!t?.ptyHandle) return false;
+    t.ptyHandle.sendInput(stagedPayload(text, t.handle.term.modes.bracketedPasteMode));
+    t.handle.term.focus();
+    return true;
+  }
+
   /** Reconcile the artifact pane against (artifactOpen, active tab's uuid). */
   function syncArtifactPane() {
     const open = artifactOpen && tabs.length > 0;
@@ -675,7 +689,7 @@ export function mountShell(appEl: HTMLElement): void {
       artifactPane = null;
       return;
     }
-    artifactPane ??= mountArtifactPane(artifactHost);
+    artifactPane ??= mountArtifactPane(artifactHost, { stage: stageIntoActive });
     artifactPane.setSession(activeTab()?.descriptor.uuid ?? null);
   }
 

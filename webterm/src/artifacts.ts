@@ -15,10 +15,17 @@
  * Live: subscribes to the session's watch; when the shown file's mtime changes the
  * iframe reloads (cache-busted on mtime), so an agent iterating on a page is visible
  * as it iterates.
+ *
+ * Annotate (markdown only): swaps the iframe for the annotator (annotator.ts), which
+ * renders the source as plain text in eigenform's origin, collects marks, and stages
+ * the compiled critique into the terminal via `opts.stage`, never sending it.
+ * Entering annotate pins the artifact so a new write can't switch it away mid-review.
  */
 
 import { subscribeWatch } from "./watch.ts";
 import { icon } from "./icons.ts";
+import { mountAnnotator } from "./annotator.ts";
+import type { AnnotatorHandle } from "./annotator.ts";
 
 /** One row from GET /api/session/:uuid/artifacts (mirrors the daemon's JSON). */
 export interface ArtifactRow {
@@ -75,7 +82,12 @@ export interface ArtifactPaneHandle {
 
 const FOLLOW = "__follow__";
 
-export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
+export interface ArtifactPaneOpts {
+  /** Type text into the active tab's terminal input, unsent. False without a live pty. */
+  stage(text: string): boolean;
+}
+
+export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): ArtifactPaneHandle {
   const root = el("div", "artifact-pane");
   const head = el("div", "artifact-head");
   const picker = el("select", "artifact-picker");
@@ -89,14 +101,17 @@ export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
   openTab.target = "_blank";
   openTab.rel = "noopener noreferrer";
   openTab.append(icon("external", 13));
-  head.append(picker, meta, reload, openTab);
+  const annotateBtn = el("button", "icon-btn artifact-btn");
+  annotateBtn.append(icon("pencil", 13));
+  head.append(picker, meta, annotateBtn, reload, openTab);
 
   const frame = el("iframe", "artifact-frame");
   // Opaque origin: scripts run, but the document can't touch the daemon. See header.
   frame.setAttribute("sandbox", "allow-scripts allow-forms allow-popups allow-modals allow-downloads");
   frame.setAttribute("referrerpolicy", "no-referrer");
   const empty = el("div", "artifact-empty");
-  root.append(head, frame, empty);
+  const annHost = el("div", "artifact-annotate");
+  root.append(head, frame, annHost, empty);
   host.append(root);
 
   let uuid: string | null = null;
@@ -105,6 +120,13 @@ export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
   let shownSrc: string | null = null;
   let unsubscribe: (() => void) | null = null;
   let seq = 0;
+  let annotating = false;
+  let annotator: { handle: AnnotatorHandle; path: string; mtime: string | null } | null = null;
+
+  function closeAnnotator() {
+    annotator?.handle.close();
+    annotator = null;
+  }
 
   function render() {
     sel = pickArtifact(rows, sel);
@@ -126,6 +148,13 @@ export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
     picker.disabled = rows.length === 0;
 
     head.style.display = rows.length === 0 ? "none" : "";
+    const canAnnotate = row?.kind === "markdown" && row.mtime !== null;
+    if (!canAnnotate) annotating = false;
+    annotateBtn.style.display = canAnnotate ? "" : "none";
+    annotateBtn.classList.toggle("icon-btn--active", annotating);
+    annotateBtn.title = annotating ? "Back to the rendered view" : "Annotate: mark up this plan and stage the critique in the terminal";
+    annHost.style.display = annotating ? "" : "none";
+    if (!annotating || !row || !uuid) closeAnnotator();
     if (!row) {
       frame.style.display = "none";
       empty.style.display = "";
@@ -139,11 +168,32 @@ export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
       return;
     }
     empty.style.display = "none";
-    frame.style.display = "";
     meta.textContent = row.mtime ? `turn ${row.turn}` : "deleted";
     meta.title = row.path;
     const src = artifactSrc(row);
     openTab.href = src;
+    if (annotating && uuid) {
+      frame.style.display = "none";
+      if (annotator && annotator.path !== row.path) closeAnnotator();
+      if (!annotator) {
+        annotator = {
+          handle: mountAnnotator(annHost, {
+            uuid,
+            path: row.path,
+            rawUrl: `${row.url}?raw=1`,
+            stage: opts.stage,
+          }),
+          path: row.path,
+          mtime: row.mtime,
+        };
+      } else if (annotator.mtime !== row.mtime) {
+        // The agent revised the file under review: re-fetch and re-anchor the marks.
+        annotator.mtime = row.mtime;
+        annotator.handle.refresh();
+      }
+      return;
+    }
+    frame.style.display = "";
     if (src !== shownSrc) {
       frame.src = src;
       shownSrc = src;
@@ -175,7 +225,14 @@ export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
     render();
   });
   reload.addEventListener("click", () => {
-    if (shownSrc) frame.src = shownSrc;
+    if (annotator) annotator.handle.refresh();
+    else if (shownSrc) frame.src = shownSrc;
+  });
+  annotateBtn.addEventListener("click", () => {
+    annotating = !annotating;
+    // Pin what's under review so a newer write can't switch it away.
+    if (annotating && sel.path !== null) sel = { path: sel.path, pinned: true };
+    render();
   });
 
   render();
@@ -186,6 +243,8 @@ export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
       unsubscribe = null;
       uuid = next;
       sel = { path: null, pinned: false };
+      annotating = false;
+      closeAnnotator();
       rows = [];
       render();
       if (next) {
@@ -196,6 +255,7 @@ export function mountArtifactPane(host: HTMLElement): ArtifactPaneHandle {
     close() {
       unsubscribe?.();
       unsubscribe = null;
+      closeAnnotator();
       root.remove();
     },
   };

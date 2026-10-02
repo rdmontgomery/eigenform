@@ -42,6 +42,12 @@ The same dialectic has a second channel, the human's. Step 1 is built: a split p
 
 **Isolation.** `origin_is_local` admits *any* localhost origin, so a second port would not have isolated anything: a page there could open `/pty` and get a shell. Instead every `/artifact/…` response carries `Content-Security-Policy: sandbox …` without `allow-same-origin`, and the iframe repeats the sandbox. The document gets an opaque `null` origin even when opened directly in a tab. Verified in Chromium: the pty socket is refused, the `/api` read is blocked, and parent and storage are blocked. File scope covers only the session's own writes. HTML/SVG may pull non-hidden siblings (relative assets), markdown only sibling images, so a `plan.md` at a repo root doesn't expose the repo. Symlinks resolve before the check.
 
-**Next, step 2: annotations → staged prompt.** Select text in the pane, then comment, strike, or replace it. The marks compile to one structured critique staged into the terminal input, using surgery's invariant: **staged, never sent**. The human releases it. The sandbox means the daemon page can't read the frame's DOM selection, so the frame must `postMessage` the selection out (allowed under the opaque origin), or markdown annotation happens on an eigenform-rendered copy outside the frame.
+**Step 2 (built): annotations → staged prompt.** The pencil on a markdown artifact swaps the iframe for the annotator (`webterm/src/annotate.ts` pure core, `annotator.ts` DOM). The source renders as plain-text blocks in eigenform's origin, never via innerHTML, since the markdown is agent-written. Inline markdown stays as source, so every quote is findable in the file. Select text, then comment, delete or replace it. Marks persist per (session, file), and re-anchor by quote when the agent revises the file. A mark whose text vanished is kept as an orphan, because a critique of removed text can still matter. **Stage in terminal** compiles the marks into one critique in document order and types it into the input. It is never sent:
+
+- the text goes inside a bracketed paste when the TUI enabled it (claude and codex both do), so its newlines are paste content, not Enter;
+- without bracketed paste, it's flattened to one line;
+- C0/C1 control characters are stripped first, so a note containing `\x1b[201~` can't close the paste early.
+
+Verified end to end. A stand-in TUI enabling `?2004h` logged its raw stdin: one bracketed paste, no ESC inside it, and no CR/LF outside it.
 
 **Step 3: plan gate.** A Claude Code hook on plan approval that blocks on a daemon endpoint until the annotated verdict comes back, plannotator-style. It's the first time Claude waits on eigenform, so it gets its own design pass.
