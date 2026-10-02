@@ -996,6 +996,17 @@ button { font: inherit; color: inherit; }
   height: 100%;
   overflow: hidden;
 }
+/* The grid is a whole number of rows, so the fit leaves a sub-row strip at
+   the bottom of .term-fit. xterm paints only its scrollable element (which
+   hugs the grid) in the theme background; the .xterm-viewport behind it fills
+   the whole box and keeps xterm.css's #000, so that strip showed as a black
+   band. Let it show the pane's --term-bg (derived from the same scheme).
+   The viewport's native scrollbar (xterm 6 draws its own) peeked through the
+   same strip as a gray block wherever the OS shows classic scrollbars. */
+.term-host .xterm .xterm-viewport {
+  background-color: transparent;
+  scrollbar-width: none;
+}
 
 /* ── Inspect dock — reach map (top) + transcript (bottom), docked right ───── */
 .drawer-dock {

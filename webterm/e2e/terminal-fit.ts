@@ -69,7 +69,12 @@ before(async () => {
     "/api/plan-reviews": [],
   };
 
-  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
+  // Show native scrollbars (Playwright hides them by default) so a stray
+  // viewport scrollbar paints, as it does on a desktop with classic scrollbars.
+  browser = await chromium.launch({
+    executablePath: process.env.CHROMIUM_PATH || undefined,
+    ignoreDefaultArgs: ["--hide-scrollbars"],
+  });
   const context = await browser.newContext({ viewport: { width: SIZES[0]![0], height: SIZES[0]![1] } });
   // The stubbed daemon: static assets + the boot-time JSON endpoints. Anything
   // else (webfonts, SSE streams, the pty WebSocket) fails, as it would offline.
@@ -167,3 +172,43 @@ for (const [w, h] of SIZES) {
     assert.ok(m.contentBottom - m.gridBottom < m.cellHeight, `fit left a whole row unused: ${where}`);
   });
 }
+
+// The fit leaves a sub-row strip between the last row and the pane's bottom
+// edge. It must read as more terminal page: xterm.css paints .xterm-viewport
+// #000 and its native scrollbar sat under the strip too (a black band plus a
+// gray block at the right).
+test("the strip below the grid matches the terminal background", async () => {
+  const m = await resizeAndSettle(1440, 900);
+  assert.ok(m.contentBottom - m.gridBottom >= 2, `no strip to check at this size: ${JSON.stringify(m)}`);
+  // Sample the strip, plus one blank cell row inside the grid for reference
+  // (the stub pty never writes, so the grid is all background).
+  const top = Math.floor(m.gridBottom - m.cellHeight);
+  const clip = {
+    x: Math.ceil(m.contentLeft),
+    y: top,
+    width: Math.floor(m.contentRight + 8) - Math.ceil(m.contentLeft), // to the pane's right edge
+    height: Math.floor(m.contentBottom) - top,
+  };
+  const png = (await page.screenshot({ clip })).toString("base64");
+  const odd = await page.evaluate(async ({ png, gridRows }) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${png}`;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    const ref = [d[0]!, d[1]!, d[2]!];
+    let bad = 0;
+    for (let y = gridRows; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4;
+        if (Math.abs(d[i]! - ref[0]) + Math.abs(d[i + 1]! - ref[1]) + Math.abs(d[i + 2]! - ref[2]) > 6) bad++;
+      }
+    }
+    return { bad, ref };
+  }, { png, gridRows: Math.round(m.gridBottom) - top });
+  assert.equal(odd.bad, 0, `${odd.bad} strip pixels differ from the terminal background rgb(${odd.ref})`);
+});
