@@ -82,5 +82,8 @@ fn header_names_both_sessions_and_reports_the_leaf_move() {
     let fork = fork_at(&src, A1).unwrap();
     let out = render_text(&fork_diff_view(&src, &fork));
     assert!(out.contains("diff "), "has a diff header:\n{out}");
-    assert!(out.to_lowercase().contains("leaf"), "reports leaf move:\n{out}");
+    assert!(
+        out.to_lowercase().contains("leaf"),
+        "reports leaf move:\n{out}"
+    );
 }

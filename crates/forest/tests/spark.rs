@@ -38,7 +38,10 @@ fn cached_spark_recomputes_when_the_jsonl_grows() {
     let p = proj.path().join("s.jsonl");
     std::fs::write(&p, turn(100)).unwrap();
     assert_eq!(cached_spark(state.path(), "sid", &p), vec![100]);
-    assert!(state.path().join("sid.json").exists(), "state file persisted");
+    assert!(
+        state.path().join("sid.json").exists(),
+        "state file persisted"
+    );
 
     std::fs::write(&p, format!("{}{}", turn(100), turn(5))).unwrap();
     assert_eq!(cached_spark(state.path(), "sid", &p), vec![100, 5]);
@@ -55,9 +58,14 @@ fn cached_spark_serves_the_stored_value_when_source_is_unchanged() {
     // Tamper the stored spark but keep its source stamp. An unchanged source must serve
     // the stored value (proving the cache is read, not the JSONL re-parsed).
     let sp = state.path().join("sid.json");
-    let mut doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&sp).unwrap()).unwrap();
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sp).unwrap()).unwrap();
     doc["spark"] = serde_json::json!([999]);
     std::fs::write(&sp, doc.to_string()).unwrap();
 
-    assert_eq!(cached_spark(state.path(), "sid", &p), vec![999], "served from cache");
+    assert_eq!(
+        cached_spark(state.path(), "sid", &p),
+        vec![999],
+        "served from cache"
+    );
 }

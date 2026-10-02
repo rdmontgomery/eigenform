@@ -71,7 +71,8 @@ fn project_for_cwd_finds_matching_project() {
 #[test]
 fn project_for_cwd_returns_none_when_no_match() {
     let projects_dir = tempdir().unwrap();
-    let p = eigenform_projects::project_for_cwd(projects_dir.path(), &PathBuf::from("/no/such")).unwrap();
+    let p = eigenform_projects::project_for_cwd(projects_dir.path(), &PathBuf::from("/no/such"))
+        .unwrap();
     assert!(p.is_none());
 }
 

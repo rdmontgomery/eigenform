@@ -7,10 +7,7 @@ use tempfile::tempdir;
 #[test]
 fn all_projects_roots_emits_one_repo_entry_per_project_cwd() {
     let home = tempdir().unwrap();
-    let cwds = vec![
-        PathBuf::from("/tmp/proj-a"),
-        PathBuf::from("/tmp/proj-b"),
-    ];
+    let cwds = vec![PathBuf::from("/tmp/proj-a"), PathBuf::from("/tmp/proj-b")];
 
     let roots = all_projects_roots(home.path(), &cwds);
 

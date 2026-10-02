@@ -30,7 +30,10 @@ fn fixture() -> tempfile::TempDir {
 fn resolve_exact_uuid_returns_its_path() {
     let dir = fixture();
     let path = resolve(dir.path(), A1).expect("resolve");
-    assert_eq!(path.file_name().unwrap().to_str().unwrap(), format!("{A1}.jsonl"));
+    assert_eq!(
+        path.file_name().unwrap().to_str().unwrap(),
+        format!("{A1}.jsonl")
+    );
     assert!(path.exists());
 }
 

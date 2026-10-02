@@ -37,7 +37,11 @@ fn newest_session_is_at_the_bottom() {
 #[test]
 fn shows_short_uuid_and_relative_time() {
     let now = at("2026-06-03T12:00:00Z");
-    let sessions = vec![sref("277a983f-aaaa-bbbb-cccc-dddddddddddd", "2026-06-03T10:00:00Z", "my title")];
+    let sessions = vec![sref(
+        "277a983f-aaaa-bbbb-cccc-dddddddddddd",
+        "2026-06-03T10:00:00Z",
+        "my title",
+    )];
     let out = render_text(&sessions_view(&sessions, now, false));
     assert!(out.contains("277a983f"), "short uuid:\n{out}");
     assert!(!out.contains("277a983f-aaaa"), "not the full uuid:\n{out}");

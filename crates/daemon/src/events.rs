@@ -71,10 +71,17 @@ impl EventBus {
     pub fn new(log_file: Option<&Path>) -> Self {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAP);
         let log = log_file.and_then(|path| {
-            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
                 Ok(f) => Some(Mutex::new(f)),
                 Err(e) => {
-                    eprintln!("eigenform: could not open event log {}: {e}", path.display());
+                    eprintln!(
+                        "eigenform: could not open event log {}: {e}",
+                        path.display()
+                    );
                     None
                 }
             }
@@ -143,7 +150,8 @@ impl EventBus {
             Err(_) => return,
         };
         let mut file = log.lock().unwrap_or_else(|e| e.into_inner());
-        if file.write_all(line.as_bytes()).is_err() && !self.log_warned.swap(true, Ordering::Relaxed)
+        if file.write_all(line.as_bytes()).is_err()
+            && !self.log_warned.swap(true, Ordering::Relaxed)
         {
             eprintln!("eigenform: event log write failed; further errors suppressed");
         }
@@ -202,7 +210,10 @@ mod tests {
     fn open_ended_kinds_pass_through_untouched() {
         // A future branch's new kind must record without any change to the bus.
         let bus = EventBus::default();
-        bus.record("model-switched", serde_json::json!({ "from": "opus", "to": "sonnet" }));
+        bus.record(
+            "model-switched",
+            serde_json::json!({ "from": "opus", "to": "sonnet" }),
+        );
         let all = bus.snapshot(None);
         assert_eq!(all[0].kind, "model-switched");
         assert_eq!(all[0].data["from"], "opus");

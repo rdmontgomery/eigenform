@@ -38,8 +38,10 @@ fn recency_is_the_last_timestamped_row_past_trailing_state_rows() {
 #[test]
 fn title_falls_back_to_last_prompt_snippet() {
     let (_d, stub) = write_session(&[
-        r#"{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00Z","sessionId":"sess"}"#.into(),
-        r#"{"type":"last-prompt","lastPrompt":"do the thing","leafUuid":"u1","sessionId":"sess"}"#.into(),
+        r#"{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00Z","sessionId":"sess"}"#
+            .into(),
+        r#"{"type":"last-prompt","lastPrompt":"do the thing","leafUuid":"u1","sessionId":"sess"}"#
+            .into(),
     ]);
     let r = session_ref(&stub);
     assert_eq!(r.title.as_deref(), Some("do the thing"));
@@ -51,8 +53,11 @@ fn recency_falls_back_to_mtime_when_no_timestamps() {
         r#"{"type":"mode","mode":"normal","sessionId":"sess"}"#.into(),
         r#"{"type":"last-prompt","leafUuid":"x","sessionId":"sess"}"#.into(),
     ]);
-    let mtime: DateTime<Utc> =
-        std::fs::metadata(&stub.path).unwrap().modified().unwrap().into();
+    let mtime: DateTime<Utc> = std::fs::metadata(&stub.path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .into();
     let r = session_ref(&stub);
     assert_eq!(r.recency, mtime);
 }
@@ -63,8 +68,11 @@ fn escalates_past_an_oversized_final_turn() {
     // start, so peek must grow the window to find the timestamp.
     let big = "x".repeat(70_000);
     let (_d, stub) = write_session(&[
-        r#"{"type":"user","uuid":"u1","timestamp":"2026-06-01T09:00:00Z","sessionId":"sess"}"#.into(),
-        format!(r#"{{"type":"assistant","uuid":"a1","timestamp":"2026-06-02T00:00:00Z","sessionId":"sess","message":{{"role":"assistant","content":[{{"type":"text","text":"{big}"}}]}}}}"#),
+        r#"{"type":"user","uuid":"u1","timestamp":"2026-06-01T09:00:00Z","sessionId":"sess"}"#
+            .into(),
+        format!(
+            r#"{{"type":"assistant","uuid":"a1","timestamp":"2026-06-02T00:00:00Z","sessionId":"sess","message":{{"role":"assistant","content":[{{"type":"text","text":"{big}"}}]}}}}"#
+        ),
         r#"{"type":"last-prompt","leafUuid":"a1","sessionId":"sess"}"#.into(),
         r#"{"type":"ai-title","aiTitle":"Big","sessionId":"sess"}"#.into(),
     ]);

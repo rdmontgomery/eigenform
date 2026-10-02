@@ -7,7 +7,10 @@ use eigenform_forest::{is_pid_alive, live_forest_with, SessionState};
 
 #[test]
 fn is_pid_alive_sees_this_running_process() {
-    assert!(is_pid_alive(std::process::id()), "the test process is alive");
+    assert!(
+        is_pid_alive(std::process::id()),
+        "the test process is alive"
+    );
 }
 
 fn now() -> DateTime<Utc> {
@@ -66,12 +69,24 @@ fn live_sessions_badged_ready_or_working_dead_are_recent() {
             .find(|s| s.uuid == u)
             .unwrap_or_else(|| panic!("{u} present"))
     };
-    assert_eq!(by("aaa").state, SessionState::Ready, "completed + live → ready");
+    assert_eq!(
+        by("aaa").state,
+        SessionState::Ready,
+        "completed + live → ready"
+    );
     assert!(by("aaa").live);
     assert_eq!(by("aaa").spark, vec![123], "spark = output_tokens per turn");
-    assert_eq!(by("bbb").state, SessionState::Working, "pending + live → working");
+    assert_eq!(
+        by("bbb").state,
+        SessionState::Working,
+        "pending + live → working"
+    );
     assert!(by("bbb").live);
-    assert_eq!(by("ccc").state, SessionState::Recent, "no live process → recent");
+    assert_eq!(
+        by("ccc").state,
+        SessionState::Recent,
+        "no live process → recent"
+    );
     assert!(!by("ccc").live);
 }
 
@@ -89,7 +104,11 @@ fn ready_sorts_before_working_before_recent() {
     let alive = |pid: u32| pid == 42 || pid == 43;
     let got = live_forest_with(proj.path(), sess.path(), state.path(), now(), alive);
     let order: Vec<_> = got.iter().map(|s| s.uuid.as_str()).collect();
-    assert_eq!(order, vec!["aaa", "bbb", "ccc"], "ready, then working, then recent");
+    assert_eq!(
+        order,
+        vec!["aaa", "bbb", "ccc"],
+        "ready, then working, then recent"
+    );
 }
 
 /// A claim whose pid is alive but whose recorded `procStart` differs from the running

@@ -9,7 +9,10 @@ fn ts(s: &str) -> &str {
 }
 
 fn session(uuid: &str, when: &str) -> String {
-    format!(r#"{{"type":"user","uuid":"{uuid}","timestamp":"{}","cwd":"CWD","sessionId":"{uuid}"}}"#, ts(when))
+    format!(
+        r#"{{"type":"user","uuid":"{uuid}","timestamp":"{}","cwd":"CWD","sessionId":"{uuid}"}}"#,
+        ts(when)
+    )
 }
 
 /// proj-a (cwd /home/me/a): s_recent (06-03), s_old (05-01).
@@ -30,7 +33,9 @@ fn fixture() -> tempfile::TempDir {
 }
 
 fn now() -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339("2026-06-03T12:00:00Z").unwrap().with_timezone(&Utc)
+    DateTime::parse_from_rfc3339("2026-06-03T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc)
 }
 
 #[test]
@@ -38,7 +43,11 @@ fn scope_to_a_project_excludes_other_projects() {
     let dir = fixture();
     let got = list(dir.path(), Scope::Project("/home/me/a".into()), None, now()).unwrap();
     let uuids: Vec<_> = got.iter().map(|s| s.uuid.clone()).collect();
-    assert_eq!(uuids, vec!["s_recent", "s_old"], "only project a, recent-first");
+    assert_eq!(
+        uuids,
+        vec!["s_recent", "s_old"],
+        "only project a, recent-first"
+    );
 }
 
 #[test]
@@ -58,7 +67,13 @@ fn window_excludes_sessions_older_than_since() {
 #[test]
 fn all_projects_sorted_recent_first() {
     let dir = fixture();
-    let got = list(dir.path(), Scope::AllProjects, Some(Duration::days(7)), now()).unwrap();
+    let got = list(
+        dir.path(),
+        Scope::AllProjects,
+        Some(Duration::days(7)),
+        now(),
+    )
+    .unwrap();
     let uuids: Vec<_> = got.iter().map(|s| s.uuid.clone()).collect();
     assert_eq!(uuids, vec!["s_recent", "s_b"], "06-03 before 06-02");
 }

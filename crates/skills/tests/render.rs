@@ -33,11 +33,7 @@ fn render_tree_summary_counts_names_and_sources() {
     let scan = vec![
         sk("alpha", Layer::Global, "/h/alpha.md"),
         sk("beta", Layer::Global, "/h/beta.md"),
-        sk(
-            "beta",
-            Layer::Plugin { name: "p".into() },
-            "/p/beta.md",
-        ),
+        sk("beta", Layer::Plugin { name: "p".into() }, "/p/beta.md"),
     ];
     let out = render(&scan);
     let summary = out.lines().next().unwrap();
@@ -127,11 +123,7 @@ fn render_tree_marks_shadowing_only_for_non_plugin_collisions() {
     // by the bare name `foo`). Repo wins by precedence, called out on the header.
     let scan = vec![
         sk("foo", Layer::Global, "/h/foo.md"),
-        sk(
-            "foo",
-            Layer::Repo { project: None },
-            "/r/foo.md",
-        ),
+        sk("foo", Layer::Repo { project: None }, "/r/foo.md"),
     ];
     let out = render(&scan);
 
@@ -151,24 +143,18 @@ fn render_tree_mixed_plugin_and_non_plugin_marks_only_non_plugin_shadowing() {
     //   - no wins marker (only one bare-name reachable contribution).
     let scan = vec![
         sk("hat", Layer::Global, "/h/hat.md"),
-        sk(
-            "hat",
-            Layer::Plugin {
-                name: "foo".into(),
-            },
-            "/p/foo/hat.md",
-        ),
-        sk(
-            "hat",
-            Layer::Plugin {
-                name: "bar".into(),
-            },
-            "/p/bar/hat.md",
-        ),
+        sk("hat", Layer::Plugin { name: "foo".into() }, "/p/foo/hat.md"),
+        sk("hat", Layer::Plugin { name: "bar".into() }, "/p/bar/hat.md"),
     ];
     let out = render(&scan);
-    assert!(!out.contains("wins"), "single non-plugin contribution = no shadowing: {out}");
-    assert!(out.contains("3 sources"), "multi-source, non-shadowing note: {out}");
+    assert!(
+        !out.contains("wins"),
+        "single non-plugin contribution = no shadowing: {out}"
+    );
+    assert!(
+        out.contains("3 sources"),
+        "multi-source, non-shadowing note: {out}"
+    );
 }
 
 #[test]
@@ -209,7 +195,10 @@ fn render_tree_no_collision_does_not_emit_wins_marker() {
         sk("beta", Layer::Repo { project: None }, "/r/beta.md"),
     ];
     let out = render(&scan);
-    assert!(!out.contains("wins"), "no collisions, no wins marker: {out}");
+    assert!(
+        !out.contains("wins"),
+        "no collisions, no wins marker: {out}"
+    );
 }
 
 #[test]
@@ -277,7 +266,13 @@ fn render_tree_truncates_descriptions_to_width_without_wrapping() {
 #[test]
 fn render_tree_shortens_home_paths_and_elides_long_ones() {
     let long = "/Users/rick/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/skills/access/SKILL.md";
-    let skill = sk("access", Layer::Plugin { name: "discord".into() }, long);
+    let skill = sk(
+        "access",
+        Layer::Plugin {
+            name: "discord".into(),
+        },
+        long,
+    );
     let out = render_tree(
         &[skill],
         &RenderOpts {
@@ -291,7 +286,10 @@ fn render_tree_shortens_home_paths_and_elides_long_ones() {
         .lines()
         .find(|l| l.contains("SKILL.md"))
         .expect("path line present");
-    assert!(path_line.chars().count() <= 72, "path line fits width: {path_line}");
+    assert!(
+        path_line.chars().count() <= 72,
+        "path line fits width: {path_line}"
+    );
     assert!(
         path_line.contains("…/") && path_line.ends_with("discord/skills/access/SKILL.md"),
         "long path is left-elided keeping the tail: {path_line}"

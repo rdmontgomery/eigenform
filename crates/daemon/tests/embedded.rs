@@ -44,7 +44,11 @@ async fn embedded_serves_the_bundle_asset() {
     let base = start(embedded_cfg()).await;
     let body = helpers::http_get(&base, "/dist/main.js").await;
     // The esbuild bundle is non-trivial; a stub index would be far smaller.
-    assert!(body.len() > 1000, "embedded /dist/main.js looks empty: {} bytes", body.len());
+    assert!(
+        body.len() > 1000,
+        "embedded /dist/main.js looks empty: {} bytes",
+        body.len()
+    );
 }
 
 #[tokio::test]

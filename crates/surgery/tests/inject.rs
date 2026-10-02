@@ -32,7 +32,11 @@ fn inject_appends_a_synthetic_turn_parented_on_the_cut_tip() {
     let injected = inject(&two_turns(), A1, Role::User, "synthetic instruction").unwrap();
     let last = *injected.turns().last().unwrap();
     assert_eq!(last.role, Role::User);
-    assert_eq!(last.parent_uuid.as_deref(), Some(S1), "parents on A1's trailing system row");
+    assert_eq!(
+        last.parent_uuid.as_deref(),
+        Some(S1),
+        "parents on A1's trailing system row"
+    );
 }
 
 #[test]
@@ -63,7 +67,8 @@ fn inject_escapes_special_characters_in_content() {
     let tricky = "quote \" brace } newline \n end";
     let injected = inject(&two_turns(), A1, Role::User, tricky).unwrap();
     let last = *injected.turns().last().unwrap();
-    let v: serde_json::Value = serde_json::from_str(last.raw()).expect("synthetic row is valid JSON");
+    let v: serde_json::Value =
+        serde_json::from_str(last.raw()).expect("synthetic row is valid JSON");
     assert_eq!(v["message"]["content"], serde_json::json!(tricky));
 }
 

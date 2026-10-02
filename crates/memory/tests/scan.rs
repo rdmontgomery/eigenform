@@ -8,9 +8,7 @@ fn write_entry(dir: &std::path::Path, fname: &str, name: &str, kind: &str) -> Pa
     let path = dir.join(fname);
     fs::write(
         &path,
-        format!(
-            "---\nname: {name}\ndescription: about {name}\ntype: {kind}\n---\n\nbody\n"
-        ),
+        format!("---\nname: {name}\ndescription: about {name}\ntype: {kind}\n---\n\nbody\n"),
     )
     .unwrap();
     path
@@ -102,8 +100,7 @@ fn scan_sorts_by_kind_then_name() {
     write_entry(dir.path(), "f_a.md", "alpha", "feedback");
 
     let entries = scan_memory_dir(dir.path()).unwrap();
-    let labels: Vec<(MemoryKind, String)> =
-        entries.into_iter().map(|m| (m.kind, m.name)).collect();
+    let labels: Vec<(MemoryKind, String)> = entries.into_iter().map(|m| (m.kind, m.name)).collect();
 
     // Order: feedback < project < reference < user; ties broken by name.
     assert_eq!(

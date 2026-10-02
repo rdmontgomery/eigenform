@@ -96,14 +96,19 @@ async fn sweep_reaps_long_dead_entries() {
     assert!(pty.exited_at().is_some(), "must have exited before sweep");
     // ZERO max-age: any exited entry is "long dead", so it is reaped.
     host.sweep(Duration::ZERO);
-    assert!(host.get(id).is_none(), "sweep must reap the long-dead entry");
+    assert!(
+        host.get(id).is_none(),
+        "sweep must reap the long-dead entry"
+    );
 }
 
 #[tokio::test]
 async fn sweep_keeps_live_and_recently_exited_entries() {
     let host = SessionHost::default();
     // A live child: never exited, must survive any sweep.
-    let live = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+    let live = host
+        .spawn("sh", &["-c", "sleep 30"], None, (80, 24))
+        .unwrap();
     // A just-exited child: within a generous max-age, must survive.
     let recent = host.spawn("sh", &["-c", "true"], None, (80, 24)).unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -122,7 +127,9 @@ async fn sweep_keeps_live_and_recently_exited_entries() {
 #[tokio::test]
 async fn kill_terminates_the_child_and_removes_the_entry() {
     let host = SessionHost::default();
-    let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+    let pty = host
+        .spawn("sh", &["-c", "sleep 30"], None, (80, 24))
+        .unwrap();
     let id = pty.id;
     host.kill(id).unwrap();
     assert!(host.get(id).is_none(), "kill must remove the entry");

@@ -32,7 +32,11 @@ fn unique_cwds_empty_input_returns_empty() {
 
 #[test]
 fn unique_cwds_no_duplicates_returns_same_order() {
-    let input = vec![PathBuf::from("/z"), PathBuf::from("/a"), PathBuf::from("/m")];
+    let input = vec![
+        PathBuf::from("/z"),
+        PathBuf::from("/a"),
+        PathBuf::from("/m"),
+    ];
     let result = unique_cwds(input.clone());
     assert_eq!(result, input);
 }
@@ -61,7 +65,10 @@ fn immediate_subdirs_errors_when_root_missing() {
 
 #[test]
 fn merge_candidates_recents_first_then_unseen_subdirs() {
-    let recents = vec![PathBuf::from("/home/u/projects/eigen"), PathBuf::from("/tmp/scratch")];
+    let recents = vec![
+        PathBuf::from("/home/u/projects/eigen"),
+        PathBuf::from("/tmp/scratch"),
+    ];
     let subdirs = vec![
         PathBuf::from("/home/u/projects/eigen"), // already a recent — must not duplicate
         PathBuf::from("/home/u/projects/woland"),
@@ -72,9 +79,18 @@ fn merge_candidates_recents_first_then_unseen_subdirs() {
     assert_eq!(
         merged,
         vec![
-            Candidate { path: PathBuf::from("/home/u/projects/eigen"), recent: true },
-            Candidate { path: PathBuf::from("/tmp/scratch"), recent: true },
-            Candidate { path: PathBuf::from("/home/u/projects/woland"), recent: false },
+            Candidate {
+                path: PathBuf::from("/home/u/projects/eigen"),
+                recent: true
+            },
+            Candidate {
+                path: PathBuf::from("/tmp/scratch"),
+                recent: true
+            },
+            Candidate {
+                path: PathBuf::from("/home/u/projects/woland"),
+                recent: false
+            },
         ]
     );
 }
@@ -91,8 +107,14 @@ fn merge_candidates_dedups_repeated_recents_keeping_first_order() {
     assert_eq!(
         merged,
         vec![
-            Candidate { path: PathBuf::from("/a"), recent: true },
-            Candidate { path: PathBuf::from("/b"), recent: true },
+            Candidate {
+                path: PathBuf::from("/a"),
+                recent: true
+            },
+            Candidate {
+                path: PathBuf::from("/b"),
+                recent: true
+            },
         ]
     );
 }

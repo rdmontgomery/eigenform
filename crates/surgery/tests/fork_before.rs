@@ -42,7 +42,10 @@ fn forks_to_the_prior_system_boundary_and_drops_the_turn_and_tail() {
     // resume head is the completed-turn system row before U2 — never a bare user turn
     assert_eq!(forked.resume_leaf().as_deref(), Some(S1));
     let jsonl = forked.to_jsonl();
-    assert!(jsonl.contains(U1) && jsonl.contains(A1) && jsonl.contains(S1), "prefix kept");
+    assert!(
+        jsonl.contains(U1) && jsonl.contains(A1) && jsonl.contains(S1),
+        "prefix kept"
+    );
     for dropped in [U2, A2, S2] {
         assert!(!jsonl.contains(dropped), "{dropped} should be gone");
     }
@@ -52,14 +55,20 @@ fn forks_to_the_prior_system_boundary_and_drops_the_turn_and_tail() {
 fn carries_over_the_trailing_state_block() {
     let jsonl = fork_before(&two_turns(), U2).unwrap().to_jsonl();
     assert!(jsonl.contains(r#""type":"mode""#), "mode row re-emitted");
-    assert!(jsonl.contains(r#""type":"permission-mode""#), "permission-mode row re-emitted");
+    assert!(
+        jsonl.contains(r#""type":"permission-mode""#),
+        "permission-mode row re-emitted"
+    );
 }
 
 #[test]
 fn mints_a_fresh_session_id_everywhere() {
     let forked = fork_before(&two_turns(), U2).unwrap();
     assert_ne!(forked.session_id, OLD);
-    assert!(!forked.to_jsonl().contains(OLD), "old session id fully gone");
+    assert!(
+        !forked.to_jsonl().contains(OLD),
+        "old session id fully gone"
+    );
 }
 
 #[test]

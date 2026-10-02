@@ -20,7 +20,9 @@ fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Config) {
     let pid = std::process::id();
     std::fs::write(
         sess.path().join(format!("{pid}.json")),
-        format!("{{\"pid\":{pid},\"sessionId\":\"{LIVE}\",\"cwd\":\"/home/me/p\",\"startedAt\":2}}"),
+        format!(
+            "{{\"pid\":{pid},\"sessionId\":\"{LIVE}\",\"cwd\":\"/home/me/p\",\"startedAt\":2}}"
+        ),
     )
     .unwrap();
     std::fs::write(
@@ -49,15 +51,25 @@ async fn start(cfg: Config) -> String {
 async fn request(method: &str, url: &str) -> (u16, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let rest = url.strip_prefix("http://").unwrap();
-    let (host, path) = rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap();
+    let (host, path) = rest
+        .split_once('/')
+        .map(|(h, p)| (h, format!("/{p}")))
+        .unwrap();
     let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
     let req = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).await.unwrap();
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await.unwrap();
     let text = String::from_utf8_lossy(&buf).to_string();
-    let status = text.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let body = text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+    let status = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
     (status, body)
 }
 
@@ -72,7 +84,10 @@ async fn claims_are_listed_with_health_title_and_headless() {
     let live = rows.iter().find(|r| r["sessionId"] == LIVE).unwrap();
     assert_eq!(live["health"], "alive");
     assert_eq!(live["title"], "nightly digest");
-    assert_eq!(live["headless"], true, "entrypoint read from the transcript");
+    assert_eq!(
+        live["headless"], true,
+        "entrypoint read from the transcript"
+    );
     let dead = rows.iter().find(|r| r["sessionId"] == DEAD).unwrap();
     assert_eq!(dead["health"], "dead");
     assert_eq!(dead["headless"], false);

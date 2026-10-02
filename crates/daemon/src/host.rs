@@ -42,9 +42,9 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 pub struct ModeTracker {
     /// Last-seen on/off state of each DEC private toggle we track.
     alt_screen: Option<bool>, // ?1049
-    focus: Option<bool>,      // ?1004
-    sync_2026: Option<bool>,  // ?2026
-    sync_2031: Option<bool>,  // ?2031
+    focus: Option<bool>,     // ?1004
+    sync_2026: Option<bool>, // ?2026
+    sync_2031: Option<bool>, // ?2031
     /// Kitty keyboard push active? `?` until first seen, then last push-vs-pop.
     kitty_push: Option<bool>,
     /// Trailing bytes of the previous scan, prepended to the next so a sequence
@@ -329,8 +329,10 @@ impl SessionHost {
                         .retain(|tx| tx.send(Outbound::Binary(chunk.to_vec())).is_ok());
                     drop(shared); // release before taking meta — never hold two locks here.
 
-                    live.meta.lock().unwrap_or_else(PoisonError::into_inner).last_activity =
-                        SystemTime::now();
+                    live.meta
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .last_activity = SystemTime::now();
                 }
                 // Task 1.5: reader EOF means the child closed the master — reap and
                 // mark exited. The pump holds only a `Weak`; if the entry was killed or
@@ -479,10 +481,14 @@ impl SessionHost {
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
             // Local struct (forest inlines its own parse; nothing to reuse). Unknown
             // fields are ignored by serde, so extra keys never break us.
-            let Ok(rec) = serde_json::from_str::<PidFile>(&text) else { continue };
+            let Ok(rec) = serde_json::from_str::<PidFile>(&text) else {
+                continue;
+            };
             by_pid.insert(rec.pid, rec.session_id);
         }
         if by_pid.is_empty() {
@@ -841,10 +847,7 @@ impl LivePty {
         }; // shared released before taking meta — never hold both.
         let (since_activity, exited) = {
             let meta = self.meta.lock().unwrap_or_else(PoisonError::into_inner);
-            let since = meta
-                .last_activity
-                .elapsed()
-                .unwrap_or(Duration::ZERO); // clock skew (activity "in the future") → treat as just-now.
+            let since = meta.last_activity.elapsed().unwrap_or(Duration::ZERO); // clock skew (activity "in the future") → treat as just-now.
             (since, meta.exited_at.is_some())
         };
         classify(&rows, since_activity, exited)
@@ -988,7 +991,10 @@ mod tests {
         // painted into.
         let mut live = TermModel::new(24, 80);
         live.feed(b"\x1b[?1049h\x1b[2J\x1b[H  \xe2\x9d\xaf 1. Yes");
-        assert!(live.parser.screen().alternate_screen(), "live is in alt screen");
+        assert!(
+            live.parser.screen().alternate_screen(),
+            "live is in alt screen"
+        );
 
         let mut fresh = TermModel::new(24, 80);
         fresh.feed(&live.snapshot());
@@ -1010,7 +1016,10 @@ mod tests {
         assert!(!live.parser.screen().alternate_screen());
 
         let snap = String::from_utf8_lossy(&live.snapshot()).to_string();
-        assert!(!snap.contains("\x1b[?1049h"), "no alt-screen entry for normal buffer");
+        assert!(
+            !snap.contains("\x1b[?1049h"),
+            "no alt-screen entry for normal buffer"
+        );
 
         let mut fresh = TermModel::new(24, 80);
         fresh.feed(&live.snapshot());
@@ -1093,7 +1102,9 @@ mod tests {
     #[tokio::test]
     async fn reconcile_adopts_uuid_from_matching_pid_file() {
         let host = SessionHost::default();
-        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let pty = host
+            .spawn("sh", &["-c", "sleep 30"], None, (80, 24))
+            .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let pid = pty.child_pid();
         std::fs::write(
@@ -1109,7 +1120,9 @@ mod tests {
     #[tokio::test]
     async fn reconcile_does_not_overwrite_a_set_uuid() {
         let host = SessionHost::default();
-        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let pty = host
+            .spawn("sh", &["-c", "sleep 30"], None, (80, 24))
+            .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let pid = pty.child_pid();
         pty.set_uuid("already-set".into()); // e.g. the JSONL watcher won the race.
@@ -1126,7 +1139,9 @@ mod tests {
     #[tokio::test]
     async fn reconcile_ignores_pid_file_with_no_matching_entry() {
         let host = SessionHost::default();
-        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let pty = host
+            .spawn("sh", &["-c", "sleep 30"], None, (80, 24))
+            .unwrap();
         let dir = tempfile::tempdir().unwrap();
         // A pid that does not match the pty's child (off-by-one is enough).
         let other = pty.child_pid().wrapping_add(1);
@@ -1143,7 +1158,9 @@ mod tests {
     #[tokio::test]
     async fn reconcile_skips_malformed_json_without_panicking() {
         let host = SessionHost::default();
-        let pty = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24)).unwrap();
+        let pty = host
+            .spawn("sh", &["-c", "sleep 30"], None, (80, 24))
+            .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let pid = pty.child_pid();
         // Right filename, garbage contents — must be skipped, not panic.
@@ -1178,7 +1195,10 @@ mod tests {
 
     #[test]
     fn quiet_prompt_means_idle() {
-        assert_eq!(classify(&["> ".into()], age_secs(60), false), PtyState::Idle);
+        assert_eq!(
+            classify(&["> ".into()], age_secs(60), false),
+            PtyState::Idle
+        );
     }
 
     #[test]
@@ -1204,11 +1224,7 @@ mod tests {
     fn selector_rows_split_by_blank_row_are_not_consecutive() {
         // Spike 08 says ≥2 *consecutive* numbered rows. A blank row between them
         // breaks the run, so this is not a waiting selector.
-        let rows = vec![
-            " ❯ 1. Yes".into(),
-            "".into(),
-            "   2. No".into(),
-        ];
+        let rows = vec![" ❯ 1. Yes".into(), "".into(), "   2. No".into()];
         assert_ne!(classify(&rows, age_secs(10), false), PtyState::Waiting);
     }
 
@@ -1234,8 +1250,11 @@ mod tests {
         // At exactly the boundary with a selector grid the working gate also does
         // NOT fire, so the grid check runs and yields Waiting (not Working).
         let selector_rows = vec![" ❯ 1. Yes".to_string(), "   2. No".to_string()];
-        assert_eq!(classify(&selector_rows, WORKING_THRESHOLD, false), PtyState::Waiting,
-            "at exactly the boundary with a selector grid: Waiting, not Working");
+        assert_eq!(
+            classify(&selector_rows, WORKING_THRESHOLD, false),
+            PtyState::Waiting,
+            "at exactly the boundary with a selector grid: Waiting, not Working"
+        );
     }
 
     #[test]

@@ -177,7 +177,9 @@ fn memory_for_cwd(projects_dir: &Path, cwd: &Path) -> Result<Vec<MemoryItem>> {
         return Ok(Vec::new());
     };
     let memory_dir = projects_dir.join(&project.dir_name).join("memory");
-    Ok(into_memory_items(eigenform_memory::scan_memory_dir(&memory_dir)?))
+    Ok(into_memory_items(eigenform_memory::scan_memory_dir(
+        &memory_dir,
+    )?))
 }
 
 fn into_memory_items(entries: Vec<eigenform_memory::MemoryEntry>) -> Vec<MemoryItem> {
@@ -249,7 +251,10 @@ impl ShadowMap {
                 winners.insert((*name).to_string(), winner.skill.source_path.clone());
             }
         }
-        ShadowMap { winners, namespaced }
+        ShadowMap {
+            winners,
+            namespaced,
+        }
     }
 
     /// Namespacing without shadowing: every bare-name contribution is its own
@@ -343,7 +348,11 @@ mod tests {
     fn collect_marks_repo_skill_as_winner_over_global() {
         let home = tempfile::tempdir().unwrap();
         let cwd = tempfile::tempdir().unwrap();
-        write_skill(&home.path().join(".claude/skills"), "review", "global review");
+        write_skill(
+            &home.path().join(".claude/skills"),
+            "review",
+            "global review",
+        );
         write_skill(&cwd.path().join(".claude/skills"), "review", "repo review");
 
         let data = collect(home.path(), cwd.path()).unwrap();
@@ -407,6 +416,9 @@ mod tests {
             .filter(|s| s.name == "dup")
             .collect();
         assert_eq!(dup_items.len(), 2);
-        assert!(dup_items.iter().all(|s| s.wins), "no cross-project shadowing");
+        assert!(
+            dup_items.iter().all(|s| s.wins),
+            "no cross-project shadowing"
+        );
     }
 }

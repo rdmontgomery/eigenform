@@ -13,7 +13,10 @@ const NEW: &str = "new-session-uuid-1111";
 fn swaps_the_session_id_in_an_opaque_row() {
     let line = format!(r#"{{"type":"mode","mode":"normal","sessionId":"{OLD}"}}"#);
     let out = rewrite_session_id(&line, OLD, NEW).expect("clean swap");
-    assert_eq!(out, format!(r#"{{"type":"mode","mode":"normal","sessionId":"{NEW}"}}"#));
+    assert_eq!(
+        out,
+        format!(r#"{{"type":"mode","mode":"normal","sessionId":"{NEW}"}}"#)
+    );
 }
 
 #[test]

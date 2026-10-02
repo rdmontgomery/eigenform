@@ -28,7 +28,11 @@ async fn health_route_identifies_eigenform_with_pid() {
     let body = helpers::http_get(&base, "/api/health").await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["app"], "eigenform", "marker the launcher keys reuse on");
-    assert_eq!(v["pid"], std::process::id(), "pid the `stop` command terminates");
+    assert_eq!(
+        v["pid"],
+        std::process::id(),
+        "pid the `stop` command terminates"
+    );
     assert!(v["version"].is_string(), "version string present");
 }
 
