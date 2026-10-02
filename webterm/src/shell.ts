@@ -732,10 +732,14 @@ export function mountShell(appEl: HTMLElement): void {
     }
 
     const termEl = el("div", "term-pane");
+    // xterm opens on an unpadded inner box: FitAddon measures its parent, and
+    // .term-pane's padding would otherwise be counted as usable rows.
+    const fitEl = el("div", "term-fit");
+    termEl.append(fitEl);
     termStack.append(termEl);
 
     const handle = newTerminal(appearance.font(), appearance.scheme().theme);
-    handle.term.open(termEl);
+    handle.term.open(fitEl);
 
     const entry: TabEntry = {
       id: tabId,

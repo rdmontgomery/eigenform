@@ -987,6 +987,15 @@ button { font: inherit; color: inherit; }
   inset: 0;
   padding: 6px 8px 0 8px;   /* breathe: page margin; right gutter clears the bar */
 }
+/* FitAddon sizes rows/cols from the computed height/width of xterm's parent.
+   Under border-box that includes .term-pane's padding, so xterm opens on this
+   unpadded inner box instead — otherwise it over-counts and the bottom rows
+   (the status line) spill below the visible pane. */
+.term-fit {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
 
 /* ── Inspect dock — reach map (top) + transcript (bottom), docked right ───── */
 .drawer-dock {
