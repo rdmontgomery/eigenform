@@ -2,7 +2,7 @@
 // Run: `node --test` (native TS via --experimental-strip-types in Node 22+).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toolView, miniDiff, toolsSummary } from "./toolview.ts";
+import { toolView, miniDiff, patchDiff, toolsSummary } from "./toolview.ts";
 import type { Tool } from "./turns.ts";
 
 function tool(overrides: Partial<Tool> & { kind: string }): Tool {
@@ -235,4 +235,41 @@ test("toolsSummary: unique verbs in first-seen order", () => {
 
 test("toolsSummary: empty list yields empty string", () => {
   assert.equal(toolsSummary([]), "");
+});
+
+// ---------------------------------------------------------------------------
+// Codex workers (daemon maps Codex tools onto Bash/Edit/Write)
+// ---------------------------------------------------------------------------
+
+test("toolView: a Bash call that spawned a Codex worker renders its transcript", () => {
+  const v = toolView(tool({
+    kind: "Bash",
+    input: { command: "codex-worker spawn retry-fix -- 'fix it'" },
+    output: "codex-thread: 0199a1b2",
+    subagent: { agentType: "codex", description: "fix it", threadId: "0199a1b2", exchanges: [] },
+  }));
+  assert.equal(v.type, "bash");
+  assert.equal(v.headline, "fix it");
+  assert.equal(v.body.kind, "subagent");
+  assert.deepEqual(v.accessory, { kind: "subagent", turns: 0 });
+});
+
+test("toolView: a Codex apply_patch section renders as a diff with stats", () => {
+  const v = toolView(tool({
+    kind: "Edit",
+    input: {
+      file_path: "/w/src/retry.rs",
+      patch: "*** Update File: src/retry.rs\n@@\n ctx\n-sleep(10)\n+sleep(backoff)\n",
+    },
+  }));
+  assert.equal(v.headline, "retry.rs");
+  assert.deepEqual(v.accessory, { kind: "stat", add: 1, del: 1 });
+  assert.equal(v.body.kind, "diff");
+});
+
+test("patchDiff: drops headers, hunk markers, and context", () => {
+  const d = patchDiff("*** Add File: a.txt\n+one\n+two\n");
+  assert.equal(d.add, 2);
+  assert.equal(d.del, 0);
+  assert.deepEqual(d.lines.map((l) => l.text), ["one", "two"]);
 });

@@ -636,6 +636,7 @@ fn daemon(
         projects_dir: Some(projects_dir()?),
         sessions_dir: Some(sessions_dir()?),
         state_dir: Some(state_dir()?),
+        codex_home: eigenform_codex::codex_home().filter(|h| h.is_dir()),
         workspace_root,
         dev,
         log_file,

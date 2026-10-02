@@ -27,6 +27,7 @@ chrono       = { workspace = true }
 notify       = { workspace = true }
 tokio-stream = { workspace = true }
 eigenform-forest   = { path = "../forest" }
+eigenform-codex    = { path = "../codex" }
 eigenform-surgery  = { path = "../surgery" }
 eigenform-render   = { path = "../render" }
 eigenform-projects = { path = "../projects" }

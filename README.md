@@ -18,7 +18,9 @@ One local daemon, one browser tab, every Claude Code session you have.
 - **Context surgery.** Edit any past prompt and fork: a copy-on-write branch is written beside the original (never touched), resumed in a new tab, with your edited prompt staged in the input — **never sent**.
 - **Audit panes.** Active-sessions modal (what Claude *thinks* is running vs. what is), an events stream, and an inspect view of the skills and memory layers each project actually sees.
 
-Nothing leaves your machine. The daemon reads `~/.claude`; it never calls the API.
+- **Codex workers.** OpenAI Codex CLI threads join the rail (tagged `codex`) with transcript and reach map. A worker Claude spawned nests under the Bash call that started it, and double-clicking a thread opens `codex resume` in a tab, refused while a worker still holds it. The [`codex-worker`](.claude/skills/codex-worker/SKILL.md) skill gives Claude the delegate → verify → correct loop; `just install-codex-skill` makes it available in every repo. Design: [`docs/plans/2026-10-02-codex-workers-design.md`](docs/plans/2026-10-02-codex-workers-design.md).
+
+Nothing leaves your machine. The daemon reads `~/.claude` (and `~/.codex`); it never calls an API.
 
 ## Install & run
 

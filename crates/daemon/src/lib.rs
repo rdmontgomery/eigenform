@@ -76,6 +76,10 @@ pub struct Config {
     pub sessions_dir: Option<PathBuf>,
     /// `~/.eigenform/state`: persisted per-session metrics (the activity spark). None = no spark.
     pub state_dir: Option<PathBuf>,
+    /// `$CODEX_HOME` (default `~/.codex`): Codex CLI threads join the forest as rows, the
+    /// drawer renders their rollouts, and `session=<thread id>` resumes them with
+    /// `codex resume`. None = Claude sessions only.
+    pub codex_home: Option<PathBuf>,
     /// Code root for the new-session launcher (`~/projects` or similar).
     /// `immediate_subdirs` of this path become `recent: false` candidates.
     /// None = no subdirectory suggestions (only recents from projects_dir).
@@ -166,11 +170,12 @@ async fn session_json_route(
     State(state): State<AppState>,
 ) -> Response {
     let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    let Ok(path) = eigenform_forest::resolve(dir, &uuid) else {
-        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    let claude = cfg
+        .projects_dir
+        .as_deref()
+        .and_then(|dir| eigenform_forest::resolve(dir, &uuid).ok());
+    let Some(path) = claude else {
+        return codex_session_json(cfg, &uuid);
     };
     // Render once per (file, mtime, len); repeat views and forest-browsing skip the
     // multi-MB read+parse+serialize that dominates the manuscript load latency.
@@ -198,7 +203,89 @@ async fn session_json_route(
                 })
                 .collect();
 
-        eigenform_render::session_json_with_subagents(&session, &subagents)
+        let json = eigenform_render::session_json_with_subagents(&session, &subagents);
+        attach_codex_workers(cfg, json)
+    }) {
+        Ok(json) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            json.to_string(),
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "could not read session").into_response(),
+    }
+}
+
+/// The line `codex-worker spawn` prints so a parent transcript names the thread it
+/// started (`.claude/skills/codex-worker`).
+const CODEX_THREAD_MARKER: &str = "codex-thread: ";
+
+/// Nest each Codex worker's transcript under the parent's Bash call that spawned it — the
+/// same `tool.subagent` slot an Agent call's transcript rides, so the drawer shows a Codex
+/// worker exactly like an internal subagent. The link is the `codex-thread: <id>` line in
+/// the Bash output; a thread that doesn't resolve leaves the call untouched.
+fn attach_codex_workers(cfg: &Config, json: String) -> String {
+    let Some(home) = cfg.codex_home.as_deref() else {
+        return json;
+    };
+    if !json.contains(CODEX_THREAD_MARKER) {
+        return json;
+    }
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return json;
+    };
+    let Some(exchanges) = v["exchanges"].as_array_mut() else {
+        return json;
+    };
+    let locks = eigenform_codex::WriterLocks::probe();
+    for ex in exchanges {
+        let tool = &mut ex["tool"];
+        if tool["kind"] != "Bash" {
+            continue;
+        }
+        let Some(id) = tool["output"].as_str().and_then(codex_thread_marker) else {
+            continue;
+        };
+        let Ok(stub) = eigenform_codex::resolve(home, &id) else {
+            continue;
+        };
+        let Ok(contents) = std::fs::read_to_string(&stub.path) else {
+            continue;
+        };
+        let row = eigenform_codex::thread(home, &stub, &locks);
+        let sub: serde_json::Value =
+            serde_json::from_str(&eigenform_codex::session_json(&stub.id, &contents)).unwrap_or_default();
+        tool["subagent"] = serde_json::json!({
+            "agentType": "codex",
+            "description": row.title,
+            "threadId": stub.id,
+            "state": row.state.as_str(),
+            "exchanges": sub["exchanges"],
+        });
+    }
+    serde_json::to_string(&v).unwrap_or(json)
+}
+
+/// The thread id on a `codex-thread: <id>` line, if the text carries one.
+fn codex_thread_marker(text: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let id = l.trim().strip_prefix(CODEX_THREAD_MARKER)?.trim();
+        (!id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')).then(|| id.to_string())
+    })
+}
+
+/// The drawer JSON for a Codex thread, or 404 when `uuid` is no Codex thread either.
+/// Shares the render cache, so a static rollout is parsed once.
+fn codex_session_json(cfg: &Config, uuid: &str) -> Response {
+    let Some(stub) = cfg
+        .codex_home
+        .as_deref()
+        .and_then(|home| eigenform_codex::resolve(home, uuid).ok())
+    else {
+        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    };
+    match SESSION_CACHE.get_or_render(&stub.path, || {
+        let contents = std::fs::read_to_string(&stub.path).unwrap_or_default();
+        eigenform_codex::session_json(&stub.id, &contents)
     }) {
         Ok(json) => (
             [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -362,30 +449,51 @@ async fn forest_watch_route(State(state): State<AppState>) -> Response {
     forest_sse(state.config)
 }
 
-/// Compute the live-Forest snapshot as a JSON string. Empty array if the dirs aren't set.
+/// Compute the live-Forest snapshot as a JSON string: Claude sessions, then Codex threads
+/// (tagged `"engine": "codex"`). Empty array if neither source is configured.
 fn forest_json(cfg: &Config) -> String {
-    let (Some(projects), Some(sessions), Some(state)) =
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    if let (Some(projects), Some(sessions), Some(state)) =
         (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir)
-    else {
-        return "[]".to_string();
-    };
-    let rows: Vec<serde_json::Value> =
-        eigenform_forest::live_forest(projects, sessions, state, chrono::Utc::now())
-            .into_iter()
-            .map(|s| {
-                serde_json::json!({
-                    "uuid": s.uuid,
-                    "title": s.title,
-                    "cwd": s.cwd.display().to_string(),
-                    "recency": s.recency.to_rfc3339(),
-                    "live": s.live,
-                    "state": s.state.as_str(),
-                    "spark": s.spark,
-                    "headless": s.headless,
-                    "pid": s.pid,
-                })
+    {
+        rows.extend(
+            eigenform_forest::live_forest(projects, sessions, state, chrono::Utc::now())
+                .into_iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "uuid": s.uuid,
+                        "title": s.title,
+                        "cwd": s.cwd.display().to_string(),
+                        "recency": s.recency.to_rfc3339(),
+                        "live": s.live,
+                        "state": s.state.as_str(),
+                        "spark": s.spark,
+                        "headless": s.headless,
+                        "pid": s.pid,
+                    })
+                }),
+        );
+    }
+    if let Some(home) = &cfg.codex_home {
+        rows.extend(eigenform_codex::threads(home).into_iter().map(|t| {
+            serde_json::json!({
+                "uuid": t.id,
+                "title": t.title,
+                "cwd": t.cwd.display().to_string(),
+                "recency": t.recency.to_rfc3339(),
+                "live": t.live(),
+                "state": t.state.as_str(),
+                // No per-turn token metrics for Codex yet; one zero per user turn keeps
+                // the rail's `~N` (spark length) honest.
+                "spark": vec![0u32; t.turns],
+                "headless": t.headless,
+                "pid": t.writer_pid,
+                "engine": "codex",
+                "model": t.model,
+                "parent": t.parent,
             })
-            .collect();
+        }));
+    }
     serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
 }
 
@@ -503,10 +611,14 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
         // timeout and exits once the consumer is gone, so a disconnected client can't
         // strand a watcher (and its inotify instance) until the next filesystem event.
         let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let watch_dirs: Vec<PathBuf> = [cfg.sessions_dir.clone(), cfg.projects_dir.clone()]
-            .into_iter()
-            .flatten()
-            .collect();
+        let watch_dirs: Vec<PathBuf> = [
+            cfg.sessions_dir.clone(),
+            cfg.projects_dir.clone(),
+            cfg.codex_home.as_ref().map(|h| h.join("sessions")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         std::thread::spawn(move || {
             let (raw_tx, raw_rx) = std::sync::mpsc::channel();
             let Ok(mut watcher) = notify::recommended_watcher(move |res| {
@@ -942,6 +1054,17 @@ async fn pty_ws(
         });
     }
 
+    if let Some(pid) = codex_resume_leased(&state.config, &query) {
+        let reason = format!("codex thread is held by a running worker (pid {pid}); wait for it to finish");
+        state.events.record(
+            "resume-refused",
+            serde_json::json!({ "reason": reason, "session": query.session, "pid": pid }),
+        );
+        return ws.on_upgrade(move |socket| async move {
+            let _ = close_with_reason(socket, reason).await;
+        });
+    }
+
     let command = pty_command(&state.config, &query);
 
     // Resume guard, mirroring the `new=` "no such directory" policy above: a session
@@ -1010,7 +1133,10 @@ async fn pty_ws(
 
 /// Close a websocket with a human-readable reason (used when an attach target is gone
 /// or a spawn fails). Best-effort: a send failure means the client already left.
-async fn close_with_reason(socket: WebSocket, reason: &'static str) -> Result<(), axum::Error> {
+async fn close_with_reason(
+    socket: WebSocket,
+    reason: impl Into<std::borrow::Cow<'static, str>>,
+) -> Result<(), axum::Error> {
     use axum::extract::ws::{close_code, CloseFrame};
     let mut socket = socket;
     socket
@@ -1111,6 +1237,14 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
             };
         }
     }
+    if let Some(thread) = query.session.as_deref().and_then(|q| codex_thread(cfg, q)) {
+        return PtyCommand {
+            program: "codex".to_string(),
+            args: vec!["resume".to_string(), thread.id],
+            cwd: Some(thread.cwd),
+            watch: None,
+        };
+    }
     PtyCommand {
         program: cfg.program.clone(),
         args: cfg.args.clone(),
@@ -1139,10 +1273,35 @@ fn session_resume_unresolved(cfg: &Config, query: &PtyQuery) -> bool {
     let Some(uuid) = query.session.as_deref() else {
         return false;
     };
-    let Some(dir) = cfg.projects_dir.as_deref() else {
-        return true;
-    };
-    eigenform_forest::resolve_stub(dir, uuid).is_err()
+    let claude = cfg
+        .projects_dir
+        .as_deref()
+        .is_some_and(|dir| eigenform_forest::resolve_stub(dir, uuid).is_ok());
+    !claude && codex_thread(cfg, uuid).is_none()
+}
+
+/// A `session=` query that names a Codex thread (and no Claude session), resolved to its
+/// rail row — liveness included, so a resume can be refused while a worker holds it.
+fn codex_thread(cfg: &Config, query: &str) -> Option<eigenform_codex::CodexThread> {
+    let home = cfg.codex_home.as_deref()?;
+    let stub = eigenform_codex::resolve(home, query).ok()?;
+    Some(eigenform_codex::thread(home, &stub, &eigenform_codex::WriterLocks::probe()))
+}
+
+/// The pid of a live writer on the Codex thread a `session=` resume names. Codex lets
+/// only one process write a thread (its writer lock); a running `codex exec` worker holds
+/// it, so an interactive `codex resume` would fail inside the pty. Refuse up front with
+/// the reason instead — the lock IS the lease. None for Claude sessions and idle threads.
+fn codex_resume_leased(cfg: &Config, query: &PtyQuery) -> Option<u32> {
+    let q = query.session.as_deref()?;
+    if cfg
+        .projects_dir
+        .as_deref()
+        .is_some_and(|dir| eigenform_forest::resolve_stub(dir, q).is_ok())
+    {
+        return None;
+    }
+    codex_thread(cfg, q)?.writer_pid
 }
 
 /// Claude Code's project dir name for a cwd: `/` → `-` (e.g. `/home/me/p` → `-home-me-p`).
@@ -1652,6 +1811,70 @@ mod tests {
         let r3 = cache.get_or_render(&path, || render("JSON-C")).unwrap();
         assert_eq!(&*r3, "JSON-C");
         assert_eq!(calls.get(), 2, "a changed file must invalidate the cache");
+    }
+
+    #[test]
+    fn codex_thread_resolves_to_codex_resume_and_a_held_lock_is_a_lease() {
+        // A Codex thread (no Claude session by that id) resumes with `codex resume` in the
+        // thread's cwd; while a worker holds its writer lock, the resume is leased away.
+        let dir = tempfile::tempdir().unwrap();
+        let id = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+        let day = dir.path().join("sessions/2026/10/02");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(
+            day.join(format!("rollout-2026-10-02T09-00-05-{id}.jsonl")),
+            format!(r#"{{"timestamp":"2026-10-02T09:00:05.000Z","type":"session_meta","payload":{{"id":"{id}","cwd":"/w/repo","source":"exec"}}}}"#) + "\n",
+        )
+        .unwrap();
+        let cfg = Config {
+            program: "bash".into(),
+            codex_home: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let q = PtyQuery { attach: None, session: Some("0199a1".into()), new: None, term: None, create: 0 };
+
+        assert!(!session_resume_unresolved(&cfg, &q));
+        let cmd = pty_command(&cfg, &q);
+        assert_eq!(cmd.program, "codex");
+        assert_eq!(cmd.args, vec!["resume".to_string(), id.to_string()]);
+        assert_eq!(cmd.cwd.as_deref(), Some(std::path::Path::new("/w/repo")));
+        assert_eq!(codex_resume_leased(&cfg, &q), None, "no writer → resumable");
+
+        if std::process::Command::new("flock").arg("--version").output().is_ok() {
+            let locks = dir.path().join("thread-writer-locks");
+            std::fs::create_dir_all(&locks).unwrap();
+            let lock = locks.join(format!("{id}.lock"));
+            std::fs::write(&lock, b"").unwrap();
+            let mut holder = std::process::Command::new("flock")
+                .args(["-x", lock.to_str().unwrap(), "sleep", "10"])
+                .spawn()
+                .unwrap();
+            let mut leased = None;
+            for _ in 0..50 {
+                leased = codex_resume_leased(&cfg, &q);
+                if leased.is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            holder.kill().ok();
+            holder.wait().ok();
+            assert!(leased.is_some(), "a held writer lock must refuse the resume");
+        }
+
+        // An unknown id is neither Claude nor Codex → refused, not shelled.
+        let unknown = PtyQuery { attach: None, session: Some("ffff".into()), new: None, term: None, create: 0 };
+        assert!(session_resume_unresolved(&cfg, &unknown));
+    }
+
+    #[test]
+    fn codex_thread_marker_is_read_from_bash_output() {
+        assert_eq!(
+            codex_thread_marker("worker: x\ncodex-thread: 0199a1b2-c3d4\nworktree: /w").as_deref(),
+            Some("0199a1b2-c3d4")
+        );
+        assert_eq!(codex_thread_marker("codex-thread: not an id; rm -rf"), None);
+        assert_eq!(codex_thread_marker("nothing here"), None);
     }
 
     #[test]

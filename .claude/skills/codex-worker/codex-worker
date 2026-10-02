@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# codex-worker — run OpenAI Codex (`codex exec`) as a headless worker in its own git
+# worktree, so Claude can delegate, verify, and correct it. See SKILL.md beside this file.
+#
+# State lives in the repo's git dir, invisible to `git status`:
+#   $(git rev-parse --git-common-dir)/codex-workers/<name>/
+#     meta        THREAD= WORKTREE= BRANCH= BASE= (shell-sourceable)
+#     pid         the running exec's pid (removed on exit)
+#     exit        the last run's exit code
+#     events.jsonl  `codex exec --json` stream, appended across runs
+#     last.md     the worker's final message from the latest run
+#     stderr.log  codex's stderr, appended
+#     prompt-N.md every assignment / correction sent, in order
+#
+# `spawn` and `resume` print `codex-thread: <id>`; eigenform reads that line in the
+# parent transcript and nests the Codex thread under the Bash call that started it.
+
+set -euo pipefail
+
+die() { echo "codex-worker: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+usage:
+  codex-worker spawn <name> [opts] -- <prompt | @file | ->   start a worker in a new worktree
+      --base <ref>       branch the worktree from <ref> (default: HEAD)
+      --model <m>        codex model (-m)
+      --effort <e>       reasoning effort (minimal|low|medium|high|xhigh)
+      --sandbox <mode>   read-only | workspace-write (default; read-only with --here)
+      --schema <file>    JSON Schema for the final message (--output-schema)
+      --here             no worktree: run in the current checkout (read-only review work)
+  codex-worker resume <name> -- <message | @file | ->       send a correction (worker must be idle)
+  codex-worker wait <name> [--timeout <secs>]               block until the run ends; print status
+  codex-worker status [<name>]                              one worker, or all
+  codex-worker result <name>                                the worker's final message
+  codex-worker diff <name>                                  what the worker changed vs its base
+  codex-worker review [--base <ref> | --uncommitted | --commit <sha>] [-- <instructions>]
+                                                            Codex reviews THIS checkout's changes
+  codex-worker rm <name> [--force] [--delete-branch]        remove the worktree and state
+EOF
+}
+
+command -v codex >/dev/null 2>&1 || die "codex CLI not on PATH (npm i -g @openai/codex)"
+command -v git >/dev/null 2>&1 || die "git not on PATH"
+
+TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
+COMMON=$(cd "$TOP" && git rev-parse --path-format=absolute --git-common-dir)
+STATE_ROOT="$COMMON/codex-workers"
+WT_ROOT="${CODEX_WORKER_ROOT:-$TOP/.codex-worktrees}"
+
+valid_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad worker name '$1' (use [A-Za-z0-9._-])"; }
+state_of() { echo "$STATE_ROOT/$1"; }
+load() {
+  local s; s=$(state_of "$1")
+  [[ -f "$s/meta" ]] || die "no worker '$1' (codex-worker status lists them)"
+  # shellcheck disable=SC1091
+  source "$s/meta"
+}
+running() { local s; s=$(state_of "$1"); [[ -f "$s/pid" ]] && kill -0 "$(cat "$s/pid")" 2>/dev/null; }
+
+# The prompt after `--`: `-` reads stdin, `@path` reads a file, anything else is literal.
+read_prompt() {
+  [[ $# -gt 0 ]] || die "missing prompt after --"
+  if [[ $# -eq 1 && "$1" == "-" ]]; then cat
+  elif [[ $# -eq 1 && "$1" == @* ]]; then cat -- "${1#@}"
+  else printf '%s\n' "$*"
+  fi
+}
+
+next_prompt_file() {
+  local s=$1 n=1
+  while [[ -e "$s/prompt-$n.md" ]]; do n=$((n + 1)); done
+  echo "$s/prompt-$n.md"
+}
+
+thread_from_events() {
+  grep -m1 '"thread.started"' "$1" 2>/dev/null | sed -n 's/.*"thread_id":"\([^"]*\)".*/\1/p'
+}
+
+# Launch `codex exec <args…>` detached, prompt on stdin, JSON events appended to the log.
+# Echoes nothing; writes pid/exit into the state dir.
+launch() {
+  local s=$1 cwd=$2 prompt_file=$3; shift 3
+  rm -f "$s/exit" "$s/last.md"
+  local runner=(bash -c '
+    s=$1; cwd=$2; prompt=$3; shift 3
+    echo $$ > "$s/pid"
+    cd "$cwd"
+    codex exec --json -o "$s/last.md" "$@" < "$prompt" >> "$s/events.jsonl" 2>> "$s/stderr.log"
+    echo $? > "$s/exit"
+    rm -f "$s/pid"
+  ' codex-worker-run "$s" "$cwd" "$prompt_file" "$@")
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid "${runner[@]}" </dev/null >/dev/null 2>&1 &
+  else
+    nohup "${runner[@]}" </dev/null >/dev/null 2>&1 &
+  fi
+  # Wait for the runner to record its pid.
+  for _ in $(seq 1 50); do [[ -f "$s/pid" || -f "$s/exit" ]] && return 0; sleep 0.1; done
+}
+
+# Block until the events log names a thread (new spawn) or the run dies.
+await_thread() {
+  local s=$1 id=""
+  for _ in $(seq 1 600); do
+    id=$(thread_from_events "$s/events.jsonl")
+    [[ -n "$id" ]] && { echo "$id"; return 0; }
+    if [[ -f "$s/exit" ]]; then break; fi
+    sleep 0.1
+  done
+  echo "codex-worker: codex exited before starting a thread; stderr tail:" >&2
+  tail -n 20 "$s/stderr.log" >&2 || true
+  return 1
+}
+
+# Per-run flags from the worker's meta — resumed runs need them too: `codex exec`
+# defaults to a read-only sandbox, so a correction without `-s` couldn't edit.
+run_args() {
+  args=(-C "$WORKTREE" -s "$SANDBOX")
+  [[ -n "${MODEL:-}" ]] && args+=(-m "$MODEL")
+  [[ -n "${EFFORT:-}" ]] && args+=(-c "model_reasoning_effort=\"$EFFORT\"")
+  return 0
+}
+
+cmd_spawn() {
+  local name=${1:-}; [[ -n "$name" ]] || die "spawn needs a name"; shift; valid_name "$name"
+  local base=HEAD model="" effort="" sandbox="" schema="" here=0
+  while [[ $# -gt 0 && "$1" != "--" ]]; do
+    case "$1" in
+      --base) base=$2; shift 2 ;;
+      --model) model=$2; shift 2 ;;
+      --effort) effort=$2; shift 2 ;;
+      --sandbox) sandbox=$2; shift 2 ;;
+      --schema) schema=$(cd "$(dirname "$2")" && pwd)/$(basename "$2"); shift 2 ;;
+      --here) here=1; shift ;;
+      *) die "unknown spawn option '$1'" ;;
+    esac
+  done
+  [[ "${1:-}" == "--" ]] || die "spawn: put the prompt after --"; shift
+
+  local s; s=$(state_of "$name")
+  [[ -e "$s/meta" ]] && die "worker '$name' exists (resume it, or rm it first)"
+  mkdir -p "$s"
+  local prompt_file; prompt_file=$(next_prompt_file "$s")
+  read_prompt "$@" > "$prompt_file"
+
+  local wt branch="" base_sha
+  base_sha=$(git -C "$TOP" rev-parse --verify "$base^{commit}") || die "bad --base '$base'"
+  if [[ $here -eq 1 ]]; then
+    wt=$TOP
+  else
+    wt="$WT_ROOT/$name"; branch="codex/$name"
+    mkdir -p "$WT_ROOT"
+    # Keep the in-repo worktree root out of `git status` for every checkout.
+    if [[ "$WT_ROOT" == "$TOP"/* ]]; then
+      local rel=${WT_ROOT#"$TOP"/}
+      grep -qxF "/$rel/" "$COMMON/info/exclude" 2>/dev/null || { mkdir -p "$COMMON/info"; echo "/$rel/" >> "$COMMON/info/exclude"; }
+    fi
+    git -C "$TOP" worktree add -q -b "$branch" "$wt" "$base_sha" || { rm -rf "$s"; die "git worktree add failed"; }
+  fi
+  # --here shares your checkout, so it defaults to read-only; a worktree gets write.
+  [[ -n "$sandbox" ]] || { [[ $here -eq 1 ]] && sandbox=read-only || sandbox=workspace-write; }
+  printf 'THREAD=\nWORKTREE=%q\nBRANCH=%q\nBASE=%q\nSANDBOX=%q\nMODEL=%q\nEFFORT=%q\nCREATED=%q\n' \
+    "$wt" "$branch" "$base_sha" "$sandbox" "$model" "$effort" "$(date -u +%FT%TZ)" > "$s/meta"
+
+  local WORKTREE=$wt SANDBOX=$sandbox MODEL=$model EFFORT=$effort args; run_args
+  [[ -n "$schema" ]] && args+=(--output-schema "$schema")
+  launch "$s" "$wt" "$prompt_file" "${args[@]}" -
+
+  local id; id=$(await_thread "$s") || exit 1
+  sed -i.bak "s/^THREAD=.*/THREAD=$id/" "$s/meta" && rm -f "$s/meta.bak"
+  echo "worker: $name"
+  echo "codex-thread: $id"
+  echo "worktree: $wt"
+  [[ -n "$branch" ]] && echo "branch: $branch (from ${base_sha:0:12})"
+  echo "next: codex-worker wait $name   (run in the background; you'll be notified)"
+}
+
+cmd_resume() {
+  local name=${1:-}; [[ -n "$name" ]] || die "resume needs a name"; shift; load "$name"
+  [[ "${1:-}" == "--" ]] || die "resume: put the message after --"; shift
+  [[ -n "$THREAD" ]] || die "worker '$name' has no thread id (did the spawn fail?)"
+  running "$name" && die "worker '$name' is still running; wait for it first"
+  local s; s=$(state_of "$name")
+  local prompt_file; prompt_file=$(next_prompt_file "$s")
+  read_prompt "$@" > "$prompt_file"
+  local args; run_args
+  launch "$s" "$WORKTREE" "$prompt_file" "${args[@]}" resume "$THREAD" -
+  echo "worker: $name"
+  echo "codex-thread: $THREAD"
+  echo "sent: $(basename "$prompt_file")"
+  echo "next: codex-worker wait $name"
+}
+
+print_status() {
+  local name=$1 s; s=$(state_of "$name")
+  # shellcheck disable=SC1091
+  source "$s/meta"
+  local state
+  if running "$name"; then state="running (pid $(cat "$s/pid"))"
+  elif [[ -f "$s/exit" ]]; then
+    local code; code=$(cat "$s/exit")
+    if [[ "$code" == 0 ]]; then state="done"; else state="failed (exit $code)"; fi
+  else state="unknown"; fi
+  echo "== $name: $state"
+  echo "codex-thread: ${THREAD:-?}"
+  echo "worktree: $WORKTREE${BRANCH:+  branch: $BRANCH}"
+  local ev="$s/events.jsonl"
+  if [[ -f "$ev" ]]; then
+    echo "turns: $(grep -c '"turn.completed"' "$ev" || true) completed, $(grep -c '"item.completed"' "$ev" || true) items"
+    local fail; fail=$(grep -E '"type":"(turn.failed|error)"' "$ev" | tail -n 1 || true)
+    [[ -n "$fail" ]] && echo "last error: ${fail:0:400}"
+    local usage; usage=$(grep '"turn.completed"' "$ev" | tail -n 1 | sed -n 's/.*"usage":\({[^}]*}\).*/\1/p')
+    [[ -n "$usage" ]] && echo "last usage: $usage"
+  fi
+  if [[ -n "$BRANCH" && -d "$WORKTREE" ]]; then
+    local changed; changed=$(git -C "$WORKTREE" status --porcelain | wc -l | tr -d ' ')
+    local commits; commits=$(git -C "$WORKTREE" rev-list --count "$BASE..HEAD")
+    echo "changes: $changed uncommitted path(s), $commits commit(s) since base"
+  fi
+  if [[ -f "$s/last.md" ]]; then
+    echo "--- final message (head) ---"
+    head -n 40 "$s/last.md"
+  fi
+}
+
+cmd_status() {
+  if [[ $# -ge 1 ]]; then load "$1"; print_status "$1"; return; fi
+  [[ -d "$STATE_ROOT" ]] || { echo "no workers"; return; }
+  local any=0
+  for d in "$STATE_ROOT"/*/; do
+    [[ -f "$d/meta" ]] || continue
+    any=1; print_status "$(basename "$d")"; echo
+  done
+  [[ $any -eq 1 ]] || echo "no workers"
+}
+
+cmd_wait() {
+  local name=${1:-}; [[ -n "$name" ]] || die "wait needs a name"; shift; load "$name"
+  local timeout=0
+  [[ "${1:-}" == "--timeout" ]] && timeout=${2:?}
+  local start=$SECONDS
+  while running "$name"; do
+    if [[ $timeout -gt 0 && $((SECONDS - start)) -ge $timeout ]]; then
+      echo "codex-worker: still running after ${timeout}s"; print_status "$name"; return 2
+    fi
+    sleep 2
+  done
+  print_status "$name"
+}
+
+cmd_result() {
+  local name=${1:-}; [[ -n "$name" ]] || die "result needs a name"; load "$name"
+  local s; s=$(state_of "$name")
+  [[ -f "$s/last.md" ]] || die "no final message yet (running, or the run failed — see status)"
+  cat "$s/last.md"
+}
+
+cmd_diff() {
+  local name=${1:-}; [[ -n "$name" ]] || die "diff needs a name"; load "$name"
+  [[ -d "$WORKTREE" ]] || die "worktree $WORKTREE is gone"
+  # Committed + uncommitted changes vs the base, plus untracked files' contents.
+  git -C "$WORKTREE" --no-pager diff --stat "$BASE"
+  git -C "$WORKTREE" --no-pager diff "$BASE"
+  git -C "$WORKTREE" ls-files --others --exclude-standard -z | while IFS= read -r -d '' f; do
+    git -C "$WORKTREE" --no-pager diff --no-index -- /dev/null "$f" || true
+  done
+}
+
+cmd_review() {
+  local args=() instructions=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --base) args+=(--base "$2"); shift 2 ;;
+      --commit) args+=(--commit "$2"); shift 2 ;;
+      --uncommitted) args+=(--uncommitted); shift ;;
+      --) shift; instructions=("$@"); break ;;
+      *) die "unknown review option '$1'" ;;
+    esac
+  done
+  [[ ${#args[@]} -gt 0 ]] || args=(--uncommitted)
+  local s; s="$STATE_ROOT/reviews/$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$s"
+  # Foreground: a review is one turn. Run this Bash call in the background if it's long.
+  local rc=0
+  (cd "$TOP" && codex exec --json -o "$s/review.md" review "${args[@]}" ${instructions[@]+"${instructions[*]}"} \
+      < /dev/null > "$s/events.jsonl" 2> "$s/stderr.log") || rc=$?
+  local id; id=$(thread_from_events "$s/events.jsonl")
+  [[ -n "$id" ]] && echo "codex-thread: $id"
+  echo "review: $s/review.md"
+  if [[ -f "$s/review.md" ]]; then cat "$s/review.md"; else tail -n 20 "$s/stderr.log" >&2; fi
+  return $rc
+}
+
+cmd_rm() {
+  local name=${1:-}; [[ -n "$name" ]] || die "rm needs a name"; shift; load "$name"
+  local force=0 delete_branch=0
+  for a in "$@"; do
+    case "$a" in --force) force=1 ;; --delete-branch) delete_branch=1 ;; *) die "unknown rm option '$a'" ;; esac
+  done
+  running "$name" && die "worker '$name' is running"
+  if [[ -n "$BRANCH" && -d "$WORKTREE" ]]; then
+    if [[ $force -eq 1 ]]; then git -C "$TOP" worktree remove --force "$WORKTREE"
+    else git -C "$TOP" worktree remove "$WORKTREE" || die "worktree has changes; --force to discard"; fi
+  fi
+  if [[ $delete_branch -eq 1 && -n "$BRANCH" ]]; then git -C "$TOP" branch -D "$BRANCH"; fi
+  rm -rf "$(state_of "$name")"
+  echo "removed worker $name${BRANCH:+ (branch $BRANCH $([[ $delete_branch -eq 1 ]] && echo deleted || echo kept))}"
+}
+
+sub=${1:-}; shift || true
+case "$sub" in
+  spawn) cmd_spawn "$@" ;;
+  resume) cmd_resume "$@" ;;
+  wait) cmd_wait "$@" ;;
+  status|list|ls) cmd_status "$@" ;;
+  result) cmd_result "$@" ;;
+  diff) cmd_diff "$@" ;;
+  review) cmd_review "$@" ;;
+  rm) cmd_rm "$@" ;;
+  -h|--help|help|"") usage ;;
+  *) die "unknown command '$sub' (codex-worker help)" ;;
+esac

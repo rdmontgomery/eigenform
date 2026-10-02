@@ -1828,6 +1828,12 @@ export function mountShell(appEl: HTMLElement): void {
     const project = el("span", "rail-row-project");
     project.textContent = row.cwdChip;
     meta.append(project);
+    if (row.engine) {
+      const engine = el("span", "rail-row-engine");
+      engine.textContent = row.engine;
+      engine.title = "OpenAI Codex CLI thread — opens with `codex resume`";
+      meta.append(engine);
+    }
     if (row.msgCount !== undefined) {
       const count = el("span", "rail-row-count");
       count.textContent = `~${row.msgCount}`;

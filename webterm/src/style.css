@@ -488,6 +488,19 @@ button { font: inherit; color: inherit; }
 }
 
 /* approximate turn count chip (~N) — quiet, sits in the meta line */
+/* engine chip: a non-Claude thread (Codex) in the rail */
+.rail-row-engine {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 3px;
+  white-space: nowrap;
+}
+
 .rail-row-count {
   font-family: var(--font-mono);
   font-size: 9.5px;

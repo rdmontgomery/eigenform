@@ -388,6 +388,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "eigenform-codex",
  "eigenform-daemon",
  "eigenform-forest",
  "eigenform-inspect",
@@ -404,12 +405,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "eigenform-codex"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "eigenform-daemon"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "eigenform-codex",
  "eigenform-forest",
  "eigenform-inspect",
  "eigenform-projects",

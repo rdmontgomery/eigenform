@@ -42,13 +42,16 @@ export interface Tool {
   /** Preview diff lines for drill-down (present when render has detail). */
   detail?: ToolDetail;
   /**
-   * A resolved async subagent transcript (Agent tool only), nested exchanges from
-   * its own session_json. Absent when the tool isn't an Agent launch, or the
-   * launch's agentId hasn't been resolved yet (still running / not discovered).
+   * A resolved async subagent transcript, nested exchanges from its own
+   * session_json: an Agent launch's agentId, or a Bash call that printed
+   * `codex-thread: <id>` (a Codex worker — agentType "codex", plus threadId and
+   * the thread's live state). Absent until resolved (still running / not found).
    */
   subagent?: {
     agentType: string | null;
     description: string | null;
+    threadId?: string;
+    state?: string;
     exchanges: Exchange[];
   };
 }

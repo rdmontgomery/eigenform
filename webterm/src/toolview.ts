@@ -174,6 +174,39 @@ export function miniDiff(oldS: string, newS: string, cap = 24): MiniDiff {
   return { lines: all.slice(0, cap), truncated: Math.max(0, all.length - cap), add, del };
 }
 
+/**
+ * The +/- lines of one file's section of a Codex `apply_patch` envelope (the
+ * daemon splits a multi-file patch into one Edit/Write per file, `input.patch`).
+ * Headers (`*** …`) and hunk markers (`@@`) are dropped; context lines too —
+ * same glance granularity as miniDiff. Capped at `cap` lines.
+ */
+export function patchDiff(patch: string, cap = 24): MiniDiff {
+  const all: DiffLine[] = [];
+  let add = 0;
+  let del = 0;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("***") || line.startsWith("@@")) continue;
+    if (line.startsWith("+")) {
+      add++;
+      all.push({ sign: "+", text: line.slice(1) });
+    } else if (line.startsWith("-")) {
+      del++;
+      all.push({ sign: "-", text: line.slice(1) });
+    }
+  }
+  return { lines: all.slice(0, cap), truncated: Math.max(0, all.length - cap), add, del };
+}
+
+function patchView(base: ToolView, file: string, patch: string): ToolView {
+  const d = patchDiff(patch);
+  return {
+    ...base,
+    headline: basename(file),
+    accessory: { kind: "stat", add: d.add, del: d.del },
+    body: { kind: "diff", lines: d.lines, truncated: d.truncated },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // toolsSummary — collapsed-turn summary line ("Skill · Bash · Edit")
 // ---------------------------------------------------------------------------
@@ -214,6 +247,21 @@ export function toolView(tool: Tool): ToolView {
     case "bash": {
       const command = input ? str(input.command) : null;
       if (!command) return base;
+      // A Bash call that spawned a Codex worker carries its transcript — render it
+      // like an Agent launch's subagent.
+      if (tool.subagent) {
+        return {
+          ...base,
+          headline: tool.subagent.description ?? command.split("\n")[0]!,
+          accessory: { kind: "subagent", turns: tool.subagent.exchanges.length },
+          body: {
+            kind: "subagent",
+            agentType: tool.subagent.agentType,
+            description: tool.subagent.description,
+            exchanges: tool.subagent.exchanges,
+          },
+        };
+      }
       const view: ToolView = {
         ...base,
         headline: command.split("\n")[0]!,
@@ -248,6 +296,8 @@ export function toolView(tool: Tool): ToolView {
       const file = input ? str(input.file_path) : null;
       const oldS = input ? str(input.old_string) : null;
       const newS = input ? str(input.new_string) : null;
+      const patch = input ? str(input.patch) : null;
+      if (file && patch !== null) return patchView(base, file, patch);
       if (!file || oldS === null || newS === null) {
         // MultiEdit / NotebookEdit shapes — keep the honest fallback.
         return { ...base, headline: file ? basename(file) : tool.arg };
@@ -263,6 +313,8 @@ export function toolView(tool: Tool): ToolView {
 
     case "write": {
       const file = input ? str(input.file_path) : null;
+      const patch = input ? str(input.patch) : null;
+      if (file && patch !== null) return patchView(base, file, patch);
       const content = input ? str(input.content) : null;
       if (!file || content === null) return base;
       const d = miniDiff("", content);
