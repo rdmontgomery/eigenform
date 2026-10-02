@@ -78,6 +78,7 @@ Then `ef` launches the app and `ef daemon`, `ef sessions`, `ef surgery …` all 
 just dev            # esbuild --watch + cargo-watch: edit .ts → browser reloads, .rs → daemon restarts
 just run            # one-shot: build the app, run the daemon, open the browser
 just test           # Rust workspace + webterm unit tests (never spawns claude)
+just fmt            # rustfmt the workspace — CI rejects unformatted Rust
 ```
 
 In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so you don't rebuild the binary to see UI changes — `just dev` rebuilds the bundle and live-reloads the page.

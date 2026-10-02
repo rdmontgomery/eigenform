@@ -92,19 +92,21 @@ async fn create_flag_creates_dir_and_spawns_pty() {
     assert!(!new_path.exists(), "pre: dir must not exist");
 
     let new_str = new_path.to_str().unwrap();
-    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
-        &base,
-        &format!("new={new_str}&create=1"),
-    ))
-    .await
-    .expect("ws upgrade ok");
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(ws_url(&base, &format!("new={new_str}&create=1")))
+            .await
+            .expect("ws upgrade ok");
 
     let hello = first_text_or_close(&mut ws).await;
     assert!(
         hello.is_some(),
         "daemon must send a pty hello frame (directory created + spawn succeeded)"
     );
-    assert_eq!(hello.unwrap()["type"], "pty", "hello frame type must be 'pty'");
+    assert_eq!(
+        hello.unwrap()["type"],
+        "pty",
+        "hello frame type must be 'pty'"
+    );
     assert!(
         new_path.exists(),
         "daemon must have created the directory before spawning"
@@ -128,12 +130,10 @@ async fn create_flag_outside_workspace_root_is_allowed() {
     assert!(!outside.exists(), "pre: dir must not exist");
 
     let outside_str = outside.to_str().unwrap();
-    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
-        &base,
-        &format!("new={outside_str}&create=1"),
-    ))
-    .await
-    .expect("ws upgrade ok");
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(ws_url(&base, &format!("new={outside_str}&create=1")))
+            .await
+            .expect("ws upgrade ok");
 
     let hello = first_text_or_close(&mut ws).await;
     assert!(
@@ -163,12 +163,10 @@ async fn create_flag_normalizes_dotdot_and_creates() {
     assert!(!resolved.exists(), "pre: normalized target must not exist");
 
     let dotted_str = dotted.to_str().unwrap();
-    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
-        &base,
-        &format!("new={dotted_str}&create=1"),
-    ))
-    .await
-    .expect("ws upgrade ok");
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(ws_url(&base, &format!("new={dotted_str}&create=1")))
+            .await
+            .expect("ws upgrade ok");
 
     let hello = first_text_or_close(&mut ws).await;
     assert!(hello.is_some(), "normalized `..` path must spawn");
@@ -193,12 +191,9 @@ async fn no_create_flag_missing_dir_is_refused() {
     assert!(!new_path.exists(), "pre: dir must not exist");
 
     let new_str = new_path.to_str().unwrap();
-    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
-        &base,
-        &format!("new={new_str}"),
-    ))
-    .await
-    .expect("ws upgrade ok");
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(&base, &format!("new={new_str}")))
+        .await
+        .expect("ws upgrade ok");
 
     let reason = close_reason(&mut ws).await;
     assert!(
@@ -221,12 +216,10 @@ async fn create_flag_with_existing_dir_spawns() {
     let (base, workspace) = start_with_workspace().await;
 
     let root_str = workspace.path().to_str().unwrap();
-    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(
-        &base,
-        &format!("new={root_str}&create=1"),
-    ))
-    .await
-    .expect("ws upgrade ok");
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(ws_url(&base, &format!("new={root_str}&create=1")))
+            .await
+            .expect("ws upgrade ok");
 
     let hello = first_text_or_close(&mut ws).await;
     assert!(

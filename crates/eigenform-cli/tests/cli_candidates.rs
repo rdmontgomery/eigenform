@@ -54,20 +54,40 @@ fn candidates_recents_first_deduped_then_subdirs() {
         home.path(),
         &["--workspace", workspace.path().to_str().unwrap()],
     );
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
 
     // beta appears once (recent), alpha once (subdir) — 2 rows total (no dup).
-    assert_eq!(lines.len(), 2, "expected 2 rows (beta+alpha), got:\n{stdout}");
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected 2 rows (beta+alpha), got:\n{stdout}"
+    );
 
     // First row: beta, tagged [recent]
-    assert!(lines[0].contains("beta"), "first row must be beta (recent):\n{stdout}");
-    assert!(lines[0].contains("[recent]"), "first row must carry [recent] tag:\n{stdout}");
+    assert!(
+        lines[0].contains("beta"),
+        "first row must be beta (recent):\n{stdout}"
+    );
+    assert!(
+        lines[0].contains("[recent]"),
+        "first row must carry [recent] tag:\n{stdout}"
+    );
 
     // Second row: alpha, no [recent] tag
-    assert!(lines[1].contains("alpha"), "second row must be alpha (subdir):\n{stdout}");
-    assert!(!lines[1].contains("[recent]"), "alpha must not carry [recent] tag:\n{stdout}");
+    assert!(
+        lines[1].contains("alpha"),
+        "second row must be alpha (subdir):\n{stdout}"
+    );
+    assert!(
+        !lines[1].contains("[recent]"),
+        "alpha must not carry [recent] tag:\n{stdout}"
+    );
 }
 
 #[test]
@@ -75,14 +95,24 @@ fn candidates_no_workspace_shows_only_recents() {
     let (home, _workspace) = fixture();
     // No --workspace flag; HOME has no ~/projects so workspace_root resolves to None.
     let out = run(home.path(), &[]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
 
     // Only the one recent cwd (deduped from two sessions).
     assert_eq!(lines.len(), 1, "expected 1 row (beta only), got:\n{stdout}");
-    assert!(lines[0].contains("beta"), "should be the beta cwd:\n{stdout}");
-    assert!(lines[0].contains("[recent]"), "must be tagged [recent]:\n{stdout}");
+    assert!(
+        lines[0].contains("beta"),
+        "should be the beta cwd:\n{stdout}"
+    );
+    assert!(
+        lines[0].contains("[recent]"),
+        "must be tagged [recent]:\n{stdout}"
+    );
 }
 
 #[test]
@@ -90,9 +120,16 @@ fn candidates_empty_when_no_projects_and_no_workspace() {
     let home = tempdir().unwrap();
     // Projects dir doesn't exist; no --workspace.
     let out = run(home.path(), &[]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.trim().is_empty(), "expected empty output, got:\n{stdout}");
+    assert!(
+        stdout.trim().is_empty(),
+        "expected empty output, got:\n{stdout}"
+    );
 }
 
 #[test]
@@ -106,11 +143,18 @@ fn candidates_workspace_subdirs_without_any_recents() {
         home.path(),
         &["--workspace", workspace.path().to_str().unwrap()],
     );
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
 
     assert_eq!(lines.len(), 1, "one subdir row:\n{stdout}");
     assert!(lines[0].contains("gamma"), "must show gamma:\n{stdout}");
-    assert!(!lines[0].contains("[recent]"), "gamma is not recent:\n{stdout}");
+    assert!(
+        !lines[0].contains("[recent]"),
+        "gamma is not recent:\n{stdout}"
+    );
 }

@@ -278,7 +278,11 @@ pub struct RenderOpts {
 
 impl RenderOpts {
     fn width_or_max(&self) -> usize {
-        if self.width == 0 { usize::MAX } else { self.width }
+        if self.width == 0 {
+            usize::MAX
+        } else {
+            self.width
+        }
     }
 }
 
@@ -310,7 +314,10 @@ fn display_path(path: &Path, home: Option<&Path>, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     let start = chars.len().saturating_sub(max.saturating_sub(1));
     let tail: String = chars[start..].iter().collect();
-    let snapped = tail.split_once('/').map(|(_, rest)| rest.to_string()).unwrap_or(tail);
+    let snapped = tail
+        .split_once('/')
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or(tail);
     format!("…/{snapped}")
 }
 
@@ -335,7 +342,11 @@ pub fn render_tree(scan: &[LayeredSkill], opts: &RenderOpts) -> String {
     if let Some(note) = &opts.note {
         summary.push(note.clone());
     }
-    summary.push(format!("{} skill{}", groups.len(), if groups.len() == 1 { "" } else { "s" }));
+    summary.push(format!(
+        "{} skill{}",
+        groups.len(),
+        if groups.len() == 1 { "" } else { "s" }
+    ));
     if scan.len() != groups.len() {
         summary.push(format!("{} sources", scan.len()));
     }
@@ -386,11 +397,23 @@ pub fn render_tree(scan: &[LayeredSkill], opts: &RenderOpts) -> String {
         if contribs.len() == 1 {
             // Sole source: the layer is already on the header, tokens equal the
             // total — only the path carries new information.
-            let path = display_path(&contribs[0].skill.source_path, home, width.saturating_sub(2));
+            let path = display_path(
+                &contribs[0].skill.source_path,
+                home,
+                width.saturating_sub(2),
+            );
             let _ = writeln!(out, "  {path}");
         } else {
-            let tag_w = contribs.iter().map(|ls| layer_tag(&ls.layer).chars().count()).max().unwrap_or(0);
-            let tok_w = contribs.iter().map(|ls| fmt_tokens(ls.skill.tokens).chars().count()).max().unwrap_or(0);
+            let tag_w = contribs
+                .iter()
+                .map(|ls| layer_tag(&ls.layer).chars().count())
+                .max()
+                .unwrap_or(0);
+            let tok_w = contribs
+                .iter()
+                .map(|ls| fmt_tokens(ls.skill.tokens).chars().count())
+                .max()
+                .unwrap_or(0);
             for ls in contribs {
                 let tag = layer_tag(&ls.layer);
                 let tok = fmt_tokens(ls.skill.tokens);
@@ -414,13 +437,8 @@ fn layer_tag(l: &Layer) -> String {
         Layer::Global => "global".into(),
         Layer::Plugin { name } => format!("plugin:{name}"),
         Layer::Repo { project: None } => "repo".into(),
-        Layer::Repo {
-            project: Some(cwd),
-        } => {
-            let label = cwd
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("?");
+        Layer::Repo { project: Some(cwd) } => {
+            let label = cwd.file_name().and_then(|n| n.to_str()).unwrap_or("?");
             format!("repo:{label}")
         }
         Layer::Cwd => "cwd".into(),

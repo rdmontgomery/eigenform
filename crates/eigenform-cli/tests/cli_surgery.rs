@@ -36,7 +36,11 @@ fn fork_writes_a_new_session_beside_the_source_and_prints_its_uuid() {
     std::fs::write(&src, session_text()).unwrap();
 
     let out = run(&["surgery", "fork", src.to_str().unwrap(), "--at", A1]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let new_uuid = String::from_utf8(out.stdout).unwrap().trim().to_string();
     assert!(!new_uuid.is_empty());
@@ -60,10 +64,21 @@ fn inject_reads_content_from_a_file() {
     std::fs::write(&content, "a synthetic instruction").unwrap();
 
     let out = run(&[
-        "surgery", "inject", src.to_str().unwrap(),
-        "--at", A1, "--as", "user", "--content", content.to_str().unwrap(),
+        "surgery",
+        "inject",
+        src.to_str().unwrap(),
+        "--at",
+        A1,
+        "--as",
+        "user",
+        "--content",
+        content.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let new_uuid = String::from_utf8(out.stdout).unwrap().trim().to_string();
     let new_path = dir.path().join(format!("{new_uuid}.jsonl"));
@@ -85,11 +100,18 @@ fn fork_resolves_the_source_by_uuid_prefix() {
         .args(["surgery", "fork", "11111111", "--at", A1])
         .output()
         .expect("run eigenform");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let new_uuid = String::from_utf8(out.stdout).unwrap().trim().to_string();
     assert_ne!(new_uuid, OLD);
-    assert!(pdir.join(format!("{new_uuid}.jsonl")).exists(), "fork written beside source");
+    assert!(
+        pdir.join(format!("{new_uuid}.jsonl")).exists(),
+        "fork written beside source"
+    );
 }
 
 #[test]
@@ -98,6 +120,12 @@ fn unknown_turn_exits_nonzero() {
     let src = dir.path().join(format!("{OLD}.jsonl"));
     std::fs::write(&src, session_text()).unwrap();
 
-    let out = run(&["surgery", "rewind", src.to_str().unwrap(), "--to", "does-not-exist"]);
+    let out = run(&[
+        "surgery",
+        "rewind",
+        src.to_str().unwrap(),
+        "--to",
+        "does-not-exist",
+    ]);
     assert!(!out.status.success());
 }

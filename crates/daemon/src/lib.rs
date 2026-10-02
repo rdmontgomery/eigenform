@@ -115,7 +115,10 @@ pub fn app(config: Config) -> Router {
         .route("/api/forest", get(forest_route))
         .route("/api/watch/forest", get(forest_watch_route))
         .route("/api/claims", get(claims_route))
-        .route("/api/claims/:pid", axum::routing::delete(claim_delete_route))
+        .route(
+            "/api/claims/:pid",
+            axum::routing::delete(claim_delete_route),
+        )
         .route("/api/inspect", get(inspect_route))
         .route("/api/candidates", get(candidates_route))
         .route("/api/path", get(path_probe_route))
@@ -183,15 +186,16 @@ async fn session_json_route(
     // while the parent is quiet won't invalidate this cache until the parent changes too.
     match SESSION_CACHE.get_or_render(&path, || {
         let contents = std::fs::read_to_string(&path).unwrap_or_default();
-        let session = eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+        let session =
+            eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
 
         let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
             eigenform_forest::enumerate_subagents(&path)
                 .into_iter()
                 .filter_map(|stub| {
                     let contents = std::fs::read_to_string(&stub.path).ok()?;
-                    let sub_session =
-                        eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+                    let sub_session = eigenform_surgery::Session::parse_str(&contents)
+                        .unwrap_or_else(|e| match e {});
                     Some((
                         stub.agent_id,
                         eigenform_render::ResolvedSubagent {
@@ -339,16 +343,21 @@ fn fork_session(
         .projects_dir
         .as_ref()
         .ok_or((StatusCode::NOT_FOUND, "no projects dir configured"))?;
-    let src_path =
-        eigenform_forest::resolve(dir, src_uuid).map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
+    let src_path = eigenform_forest::resolve(dir, src_uuid)
+        .map_err(|_| (StatusCode::NOT_FOUND, "no such session"))?;
     let contents = std::fs::read_to_string(&src_path)
         .map_err(|_| (StatusCode::NOT_FOUND, "could not read session"))?;
     let session = eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
-    let forked = eigenform_surgery::fork_before(&session, turn)
-        .map_err(|_| (StatusCode::UNPROCESSABLE_ENTITY, "cannot fork before that turn"))?;
-    let project_dir = src_path
-        .parent()
-        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "session path has no parent"))?;
+    let forked = eigenform_surgery::fork_before(&session, turn).map_err(|_| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "cannot fork before that turn",
+        )
+    })?;
+    let project_dir = src_path.parent().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "session path has no parent",
+    ))?;
     eigenform_surgery::write(&forked, project_dir)
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not write fork"))
 }
@@ -520,11 +529,16 @@ async fn claims_route(State(state): State<AppState>) -> Response {
                 let stub = projects
                     .as_deref()
                     .and_then(|dir| eigenform_forest::resolve_stub(dir, &c.session_id).ok());
-                let title = stub.as_ref().and_then(|st| eigenform_forest::session_ref(st).title);
+                let title = stub
+                    .as_ref()
+                    .and_then(|st| eigenform_forest::session_ref(st).title);
                 let entrypoint = c.entrypoint.clone().or_else(|| {
-                    stub.as_ref().and_then(|st| eigenform_forest::session_entrypoint(&st.path))
+                    stub.as_ref()
+                        .and_then(|st| eigenform_forest::session_entrypoint(&st.path))
                 });
-                let headless = entrypoint.as_deref().is_some_and(eigenform_forest::is_headless);
+                let headless = entrypoint
+                    .as_deref()
+                    .is_some_and(eigenform_forest::is_headless);
                 serde_json::json!({
                     "pid": c.pid,
                     "sessionId": c.session_id,
@@ -561,7 +575,10 @@ async fn claim_delete_route(
     if pid == 0 || pid == std::process::id() {
         return (StatusCode::BAD_REQUEST, "refusing to signal that pid").into_response();
     }
-    let Some(claim) = eigenform_forest::read_claims(sessions).into_iter().find(|c| c.pid == pid) else {
+    let Some(claim) = eigenform_forest::read_claims(sessions)
+        .into_iter()
+        .find(|c| c.pid == pid)
+    else {
         return (StatusCode::NOT_FOUND, "no claim for that pid").into_response();
     };
     let action = match claim.health {
@@ -676,16 +693,16 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
         }
     });
 
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
-        .map(|json| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(json)));
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|json| {
+        Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(json))
+    });
     // Keep-alive comments force a periodic write so a disconnected client is detected
     // (the write fails) and the stream + connection are dropped promptly. Without it, a
     // dead SSE connection to a quiet endpoint lingers until the next real event — which
     // may never come — leaking ESTABLISHED sockets against the browser's per-origin cap.
     axum::response::sse::Sse::new(stream)
         .keep_alive(
-            axum::response::sse::KeepAlive::new()
-                .interval(std::time::Duration::from_secs(10)),
+            axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(10)),
         )
         .into_response()
 }
@@ -701,10 +718,13 @@ async fn candidates_route(State(state): State<AppState>) -> Response {
     // Recents: deduplicated cwds from recent sessions, in recency order.
     // Dedup delegated to eigenform_projects::unique_cwds (shared with CLI mirror).
     let recents: Vec<PathBuf> = if let Some(dir) = &cfg.projects_dir {
-        match eigenform_forest::list(dir, eigenform_forest::Scope::AllProjects, None, chrono::Utc::now()) {
-            Ok(sessions) => {
-                eigenform_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd))
-            }
+        match eigenform_forest::list(
+            dir,
+            eigenform_forest::Scope::AllProjects,
+            None,
+            chrono::Utc::now(),
+        ) {
+            Ok(sessions) => eigenform_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd)),
             Err(_) => vec![],
         }
     } else {
@@ -788,13 +808,13 @@ async fn events_stream_route(State(state): State<AppState>) -> Response {
         }
     });
 
-    let stream = tokio_stream::wrappers::ReceiverStream::new(out_rx)
-        .map(|json| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(json)));
+    let stream = tokio_stream::wrappers::ReceiverStream::new(out_rx).map(|json| {
+        Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(json))
+    });
     // Keep-alive so a disconnected client is reaped promptly (see `watch_sse`).
     axum::response::sse::Sse::new(stream)
         .keep_alive(
-            axum::response::sse::KeepAlive::new()
-                .interval(std::time::Duration::from_secs(10)),
+            axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(10)),
         )
         .into_response()
 }
@@ -821,10 +841,7 @@ async fn path_probe_route(
 
 /// `GET /api/watch/:uuid` — Server-Sent Events: a `change` event each time the session's
 /// JSONL is written (the live-follow signal for the right pane).
-async fn watch_route(
-    AxumPath(uuid): AxumPath<String>,
-    State(state): State<AppState>,
-) -> Response {
+async fn watch_route(AxumPath(uuid): AxumPath<String>, State(state): State<AppState>) -> Response {
     let cfg = &state.config;
     let Some(dir) = &cfg.projects_dir else {
         return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
@@ -887,8 +904,12 @@ fn watch_channel(
             Ok(w) => w,
             Err(_) => return,
         };
-        if notify::Watcher::watch(&mut watcher, &watch_dir, notify::RecursiveMode::NonRecursive)
-            .is_err()
+        if notify::Watcher::watch(
+            &mut watcher,
+            &watch_dir,
+            notify::RecursiveMode::NonRecursive,
+        )
+        .is_err()
         {
             return;
         }
@@ -896,9 +917,10 @@ fn watch_channel(
             match raw_rx.recv_timeout(std::time::Duration::from_secs(1)) {
                 Ok(Ok(event)) => {
                     let touches = match &target {
-                        Some(name) => {
-                            event.paths.iter().any(|p| p.file_name() == Some(name.as_os_str()))
-                        }
+                        Some(name) => event
+                            .paths
+                            .iter()
+                            .any(|p| p.file_name() == Some(name.as_os_str())),
                         None => true,
                     };
                     if touches && tx.blocking_send(()).is_err() {
@@ -928,15 +950,15 @@ fn watch_channel(
 /// is dropped — including when the client disconnects while the directory is quiet.
 fn watch_sse(watch_dir: PathBuf, target: Option<std::ffi::OsString>) -> Response {
     let (rx, _handle) = watch_channel(watch_dir, target);
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
-        .map(|_| Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data("change")));
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|_| {
+        Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data("change"))
+    });
     // See the forest watch above: keep-alive comments let the daemon notice and reap a
     // disconnected client within the interval instead of leaking the connection until the
     // session's next filesystem write (which, for an idle session, may never arrive).
     axum::response::sse::Sse::new(stream)
         .keep_alive(
-            axum::response::sse::KeepAlive::new()
-                .interval(std::time::Duration::from_secs(10)),
+            axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(10)),
         )
         .into_response()
 }
@@ -1443,7 +1465,13 @@ fn origin_is_local(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
         return true; // no Origin → not a browser CSRF
     };
-    let authority = origin.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    let authority = origin
+        .split("://")
+        .nth(1)
+        .unwrap_or("")
+        .split('/')
+        .next()
+        .unwrap_or("");
     matches!(host_of(authority), "127.0.0.1" | "localhost" | "::1")
 }
 
@@ -1507,7 +1535,12 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
 
     // TOCTOU: if the child exited before we subscribed, the exit broadcast missed us.
     // Synthesize it to this socket only. (Done after `attach` so we never miss both.)
-    if live.exited_at().is_some() && sink.send(Message::Text(r#"{"type":"exit"}"#.into())).await.is_err() {
+    if live.exited_at().is_some()
+        && sink
+            .send(Message::Text(r#"{"type":"exit"}"#.into()))
+            .await
+            .is_err()
+    {
         return;
     }
 
@@ -1703,13 +1736,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
         std::fs::write(&path, b"start\n").unwrap();
-        let (mut rx, _h) =
-            watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
+        let (mut rx, _h) = watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
         // Let the watcher arm (the SSE response returns before watch() completes).
         std::thread::sleep(Duration::from_millis(300));
 
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         f.write_all(b"more\n").unwrap();
         f.flush().unwrap();
 
@@ -1722,8 +1757,7 @@ mod tests {
     #[test]
     fn watch_channel_ignores_non_target_files() {
         let dir = tempfile::tempdir().unwrap();
-        let (mut rx, _h) =
-            watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
+        let (mut rx, _h) = watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
         std::thread::sleep(Duration::from_millis(300));
 
         std::fs::write(dir.path().join("other.txt"), b"noise\n").unwrap();
@@ -1741,8 +1775,7 @@ mod tests {
         // implementation blocked on the event channel and only noticed the dead client after
         // the next write, stranding the thread + inotify instance for quiet sessions.
         let dir = tempfile::tempdir().unwrap();
-        let (rx, handle) =
-            watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
+        let (rx, handle) = watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
         std::thread::sleep(Duration::from_millis(200)); // let it arm
 
         drop(rx); // client gone; directory stays quiet (no writes follow)
@@ -1758,7 +1791,10 @@ mod tests {
         // Normal path — unchanged.
         assert_eq!(normalize_path(Path::new("/a/b/c")), PathBuf::from("/a/b/c"));
         // Single `..` — pops one component.
-        assert_eq!(normalize_path(Path::new("/a/b/../c")), PathBuf::from("/a/c"));
+        assert_eq!(
+            normalize_path(Path::new("/a/b/../c")),
+            PathBuf::from("/a/c")
+        );
         // Double `..` — escapes the workspace.
         assert_eq!(
             normalize_path(Path::new("/workspace/child/../../outside")),
@@ -1803,8 +1839,15 @@ mod tests {
         let r1 = cache.get_or_render(&path, || render("JSON-A")).unwrap();
         let r2 = cache.get_or_render(&path, || render("JSON-B")).unwrap();
         assert_eq!(&*r1, "JSON-A");
-        assert_eq!(&*r2, "JSON-A", "second view must be served from cache, not re-rendered");
-        assert_eq!(calls.get(), 1, "render must run only once for an unchanged file");
+        assert_eq!(
+            &*r2, "JSON-A",
+            "second view must be served from cache, not re-rendered"
+        );
+        assert_eq!(
+            calls.get(),
+            1,
+            "render must run only once for an unchanged file"
+        );
 
         // Mutating the file changes its (mtime, len) stamp → the cache re-renders.
         std::fs::write(&path, "three!").unwrap();
@@ -1887,7 +1930,8 @@ mod tests {
         let uuid = "abcdef00-0000-4000-8000-000000000000";
         std::fs::write(
             pdir.join(format!("{uuid}.jsonl")),
-            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{uuid}"}}"#) + "\n",
+            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{uuid}"}}"#)
+                + "\n",
         )
         .unwrap();
 
@@ -1899,34 +1943,73 @@ mod tests {
 
         let resumed = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, term: None, create: 0 },
+            &PtyQuery {
+                attach: None,
+                session: Some("abcdef00".into()),
+                new: None,
+                term: None,
+                create: 0,
+            },
         );
         assert_eq!(resumed.program, "claude");
         assert_eq!(resumed.args, vec!["--resume".to_string(), uuid.to_string()]);
-        assert_eq!(resumed.cwd.as_deref(), Some(std::path::Path::new("/home/me/proj")));
+        assert_eq!(
+            resumed.cwd.as_deref(),
+            Some(std::path::Path::new("/home/me/proj"))
+        );
 
         // No session → the configured default, never claude.
-        let default = pty_command(&cfg, &PtyQuery { attach: None, session: None, new: None, term: None, create: 0 });
+        let default = pty_command(
+            &cfg,
+            &PtyQuery {
+                attach: None,
+                session: None,
+                new: None,
+                term: None,
+                create: 0,
+            },
+        );
         assert_eq!(default.program, "bash");
 
         // new=<cwd> → fresh claude in that dir, with a watch target for its new JSONL.
         let fresh = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: None, new: Some("/home/me/fresh".into()), term: None, create: 0 },
+            &PtyQuery {
+                attach: None,
+                session: None,
+                new: Some("/home/me/fresh".into()),
+                term: None,
+                create: 0,
+            },
         );
         assert_eq!(fresh.program, "claude");
         assert!(fresh.args.is_empty());
-        assert_eq!(fresh.cwd.as_deref(), Some(std::path::Path::new("/home/me/fresh")));
-        assert_eq!(fresh.watch.as_ref().map(|(_, d)| d.as_str()), Some("-home-me-fresh"));
+        assert_eq!(
+            fresh.cwd.as_deref(),
+            Some(std::path::Path::new("/home/me/fresh"))
+        );
+        assert_eq!(
+            fresh.watch.as_ref().map(|(_, d)| d.as_str()),
+            Some("-home-me-fresh")
+        );
 
         // term=<cwd> → the configured program (a shell), never claude, no watch.
         let term = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: None, new: None, term: Some("/home/me/term".into()), create: 0 },
+            &PtyQuery {
+                attach: None,
+                session: None,
+                new: None,
+                term: Some("/home/me/term".into()),
+                create: 0,
+            },
         );
         assert_eq!(term.program, "bash");
         assert!(term.args.is_empty());
-        assert_eq!(term.cwd.as_deref(), Some(std::path::Path::new("/home/me/term")));
+        assert_eq!(
+            term.cwd.as_deref(),
+            Some(std::path::Path::new("/home/me/term"))
+        );
         assert!(term.watch.is_none());
 
         // new= takes precedence over term= if a caller somehow sets both.
@@ -1941,7 +2024,10 @@ mod tests {
             },
         );
         assert_eq!(both.program, "claude");
-        assert_eq!(both.cwd.as_deref(), Some(std::path::Path::new("/home/me/fresh")));
+        assert_eq!(
+            both.cwd.as_deref(),
+            Some(std::path::Path::new("/home/me/fresh"))
+        );
     }
 
     #[test]
@@ -1985,7 +2071,13 @@ mod tests {
         // The vanished-cwd resume still resolves to claude --resume in the recorded cwd...
         let vanished = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: Some("abcdef00".into()), new: None, term: None, create: 0 },
+            &PtyQuery {
+                attach: None,
+                session: Some("abcdef00".into()),
+                new: None,
+                term: None,
+                create: 0,
+            },
         );
         assert_eq!(
             vanished.cwd.as_deref(),
@@ -2000,7 +2092,13 @@ mod tests {
         // A resume whose cwd is still present is NOT flagged — it spawns normally.
         let present = pty_command(
             &cfg,
-            &PtyQuery { attach: None, session: Some("abcdef01".into()), new: None, term: None, create: 0 },
+            &PtyQuery {
+                attach: None,
+                session: Some("abcdef01".into()),
+                new: None,
+                term: None,
+                create: 0,
+            },
         );
         assert_eq!(present.cwd.as_deref(), Some(live_cwd.as_path()));
         assert!(
@@ -2019,7 +2117,8 @@ mod tests {
         let known = "abcdef00-0000-4000-8000-000000000000";
         std::fs::write(
             pdir.join(format!("{known}.jsonl")),
-            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{known}"}}"#) + "\n",
+            format!(r#"{{"type":"user","uuid":"u1","cwd":"/home/me/proj","sessionId":"{known}"}}"#)
+                + "\n",
         )
         .unwrap();
 
@@ -2045,8 +2144,14 @@ mod tests {
 
         // No projects_dir configured at all (e.g. a reinstall that lost the config):
         // every resume is unresolvable, so it's refused rather than shelled.
-        let cfg_no_projects = Config { projects_dir: None, ..cfg };
-        assert!(session_resume_unresolved(&cfg_no_projects, &q(Some("abcdef00"))));
+        let cfg_no_projects = Config {
+            projects_dir: None,
+            ..cfg
+        };
+        assert!(session_resume_unresolved(
+            &cfg_no_projects,
+            &q(Some("abcdef00"))
+        ));
     }
 
     #[test]
@@ -2082,10 +2187,17 @@ mod tests {
         let forked = pdir.join(format!("{new_uuid}.jsonl"));
         let body = std::fs::read_to_string(&forked).expect("fork file written beside source");
         assert!(body.contains("first prompt"), "the kept prefix survives");
-        assert!(!body.contains("second prompt"), "the edited turn is dropped (delivered live)");
-        assert!(!body.contains("reply two"), "the downstream reply is dropped");
+        assert!(
+            !body.contains("second prompt"),
+            "the edited turn is dropped (delivered live)"
+        );
+        assert!(
+            !body.contains("reply two"),
+            "the downstream reply is dropped"
+        );
         // resumable: the new resume head is the completed-turn system row, not a user turn
-        let forked_session = eigenform_surgery::Session::parse_str(&body).unwrap_or_else(|e| match e {});
+        let forked_session =
+            eigenform_surgery::Session::parse_str(&body).unwrap_or_else(|e| match e {});
         assert_eq!(forked_session.resume_leaf().as_deref(), Some("s1"));
 
         // copy-on-fork: the source is byte-for-byte untouched
@@ -2110,6 +2222,9 @@ mod tests {
         assert_eq!(new_session_uuid(&old, projects, dir_name, &baseline), None);
         // a file under a different project → ignored
         let other = projects.join("-other").join("x.jsonl");
-        assert_eq!(new_session_uuid(&other, projects, dir_name, &baseline), None);
+        assert_eq!(
+            new_session_uuid(&other, projects, dir_name, &baseline),
+            None
+        );
     }
 }

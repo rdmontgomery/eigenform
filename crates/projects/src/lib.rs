@@ -102,7 +102,9 @@ pub fn immediate_subdirs(root: &Path) -> Result<Vec<PathBuf>> {
 /// free of a dependency on eigenform-forest's `Session` type.
 pub fn unique_cwds<I: IntoIterator<Item = PathBuf>>(cwds: I) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
-    cwds.into_iter().filter(|c| seen.insert(c.clone())).collect()
+    cwds.into_iter()
+        .filter(|c| seen.insert(c.clone()))
+        .collect()
 }
 
 /// Merge recent session cwds with the immediate subdirs of the code root into

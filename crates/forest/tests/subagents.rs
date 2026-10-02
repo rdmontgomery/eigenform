@@ -35,26 +35,44 @@ fn discovers_a_subagent_with_its_meta() {
     write_subagent(
         dir.path(),
         "ac884004cd3d8238f",
-        Some(r#"{"agentType":"general-purpose","description":"Survey branches for PR candidates","toolUseId":"toolu_01","spawnDepth":1}"#),
+        Some(
+            r#"{"agentType":"general-purpose","description":"Survey branches for PR candidates","toolUseId":"toolu_01","spawnDepth":1}"#,
+        ),
     );
     let session_path = dir.path().join("-proj/session-uuid.jsonl");
 
     let subs = enumerate_subagents(&session_path);
     assert_eq!(subs.len(), 1);
     assert_eq!(subs[0].agent_id, "ac884004cd3d8238f");
-    assert!(subs[0].path.ends_with("subagents/agent-ac884004cd3d8238f.jsonl"));
+    assert!(subs[0]
+        .path
+        .ends_with("subagents/agent-ac884004cd3d8238f.jsonl"));
     assert_eq!(subs[0].agent_type.as_deref(), Some("general-purpose"));
-    assert_eq!(subs[0].description.as_deref(), Some("Survey branches for PR candidates"));
+    assert_eq!(
+        subs[0].description.as_deref(),
+        Some("Survey branches for PR candidates")
+    );
 }
 
 #[test]
 fn discovers_multiple_subagents() {
     let dir = fixture();
-    write_subagent(dir.path(), "one", Some(r#"{"agentType":"claude","description":"first"}"#));
-    write_subagent(dir.path(), "two", Some(r#"{"agentType":"claude","description":"second"}"#));
+    write_subagent(
+        dir.path(),
+        "one",
+        Some(r#"{"agentType":"claude","description":"first"}"#),
+    );
+    write_subagent(
+        dir.path(),
+        "two",
+        Some(r#"{"agentType":"claude","description":"second"}"#),
+    );
     let session_path = dir.path().join("-proj/session-uuid.jsonl");
 
-    let mut ids: Vec<String> = enumerate_subagents(&session_path).into_iter().map(|s| s.agent_id).collect();
+    let mut ids: Vec<String> = enumerate_subagents(&session_path)
+        .into_iter()
+        .map(|s| s.agent_id)
+        .collect();
     ids.sort();
     assert_eq!(ids, vec!["one", "two"]);
 }

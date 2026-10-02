@@ -43,7 +43,11 @@ fn parse_extracts_the_session_id() {
 fn parse_classifies_the_three_turn_roles_with_uuid_and_parent() {
     let session = Session::parse_str(&convo()).expect("parse");
     let turns = session.turns();
-    assert_eq!(turns.len(), 3, "user, assistant, system are turns; mode + last-prompt are not");
+    assert_eq!(
+        turns.len(),
+        3,
+        "user, assistant, system are turns; mode + last-prompt are not"
+    );
 
     assert_eq!(turns[0].role, Role::User);
     assert_eq!(turns[0].uuid, U1);

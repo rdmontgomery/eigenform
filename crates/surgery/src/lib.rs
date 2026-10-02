@@ -232,13 +232,10 @@ impl Session {
 
     /// The resume head: the `leafUuid` of the last `last-prompt` row, if any.
     pub fn resume_leaf(&self) -> Option<String> {
-        self.rows
-            .iter()
-            .rev()
-            .find_map(|r| match r {
-                Row::LastPrompt(lp) => Some(lp.leaf_uuid.clone()),
-                _ => None,
-            })
+        self.rows.iter().rev().find_map(|r| match r {
+            Row::LastPrompt(lp) => Some(lp.leaf_uuid.clone()),
+            _ => None,
+        })
     }
 }
 
@@ -266,7 +263,12 @@ pub fn write(session: &Session, projects_dir: &Path) -> Result<String, WriteErro
 /// mint a fresh session id. Validated by spike 03 (mid-tree cold-load).
 pub fn fork_at(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
     let cut = cut_through(src, turn)?;
-    finish(&src.rows[..=cut], &[], turn_uuid(&src.rows[cut]), &src.session_id)
+    finish(
+        &src.rows[..=cut],
+        &[],
+        turn_uuid(&src.rows[cut]),
+        &src.session_id,
+    )
 }
 
 /// Rewind is a fork with no resume seed beyond the re-point — the same prefix operation.
@@ -303,7 +305,12 @@ pub fn fork_before(src: &Session, turn: &str) -> Result<Session, SurgeryError> {
         .iter()
         .rposition(|r| matches!(r, Row::Turn(t) if t.role == Role::System))
         .ok_or_else(|| SurgeryError::NoBoundaryBefore(turn.to_string()))?;
-    finish(&src.rows[..=cut], &[], turn_uuid(&src.rows[cut]), &src.session_id)
+    finish(
+        &src.rows[..=cut],
+        &[],
+        turn_uuid(&src.rows[cut]),
+        &src.session_id,
+    )
 }
 
 /// Edit a turn's content in place and fork at it: keep the prefix *before* the turn,
@@ -330,7 +337,12 @@ pub fn edit_then_fork(src: &Session, turn: &str, text: &str) -> Result<Session, 
         text,
         &src.session_id,
     );
-    finish(&src.rows[..idx], &[edited], target.uuid.clone(), &src.session_id)
+    finish(
+        &src.rows[..idx],
+        &[edited],
+        target.uuid.clone(),
+        &src.session_id,
+    )
 }
 
 /// Index of the prefix cut for forking/injecting at `turn`: the turn's own row,

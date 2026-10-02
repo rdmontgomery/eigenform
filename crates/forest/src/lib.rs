@@ -65,12 +65,7 @@ pub enum ResolveError {
 /// project's recovered cwd. Reads no session contents.
 pub fn enumerate_session_stubs(projects_dir: &Path) -> Result<Vec<SessionStub>> {
     let cwd_by_dir: HashMap<String, PathBuf> = eigenform_projects::enumerate_projects(projects_dir)
-        .map(|projects| {
-            projects
-                .into_iter()
-                .map(|p| (p.dir_name, p.cwd))
-                .collect()
-        })
+        .map(|projects| projects.into_iter().map(|p| (p.dir_name, p.cwd)).collect())
         .unwrap_or_default();
 
     let entries = fs::read_dir(projects_dir).map_err(|e| Error::Io {
@@ -372,17 +367,26 @@ pub fn read_claims_with(
     let Ok(entries) = fs::read_dir(sessions_dir) else {
         return Vec::new();
     };
-    let str_of = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    let str_of =
+        |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
     let mut out = Vec::new();
     for e in entries.flatten() {
         let p = e.path();
         if p.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&p) else { continue };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
-        let Some(pid) = v.get("pid").and_then(|x| x.as_u64()).map(|x| x as u32) else { continue };
-        let Some(session_id) = str_of(&v, "sessionId") else { continue };
+        let Ok(text) = fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(pid) = v.get("pid").and_then(|x| x.as_u64()).map(|x| x as u32) else {
+            continue;
+        };
+        let Some(session_id) = str_of(&v, "sessionId") else {
+            continue;
+        };
         let health = if !alive(pid) {
             ClaimHealth::Dead
         } else {
@@ -427,10 +431,16 @@ pub fn session_entrypoint(path: &Path) -> Option<String> {
 
 fn read_entrypoint(path: &Path) -> Option<String> {
     let mut buf = Vec::new();
-    fs::File::open(path).ok()?.take(TAIL_WINDOW).read_to_end(&mut buf).ok()?;
+    fs::File::open(path)
+        .ok()?
+        .take(TAIL_WINDOW)
+        .read_to_end(&mut buf)
+        .ok()?;
     String::from_utf8_lossy(&buf).lines().find_map(|line| {
         let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
-        v.get("entrypoint").and_then(|x| x.as_str()).map(str::to_string)
+        v.get("entrypoint")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
     })
 }
 
@@ -503,7 +513,10 @@ pub fn cached_spark(state_dir: &Path, session_id: &str, jsonl_path: &Path) -> Ve
                     && v.get("source_len").and_then(|x| x.as_u64()) == Some(len);
                 if same {
                     if let Some(arr) = v.get("spark").and_then(|x| x.as_array()) {
-                        return arr.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect();
+                        return arr
+                            .iter()
+                            .filter_map(|x| x.as_u64().map(|n| n as u32))
+                            .collect();
                     }
                 }
             }
@@ -579,7 +592,8 @@ pub fn live_forest_with(
             live: is_live,
             state,
             spark: cached_spark(state_dir, &r.uuid, &r.path),
-            headless: claim_headless(claim) || session_entrypoint(&r.path).is_some_and(|e| is_headless(&e)),
+            headless: claim_headless(claim)
+                || session_entrypoint(&r.path).is_some_and(|e| is_headless(&e)),
             pid: claim.map(|c| c.pid),
         });
     }
@@ -611,7 +625,8 @@ pub fn live_forest_with(
 }
 
 fn claim_headless(c: Option<&Claim>) -> bool {
-    c.and_then(|c| c.entrypoint.as_deref()).is_some_and(is_headless)
+    c.and_then(|c| c.entrypoint.as_deref())
+        .is_some_and(is_headless)
 }
 
 struct Tail {
@@ -628,7 +643,11 @@ struct Tail {
 /// row and a title. Returns empties if the file is unreadable.
 fn peek_tail(path: &Path) -> Tail {
     let Ok(mut file) = fs::File::open(path) else {
-        return Tail { last_timestamp: None, title: None, complete: true };
+        return Tail {
+            last_timestamp: None,
+            title: None,
+            complete: true,
+        };
     };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
 
@@ -637,7 +656,11 @@ fn peek_tail(path: &Path) -> Tail {
         let start = len.saturating_sub(window);
         let mut buf = Vec::new();
         if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut buf).is_err() {
-            return Tail { last_timestamp: None, title: None, complete: true };
+            return Tail {
+                last_timestamp: None,
+                title: None,
+                complete: true,
+            };
         }
         let text = String::from_utf8_lossy(&buf);
         let mut lines: Vec<&str> = text.split('\n').filter(|l| !l.is_empty()).collect();

@@ -56,6 +56,10 @@ install-codex-skill bindir="~/.local/bin":
 
 # --- testing -------------------------------------------------------------
 
+# Format the Rust workspace (CI fails on unformatted code).
+fmt:
+    cargo fmt --all
+
 # Rust workspace + webterm unit tests (never spawns claude).
 test:
     cargo test --workspace

@@ -76,7 +76,10 @@ fn edit_derives_the_role_from_the_target_turn() {
     let edited = edit_then_fork(&two_turns(), A1, "as if I'd said this").unwrap();
     let last = *edited.turns().last().unwrap();
     assert_eq!(last.role, Role::Assistant);
-    assert_eq!(last_value(&edited)["message"]["content"][0]["text"], "as if I'd said this");
+    assert_eq!(
+        last_value(&edited)["message"]["content"][0]["text"],
+        "as if I'd said this"
+    );
 }
 
 #[test]

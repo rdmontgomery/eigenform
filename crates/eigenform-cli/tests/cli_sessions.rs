@@ -30,9 +30,16 @@ fn sessions_show_renders_the_turn_tree() {
     std::fs::write(&src, session_text()).unwrap();
 
     let out = run(&["sessions", "show", src.to_str().unwrap()]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("session abcd1234 · 1 exchange"), "got:\n{stdout}");
+    assert!(
+        stdout.contains("session abcd1234 · 1 exchange"),
+        "got:\n{stdout}"
+    );
     assert!(stdout.contains("● user"), "got:\n{stdout}");
     assert!(stdout.contains("◇ assistant"), "got:\n{stdout}");
     assert!(stdout.contains("← leaf"), "got:\n{stdout}");
@@ -45,7 +52,9 @@ fn temp_home_with_session() -> (tempfile::TempDir, String) {
     let pdir = home.path().join(".claude/projects/-home-me-p");
     std::fs::create_dir_all(&pdir).unwrap();
     let lines = [
-        format!(r#"{{"type":"user","uuid":"{uuid}","parentUuid":null,"isSidechain":false,"cwd":"/home/me/p","timestamp":"2026-06-03T10:00:00Z","sessionId":"{uuid}","message":{{"role":"user","content":"hello"}}}}"#),
+        format!(
+            r#"{{"type":"user","uuid":"{uuid}","parentUuid":null,"isSidechain":false,"cwd":"/home/me/p","timestamp":"2026-06-03T10:00:00Z","sessionId":"{uuid}","message":{{"role":"user","content":"hello"}}}}"#
+        ),
         format!(r#"{{"type":"ai-title","aiTitle":"my recent work","sessionId":"{uuid}"}}"#),
     ];
     std::fs::write(pdir.join(format!("{uuid}.jsonl")), lines.join("\n") + "\n").unwrap();
@@ -64,7 +73,11 @@ fn run_home(home: &std::path::Path, args: &[&str]) -> std::process::Output {
 fn show_resolves_a_session_by_uuid_prefix() {
     let (home, _uuid) = temp_home_with_session();
     let out = run_home(home.path(), &["sessions", "show", "aaaa1111"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("session aaaa1111"), "got:\n{stdout}");
     assert!(stdout.contains("● user"), "got:\n{stdout}");
@@ -75,8 +88,15 @@ fn list_shows_recent_sessions_with_titles() {
     let (home, _uuid) = temp_home_with_session();
     // `--since all` disables the time window; the fixture's fixed timestamp
     // would otherwise fall out of the default 7-day window as the clock advances.
-    let out = run_home(home.path(), &["sessions", "list", "--all-projects", "--since", "all"]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_home(
+        home.path(),
+        &["sessions", "list", "--all-projects", "--since", "all"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("aaaa1111"), "got:\n{stdout}");
     assert!(stdout.contains("my recent work"), "got:\n{stdout}");
@@ -89,9 +109,15 @@ fn temp_home_with_forkable() -> (tempfile::TempDir, String) {
     let pdir = home.path().join(".claude/projects/-home-me-q");
     std::fs::create_dir_all(&pdir).unwrap();
     let lines = [
-        format!(r#"{{"type":"user","uuid":"U1","parentUuid":null,"isSidechain":false,"cwd":"/home/me/q","sessionId":"{uuid}","message":{{"role":"user","content":"keep me"}}}}"#),
-        format!(r#"{{"type":"assistant","uuid":"A1","parentUuid":"U1","isSidechain":false,"sessionId":"{uuid}","message":{{"role":"assistant","content":[{{"type":"text","text":"reply"}}]}}}}"#),
-        format!(r#"{{"type":"user","uuid":"U2","parentUuid":"A1","isSidechain":false,"sessionId":"{uuid}","message":{{"role":"user","content":"drop me"}}}}"#),
+        format!(
+            r#"{{"type":"user","uuid":"U1","parentUuid":null,"isSidechain":false,"cwd":"/home/me/q","sessionId":"{uuid}","message":{{"role":"user","content":"keep me"}}}}"#
+        ),
+        format!(
+            r#"{{"type":"assistant","uuid":"A1","parentUuid":"U1","isSidechain":false,"sessionId":"{uuid}","message":{{"role":"assistant","content":[{{"type":"text","text":"reply"}}]}}}}"#
+        ),
+        format!(
+            r#"{{"type":"user","uuid":"U2","parentUuid":"A1","isSidechain":false,"sessionId":"{uuid}","message":{{"role":"user","content":"drop me"}}}}"#
+        ),
         format!(r#"{{"type":"last-prompt","leafUuid":"U2","sessionId":"{uuid}"}}"#),
     ];
     std::fs::write(pdir.join(format!("{uuid}.jsonl")), lines.join("\n") + "\n").unwrap();
@@ -105,7 +131,11 @@ fn diff_reports_kept_and_dropped() {
     let fork_uuid = String::from_utf8(fork.stdout).unwrap().trim().to_string();
 
     let out = run_home(home.path(), &["sessions", "diff", &uuid, &fork_uuid]);
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("diff "), "header:\n{stdout}");
     assert!(stdout.contains("kept"), "summary:\n{stdout}");
@@ -116,11 +146,18 @@ fn diff_reports_kept_and_dropped() {
 #[test]
 fn surgery_fork_diff_flag_prints_diff_to_stderr() {
     let (home, uuid) = temp_home_with_forkable();
-    let out = run_home(home.path(), &["surgery", "fork", &uuid, "--at", "U1", "--diff"]);
+    let out = run_home(
+        home.path(),
+        &["surgery", "fork", &uuid, "--at", "U1", "--diff"],
+    );
     assert!(out.status.success());
     // stdout stays just the new uuid (scriptable); the diff goes to stderr.
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert_eq!(stdout.lines().count(), 1, "stdout is only the uuid:\n{stdout}");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "stdout is only the uuid:\n{stdout}"
+    );
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("diff "), "diff on stderr:\n{stderr}");
     assert!(stderr.contains("drop me"), "shows dropped turn:\n{stderr}");
@@ -132,8 +169,17 @@ fn render_json_is_not_yet_supported() {
     let src = dir.path().join(format!("{SID}.jsonl"));
     std::fs::write(&src, session_text()).unwrap();
 
-    let out = run(&["sessions", "show", src.to_str().unwrap(), "--render", "json"]);
+    let out = run(&[
+        "sessions",
+        "show",
+        src.to_str().unwrap(),
+        "--render",
+        "json",
+    ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("browser"), "expected a 'not until browser' message, got: {stderr}");
+    assert!(
+        stderr.contains("browser"),
+        "expected a 'not until browser' message, got: {stderr}"
+    );
 }

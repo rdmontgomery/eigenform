@@ -57,7 +57,11 @@ async fn candidates_recents_first_then_subdirs_deduped() {
         serde_json::from_str(&body).unwrap_or_else(|_| panic!("expected JSON array, got:\n{body}"));
     let arr = v.as_array().expect("JSON array");
 
-    assert_eq!(arr.len(), 2, "beta (recent) + alpha (subdir), no duplicates:\n{body}");
+    assert_eq!(
+        arr.len(),
+        2,
+        "beta (recent) + alpha (subdir), no duplicates:\n{body}"
+    );
 
     // beta must be first and tagged recent: true
     let beta = &arr[0];
@@ -86,7 +90,11 @@ async fn candidates_empty_when_nothing_configured() {
     let body = helpers::http_get(&base, "/api/candidates").await;
     let v: serde_json::Value =
         serde_json::from_str(&body).unwrap_or_else(|_| panic!("expected JSON, got:\n{body}"));
-    assert_eq!(v.as_array().unwrap().len(), 0, "no config → empty array:\n{body}");
+    assert_eq!(
+        v.as_array().unwrap().len(),
+        0,
+        "no config → empty array:\n{body}"
+    );
 }
 
 #[tokio::test]

@@ -168,10 +168,7 @@ async fn closing_the_socket_leaves_the_pty_listed() {
         row.get("lastActivity").is_some(),
         "row must carry `lastActivity`: {row}"
     );
-    assert!(
-        row.get("state").is_some(),
-        "row must carry `state`: {row}"
-    );
+    assert!(row.get("state").is_some(), "row must carry `state`: {row}");
     // The classifier replaced the "unknown" placeholder (Task 1.9). A freshly-spawned
     // sh pty is either still streaming its prompt (working) or quiet (idle) — never
     // "unknown", and never "waiting" (that's claude-specific; spike-08 grid is unit-tested).
@@ -294,9 +291,11 @@ async fn attach_to_an_exited_pty_repaints_then_signals_exit() {
             _ => break,
         }
     }
-    ws.send(Message::Text(r#"{"type":"stdin","data":"exit\n"}"#.to_string()))
-        .await
-        .unwrap();
+    ws.send(Message::Text(
+        r#"{"type":"stdin","data":"exit\n"}"#.to_string(),
+    ))
+    .await
+    .unwrap();
     // Drain this socket until it closes / we see the exit frame, confirming the child died.
     let mut got_exit = false;
     for _ in 0..50 {
@@ -339,6 +338,12 @@ async fn attach_to_an_exited_pty_repaints_then_signals_exit() {
             _ => break,
         }
     }
-    assert!(got_repaint, "attach to exited pty must repaint prior output");
-    assert!(got_exit2, "attach to exited pty must synthesize an exit frame");
+    assert!(
+        got_repaint,
+        "attach to exited pty must repaint prior output"
+    );
+    assert!(
+        got_exit2,
+        "attach to exited pty must synthesize an exit frame"
+    );
 }

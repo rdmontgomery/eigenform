@@ -102,20 +102,36 @@ async fn since_returns_only_newer_events() {
     let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(&base, ""))
         .await
         .unwrap();
-    let id1 = first_text_frame(&mut ws).await["id"].as_str().unwrap().to_string();
-    wait_for_event(&base, "pty-spawned", &id1).await.expect("first spawn recorded");
+    let id1 = first_text_frame(&mut ws).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_event(&base, "pty-spawned", &id1)
+        .await
+        .expect("first spawn recorded");
 
     // Read the current high-water seq.
     let body = helpers::http_get(&base, "/api/events").await;
     let arr: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let max_seq = arr.as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).max().unwrap();
+    let max_seq = arr
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_u64().unwrap())
+        .max()
+        .unwrap();
 
     // Second pty → a new event with a higher seq.
     let (mut ws2, _) = tokio_tungstenite::connect_async(ws_url(&base, ""))
         .await
         .unwrap();
-    let id2 = first_text_frame(&mut ws2).await["id"].as_str().unwrap().to_string();
-    wait_for_event(&base, "pty-spawned", &id2).await.expect("second spawn recorded");
+    let id2 = first_text_frame(&mut ws2).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_event(&base, "pty-spawned", &id2)
+        .await
+        .expect("second spawn recorded");
 
     // ?since=max_seq must exclude everything from before the second pty.
     let body = helpers::http_get(&base, &format!("/api/events?since={max_seq}")).await;
@@ -127,7 +143,9 @@ async fn since_returns_only_newer_events() {
         "?since must return only events with seq > since: {newer:?}"
     );
     assert!(
-        newer.iter().any(|e| e["data"]["id"] == serde_json::json!(id2)),
+        newer
+            .iter()
+            .any(|e| e["data"]["id"] == serde_json::json!(id2)),
         "the second pty's spawn must be among the newer events"
     );
 
