@@ -119,14 +119,14 @@ pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty::pty_ws))
         .route("/api/pty", get(pty::pty_list_route))
-        .route("/api/pty/:id", axum::routing::delete(pty::pty_delete_route))
-        .route("/api/session/:uuid/json", get(session::session_json_route))
-        .route("/api/session/:uuid/fork", post(session::fork_route))
+        .route("/api/pty/{id}", axum::routing::delete(pty::pty_delete_route))
+        .route("/api/session/{uuid}/json", get(session::session_json_route))
+        .route("/api/session/{uuid}/fork", post(session::fork_route))
         .route("/api/forest", get(forest::forest_route))
         .route("/api/watch/forest", get(forest::forest_watch_route))
         .route("/api/claims", get(claims::claims_route))
         .route(
-            "/api/claims/:pid",
+            "/api/claims/{pid}",
             axum::routing::delete(claims::claim_delete_route),
         )
         .route("/api/inspect", get(inspect::inspect_route))
@@ -135,7 +135,7 @@ pub fn app(config: Config) -> Router {
         .route("/api/health", get(health_route))
         .route("/api/events", get(events::events_route))
         .route("/api/events/stream", get(events::events_stream_route))
-        .route("/api/watch/:uuid", get(watch::watch_route));
+        .route("/api/watch/{uuid}", get(watch::watch_route));
 
     // eigenform (the terminal app) is the front door at `/`.
     // Dev routes take precedence over the static fallback so the reload hook injects.
