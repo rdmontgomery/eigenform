@@ -5,25 +5,25 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.83"
+rust-version = "1.88"
 
 [workspace.dependencies]
 serde      = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 anyhow     = "1"
-thiserror  = "1"
+thiserror  = "2"
 clap       = { version = "4", features = ["derive"] }
 tempfile   = "3"
 uuid       = { version = "1", features = ["v4"] }
 chrono     = "0.4"
-portable-pty = "0.8"
+portable-pty = "0.9"
 vt100        = "0.16"
 tokio        = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
-axum         = { version = "0.7", features = ["ws"] }
+axum         = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
-tower-http   = { version = "0.5", features = ["fs"] }
-notify       = "6"
+tower-http   = { version = "0.7", features = ["fs"] }
+notify       = "8"
 tokio-stream = "0.1"
-ureq         = { version = "2", features = ["json"] }
+ureq         = { version = "3", default-features = false, features = ["json"] }
 terminal_size = "0.4"

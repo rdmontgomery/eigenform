@@ -318,10 +318,17 @@ fn main() -> Result<()> {
 fn ptys_list(port: u16) -> Result<()> {
     let url = format!("http://127.0.0.1:{port}/api/pty");
     let body: serde_json::Value = match ureq::get(&url).call() {
-        Ok(resp) => resp
-            .into_json()
+        Ok(mut resp) => resp
+            .body_mut()
+            .read_json()
             .with_context(|| format!("parsing JSON from {url}"))?,
-        Err(ureq::Error::Transport(_)) => {
+        // Nothing listening (refused / unreachable / timed out) — not an HTTP error.
+        Err(
+            ureq::Error::Io(_)
+            | ureq::Error::ConnectionFailed
+            | ureq::Error::HostNotFound
+            | ureq::Error::Timeout(_),
+        ) => {
             eprintln!("daemon not running on :{port}");
             std::process::exit(1);
         }
@@ -728,11 +735,13 @@ struct DaemonHealth {
 /// app on the port, or nothing, yields `None`).
 fn health_probe(port: u16) -> Option<DaemonHealth> {
     let url = format!("http://127.0.0.1:{port}/api/health");
-    let resp = ureq::get(&url)
-        .timeout(std::time::Duration::from_millis(500))
+    let mut resp = ureq::get(&url)
+        .config()
+        .timeout_global(Some(std::time::Duration::from_millis(500)))
+        .build()
         .call()
         .ok()?;
-    let v: serde_json::Value = resp.into_json().ok()?;
+    let v: serde_json::Value = resp.body_mut().read_json().ok()?;
     if v.get("app").and_then(|a| a.as_str()) != Some("eigenform") {
         return None; // something else is on this port
     }

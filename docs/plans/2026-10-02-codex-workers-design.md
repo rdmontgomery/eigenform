@@ -18,10 +18,10 @@ Claude can already drive OpenAI's Codex CLI headlessly (`codex exec`, corrected 
 | piece | where | what |
 |---|---|---|
 | reader | `crates/codex` | enumerate rollouts, resolve id/prefix, rail facts (title, cwd, model, source → headless, turns), liveness via `/proc/locks`, rollout → drawer JSON |
-| forest | `daemon::forest_json` | Codex rows join `/api/forest` tagged `engine: "codex"`; the SSE watcher also watches `~/.codex/sessions` |
-| drawer | `daemon::session_json_route` | `/api/session/<thread id>/json` falls back to Codex |
-| take the wheel | `daemon::pty_command` | `session=<thread id>` → `codex resume <id>` in the thread's cwd; refused while a writer holds it |
-| parent link | `daemon::attach_codex_workers` | a Bash call whose output says `codex-thread: <id>` nests the worker's transcript in `tool.subagent` (agentType `codex`), the slot Agent subagents already use |
+| forest | `daemon/src/forest.rs` | Codex rows join `/api/forest` tagged `engine: "codex"`; the SSE watcher also watches `~/.codex/sessions` |
+| drawer | `daemon/src/session.rs` | `/api/session/<thread id>/json` falls back to Codex |
+| take the wheel | `daemon/src/pty.rs` | `session=<thread id>` → `codex resume <id>` in the thread's cwd; refused while a writer holds it |
+| parent link | `daemon/src/session.rs` | a Bash call whose output says `codex-thread: <id>` nests the worker's transcript in `tool.subagent` (agentType `codex`), the slot Agent subagents already use |
 | UI | `webterm` | `codex` chip on rail rows; Bash-with-subagent and patch-diff views |
 | protocol | `.claude/skills/codex-worker` | `spawn`/`resume`/`wait`/`status`/`result`/`diff`/`review`/`rm`; worktree per worker; prints the `codex-thread:` marker |
 
@@ -38,7 +38,7 @@ Send the same assignment to a Claude subagent and a Codex worker in sibling work
 
 ## Adjacent: the artifact pane (step 1 built)
 
-The same dialectic has a second channel, the human's. Step 1 is built: a split pane beside the terminal that renders the HTML, SVG, markdown and images the active session wrote or edited, nested subagent and Codex-worker writes included (`GET /api/session/:uuid/artifacts`, `crates/daemon/src/artifacts.rs`, `webterm/src/artifacts.ts`). It follows the newest write unless you pin one, and reloads when the file's mtime moves.
+The same dialectic has a second channel, the human's. Step 1 is built: a split pane beside the terminal that renders the HTML, SVG, markdown and images the active session wrote or edited, nested subagent and Codex-worker writes included (`GET /api/session/:uuid/artifacts`, `crates/daemon/src/artifacts.rs`, `webterm/src/artifacts.ts`, docked by `artifact-dock.ts`). It follows the newest write unless you pin one, and reloads when the file's mtime moves.
 
 **Isolation.** `origin_is_local` admits *any* localhost origin, so a second port would not have isolated anything: a page there could open `/pty` and get a shell. Instead every `/artifact/…` response carries `Content-Security-Policy: sandbox …` without `allow-same-origin`, and the iframe repeats the sandbox. The document gets an opaque `null` origin even when opened directly in a tab. Verified in Chromium: the pty socket is refused, the `/api` read is blocked, and parent and storage are blocked. File scope covers only the session's own writes. HTML/SVG may pull non-hidden siblings (relative assets), markdown only sibling images, so a `plan.md` at a repo root doesn't expose the repo. Symlinks resolve before the check.
 

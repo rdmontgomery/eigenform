@@ -18,7 +18,12 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
+use axum::extract::{Path as AxumPath, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde_json::Value;
+
+use crate::AppState;
 
 /// File extensions the pane renders, and how.
 pub fn kind_of(path: &Path) -> Option<&'static str> {
@@ -234,6 +239,123 @@ blockquote{border-left:3px solid var(--line);margin-left:0;padding-left:1em;colo
 table{border-collapse:collapse;display:block;overflow-x:auto}th,td{border:1px solid var(--line);padding:.35em .6em;text-align:left}
 img{max-width:100%}hr{border:0;border-top:1px solid var(--line)}
 "#;
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+/// `GET /api/session/:uuid/artifacts` — the renderable files (HTML, SVG, markdown,
+/// images) the session wrote or edited, newest write first, each with the sandboxed
+/// `/artifact/…` URL the pane loads and the file's current mtime (null if it's gone).
+pub(crate) async fn artifacts_route(
+    AxumPath(uuid): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(json) = crate::session::session_json_cached(&state.config, &uuid) else {
+        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    };
+    let rows: Vec<serde_json::Value> = from_session_json(&json)
+        .into_iter()
+        .map(|a| {
+            let mtime = std::fs::metadata(&a.path)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+            serde_json::json!({
+                "path": a.path.display().to_string(),
+                "name": a.path.file_name().map(|n| n.to_string_lossy().into_owned()),
+                "kind": a.kind,
+                "turn": a.turn,
+                "by": a.by,
+                "mtime": mtime,
+                "url": artifact_url(&uuid, &a.path),
+            })
+        })
+        .collect();
+    axum::Json(rows).into_response()
+}
+
+/// `/artifact/<uuid>/<absolute path, leading slash dropped, each segment
+/// percent-encoded>` — relative references inside the document resolve beside it.
+fn artifact_url(uuid: &str, path: &std::path::Path) -> String {
+    let mut url = format!("/artifact/{}", percent_encode(uuid));
+    for part in path.components() {
+        if let std::path::Component::Normal(seg) = part {
+            url.push('/');
+            url.push_str(&percent_encode(&seg.to_string_lossy()));
+        }
+    }
+    url
+}
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[derive(serde::Deserialize, Default)]
+pub(crate) struct ArtifactQuery {
+    /// `raw=1` serves a markdown file as text instead of the rendered page.
+    #[serde(default)]
+    raw: u8,
+}
+
+/// `GET /artifact/:uuid/*path` — one file in an artifact's scope (see
+/// [`authorize`]), always under a `sandbox` CSP so the document gets an
+/// opaque origin and can't reach the daemon's API or pty socket. Markdown is rendered
+/// to a script-free page unless `?raw=1`.
+pub(crate) async fn artifact_file_route(
+    AxumPath((uuid, path)): AxumPath<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<ArtifactQuery>,
+    State(state): State<AppState>,
+) -> Response {
+    use axum::http::header;
+    let Some(json) = crate::session::session_json_cached(&state.config, &uuid) else {
+        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    };
+    let requested = PathBuf::from("/").join(path.trim_start_matches('/'));
+    let arts = from_session_json(&json);
+    let canon = match authorize(&requested, &arts) {
+        Ok(p) => p,
+        Err(Denied::Missing) => return (StatusCode::NOT_FOUND, "no such file").into_response(),
+        Err(Denied::OutOfScope) => {
+            return (StatusCode::FORBIDDEN, "not an artifact of this session").into_response()
+        }
+    };
+    let Ok(bytes) = std::fs::read(&canon) else {
+        return (StatusCode::NOT_FOUND, "no such file").into_response();
+    };
+    let common = |ct: &'static str, csp: &'static str| {
+        [
+            (header::CONTENT_TYPE, ct),
+            (header::CONTENT_SECURITY_POLICY, csp),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ]
+    };
+    if kind_of(&canon) == Some("markdown") {
+        if q.raw != 0 {
+            return (common("text/plain; charset=utf-8", csp(false)), bytes).into_response();
+        }
+        let title = canon
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let page = markdown_page(&title, &String::from_utf8_lossy(&bytes));
+        return (common("text/html; charset=utf-8", csp(false)), page).into_response();
+    }
+    let ct = content_type(&canon);
+    let scripts = ct.starts_with("text/html") || ct == "image/svg+xml";
+    (common(ct, csp(scripts)), bytes).into_response()
+}
 
 #[cfg(test)]
 mod tests {

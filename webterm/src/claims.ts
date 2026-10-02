@@ -15,6 +15,7 @@
 
 import { icon } from "./icons.ts";
 import type { Claim } from "./types.ts";
+import { el } from "./dom.ts";
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested)
@@ -85,11 +86,6 @@ function basename(p: string | null): string {
 // DOM overlay (typecheck-only; no node --test coverage)
 // ---------------------------------------------------------------------------
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
-}
 
 export interface ClaimsOptions {
   /** Called after any claim is ended or cleared, so the rail can refresh. */

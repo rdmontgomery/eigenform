@@ -9,6 +9,7 @@
  */
 
 import { mdBlocks, reanchor, segments, compileFeedback } from "./annotate.ts";
+import { el } from "./dom.ts";
 import type { Annotation, AnnotationKind, Block } from "./annotate.ts";
 
 export interface AnnotatorOpts {
@@ -409,10 +410,4 @@ function describe(a: Annotation): string {
   if (a.kind === "delete") return `delete${a.note ? `: ${a.note}` : ""}`;
   if (a.kind === "replace") return `replace with: ${a.replacement ?? ""}${a.note ? ` (${a.note})` : ""}`;
   return a.note ?? "";
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
 }

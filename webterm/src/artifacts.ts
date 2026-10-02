@@ -24,6 +24,7 @@
 
 import { subscribeWatch } from "./watch.ts";
 import { icon } from "./icons.ts";
+import { el } from "./dom.ts";
 import { mountAnnotator } from "./annotator.ts";
 import type { AnnotatorHandle } from "./annotator.ts";
 
@@ -337,10 +338,4 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
       root.remove();
     },
   };
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
 }

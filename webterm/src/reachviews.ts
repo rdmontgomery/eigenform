@@ -17,17 +17,12 @@
  */
 
 import type { ReachModel, ReachNode, ReachKind } from "./reach.ts";
+import { el } from "./dom.ts";
 
 export interface ReachViewCtx {
   color: Record<ReachKind, string>;
   ring: Record<ReachKind, number>;
   trunc: (s: string, n: number) => string;
-}
-
-function elh<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
 }
 
 /** Nodes reached by the current cursor, richest first. */
@@ -47,29 +42,29 @@ const BAND_LABEL: Record<number, string> = {
 };
 
 export function renderBands(host: HTMLElement, m: ReachModel, live: Map<string, number>, ctx: ReachViewCtx): void {
-  const wrap = elh("div", "rv-bands");
+  const wrap = el("div", "rv-bands");
   const nodes = revealedNodes(m, live);
   for (let ring = 1; ring <= 4; ring++) {
     const inBand = nodes.filter((n) => ctx.ring[n.kind] === ring);
     if (!inBand.length) continue;
-    const lane = elh("div", "rv-band" + (ring === 4 ? " rv-band--off" : ""));
+    const lane = el("div", "rv-band" + (ring === 4 ? " rv-band--off" : ""));
     // Full-width zone header above its chips — avoids a cramped left column
     // wrapping mid-phrase and orphaning the count in the narrow dock.
-    const head = elh("div", "rv-band-head");
-    const name = elh("span", "rv-band-name");
+    const head = el("div", "rv-band-head");
+    const name = el("span", "rv-band-name");
     name.textContent = BAND_LABEL[ring] ?? "";
-    const count = elh("span", "rv-band-count");
+    const count = el("span", "rv-band-count");
     count.textContent = String(inBand.length);
     head.append(name, count);
-    const chips = elh("div", "rv-band-chips");
+    const chips = el("div", "rv-band-chips");
     for (const n of inBand) {
-      const chip = elh("div", "rv-chip" + (n.sensitive ? " rv-chip--alarm" : ""));
+      const chip = el("div", "rv-chip" + (n.sensitive ? " rv-chip--alarm" : ""));
       chip.title = n.detail;
-      const dot = elh("span", "rv-dot");
+      const dot = el("span", "rv-dot");
       dot.style.background = ctx.color[n.kind];
-      const lab = elh("span");
+      const lab = el("span");
       lab.textContent = ctx.trunc(n.label, 30);
-      const cnt = elh("span", "rv-cnt");
+      const cnt = el("span", "rv-cnt");
       cnt.textContent = "×" + (live.get(n.id) ?? 0);
       chip.append(dot, lab, cnt);
       chips.append(chip);

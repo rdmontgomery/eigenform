@@ -23,8 +23,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::extract::{Path as AxumPath, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
+
+use crate::AppState;
 
 /// How long a review is held before falling back to the terminal prompt when the
 /// config doesn't say. Just under the 1800s hook timeout the install snippet sets, so
@@ -201,6 +206,139 @@ pub fn settings_snippet(port: u16) -> Value {
             }]
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+/// `POST /api/hooks/plan-review` — Claude Code's `PermissionRequest` HTTP hook for
+/// `ExitPlanMode` (see [`plan_gate`]). Parks the plan for review in the pane and holds
+/// the request until a decision, the hold timeout, or Claude Code cancelling the hook.
+/// The response is the hook's decision JSON, or an empty 200 for "no decision".
+pub(crate) async fn plan_review_hook_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // Claude Code sends no Origin. A browser always does on a cross-site POST.
+    if !crate::pty::origin_is_local(&headers) {
+        return (StatusCode::FORBIDDEN, "cross-origin").into_response();
+    }
+    let Ok(input) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return (StatusCode::OK, "").into_response(); // malformed → no decision
+    };
+    let hold = match state.config.plan_review_hold_secs {
+        0 => DEFAULT_HOLD,
+        s => std::time::Duration::from_secs(s),
+    };
+    if input["tool_name"] == "ExitPlanMode" {
+        state.events.record(
+            "plan-review-pending",
+            serde_json::json!({ "session": input["session_id"], "toolUseId": input["tool_use_id"] }),
+        );
+    }
+    let (review, body) = state.plan_gate.hold(&input, hold).await;
+    if let Some(r) = review {
+        let outcome = if body.contains(r#""behavior":"allow""#) {
+            "approved"
+        } else if body.is_empty() {
+            "terminal"
+        } else {
+            "sent-back"
+        };
+        state.events.record(
+            "plan-review-decided",
+            serde_json::json!({ "session": r.session_id, "outcome": outcome }),
+        );
+    }
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response()
+}
+
+/// `GET /api/plan-reviews` — plans waiting on a human, oldest first (no plan text).
+pub(crate) async fn plan_reviews_route(State(state): State<AppState>) -> Response {
+    let rows: Vec<serde_json::Value> = state
+        .plan_gate
+        .list()
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "sessionId": r.session_id,
+                "cwd": r.cwd,
+                "toolUseId": r.tool_use_id,
+                "source": r.source,
+                "createdAt": r.created_at,
+            })
+        })
+        .collect();
+    axum::Json(rows).into_response()
+}
+
+/// `GET /api/plan-reviews/:id/plan` — the plan under review, as plain text. The pane
+/// renders it with textContent only (it's agent-written).
+pub(crate) async fn plan_review_text_route(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    match state.plan_gate.plan(&id) {
+        Some(text) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                ),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+            ],
+            text,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such review").into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct PlanDecisionBody {
+    /// `approve` | `send_back` | `terminal`
+    decision: String,
+    #[serde(default)]
+    message: String,
+}
+
+/// `POST /api/plan-reviews/:id/decision` — the human's verdict, from the pane. Local
+/// origin AND a JSON content type are required: the content type forces a CORS
+/// preflight on any cross-site attempt, which this daemon never grants.
+pub(crate) async fn plan_review_decision_route(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let json_ct = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"));
+    if !crate::pty::origin_is_local(&headers) || !json_ct {
+        return (StatusCode::FORBIDDEN, "local JSON requests only").into_response();
+    }
+    let Ok(b) = serde_json::from_slice::<PlanDecisionBody>(&body) else {
+        return (StatusCode::BAD_REQUEST, "bad decision body").into_response();
+    };
+    let d = match b.decision.as_str() {
+        "approve" => Decision::Approve,
+        "send_back" if !b.message.trim().is_empty() => Decision::SendBack(b.message),
+        "terminal" => Decision::Terminal,
+        _ => return (StatusCode::BAD_REQUEST, "unknown decision").into_response(),
+    };
+    if state.plan_gate.decide(&id, d) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (StatusCode::CONFLICT, "review no longer pending").into_response()
+    }
 }
 
 #[cfg(test)]

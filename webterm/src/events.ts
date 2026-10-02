@@ -20,6 +20,7 @@
  */
 
 import type { EventRecord } from "./types.ts";
+import { el } from "./dom.ts";
 
 // ---------------------------------------------------------------------------
 // Pure formatting helpers (unit-tested)
@@ -268,12 +269,3 @@ export function mountEvents(hostEl: HTMLElement): EventsHandle {
 // ---------------------------------------------------------------------------
 // DOM utility (local — same pattern as shell.ts / drawer.ts)
 // ---------------------------------------------------------------------------
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  cls?: string,
-): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
-}
