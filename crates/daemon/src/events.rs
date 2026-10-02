@@ -158,6 +158,65 @@ impl EventBus {
     }
 }
 
+// ---- routes -----------------------------------------------------------------
+
+use axum::extract::State;
+use axum::response::{IntoResponse, Response};
+
+use crate::AppState;
+use futures_util::StreamExt;
+
+#[derive(serde::Deserialize)]
+pub(crate) struct EventsQuery {
+    /// Only return events with `seq` strictly greater than this (paging forward).
+    since: Option<u64>,
+}
+
+/// `GET /api/events[?since=<seq>]` — the buffered structured events, oldest first.
+/// `since` pages forward past events the client has already seen; omit it for all.
+pub(crate) async fn events_route(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<EventsQuery>,
+) -> Response {
+    axum::Json(state.events.snapshot(query.since)).into_response()
+}
+
+/// `GET /api/events/stream` — SSE that pushes each newly-recorded event as a JSON
+/// message. The shared watch hub (commit 2b13584) is session-scoped (`/api/watch/:uuid`),
+/// so it doesn't fit this global stream; this is a dedicated route in the same spirit as
+/// `/api/watch/forest`. We bridge the broadcast receiver into an mpsc→SSE stream (the
+/// same shape `forest_sse` uses) rather than pulling in tokio-stream's `BroadcastStream`
+/// feature. A lagging subscriber's gap is skipped; `/api/events` is the catch-up path.
+pub(crate) async fn events_stream_route(State(state): State<AppState>) -> Response {
+    let mut rx = state.events.subscribe();
+    let (tx, out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let json = serde_json::to_string(&event).unwrap_or_default();
+                    if tx.send(json).await.is_err() {
+                        break; // client gone
+                    }
+                }
+                // Slow consumer fell behind: skip the gap and keep streaming live events.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(out_rx).map(|json| {
+        Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(json))
+    });
+    // Keep-alive so a disconnected client is reaped promptly (see `watch_sse`).
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(10)),
+        )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
