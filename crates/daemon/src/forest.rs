@@ -92,6 +92,9 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
             }
             loop {
                 match raw_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                    // Our own rescans read every JSONL; access events must not
+                    // trigger another rescan (see `watch::is_change`).
+                    Ok(Ok(event)) if !crate::watch::is_change(&event) => {}
                     // A full channel already means "rescan pending" — never block on it.
                     Ok(_) => {
                         if let Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) =
