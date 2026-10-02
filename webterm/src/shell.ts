@@ -62,6 +62,9 @@ import { createAppearance } from "./appearance.ts";
 import { mountRailLinks } from "./rail-links.ts";
 import { mountRail } from "./rail.ts";
 import { mountDock } from "./dock.ts";
+import { mountArtifactDock } from "./artifact-dock.ts";
+import type { PlanReview } from "./artifacts.ts";
+import { stagedPayload } from "./annotate.ts";
 import { dotClasses, dotTitle, inkVar } from "./status.ts";
 import { icon } from "./icons.ts";
 import { openInspect } from "./inspect.ts";
@@ -222,7 +225,13 @@ export function mountShell(appEl: HTMLElement): void {
     onResize: () => fitActive(),
     onChange: () => renderControls(),
   });
-  termHost.append(termStack, dock.resizer, dock.el);
+  // The artifact pane (what the session made; annotate; plan reviews) sits between
+  // the stack and the dock. See artifact-dock.ts / artifacts.ts for its sandboxing.
+  const artifactDock = mountArtifactDock({
+    stage: stageIntoActive,
+    onResize: () => fitActive(),
+  });
+  termHost.append(termStack, artifactDock.resizer, artifactDock.el, dock.resizer, dock.el);
   termArea.append(termHeader, termHost);
 
   main.append(topbar, termArea);
@@ -432,6 +441,40 @@ export function mountShell(appEl: HTMLElement): void {
   // Inspect dock (see dock.ts) — global toggle, follows the active tab.
   // ------------------------------------------------------------------
 
+  function setArtifactOpen(open: boolean) {
+    artifactDock.setOpen(open);
+    syncDock();
+    fitActive();
+  }
+
+  /**
+   * Type `text` into the active tab's terminal input WITHOUT submitting it (see
+   * stagedPayload: bracketed paste when the TUI enabled it, else one flattened line).
+   * The human reviews it in place and presses Enter. False when there's no live pty.
+   */
+  function stageIntoActive(text: string): boolean {
+    const t = activeTab();
+    if (!t?.ptyHandle) return false;
+    t.ptyHandle.sendInput(stagedPayload(text, t.handle.term.modes.bracketedPasteMode));
+    t.handle.term.focus();
+    return true;
+  }
+
+  /** Plan gate: plans Claude is waiting on (ExitPlanMode hooks parked in the daemon). */
+  async function refreshReviews() {
+    try {
+      const res = await fetch("/api/plan-reviews");
+      const next: PlanReview[] = res.ok ? ((await res.json()) as PlanReview[]) : [];
+      if (artifactDock.setReviews(next, activeTab()?.descriptor.uuid ?? null)) {
+        syncDock();
+        fitActive();
+      }
+      railView.render();
+    } catch {
+      // daemon unreachable — keep the last list
+    }
+  }
+
   function setDrawerOpen(open: boolean) {
     dock.setOpen(open);
     syncDock();
@@ -444,6 +487,8 @@ export function mountShell(appEl: HTMLElement): void {
     // The rail's Links section tracks the active tab's uuid the same way the
     // dock does, but it's a permanent sidebar fixture — not gated by the toggle.
     syncLinks();
+    // The artifact pane follows the same tab changes (its own open state).
+    artifactDock.sync(activeTab()?.descriptor ?? null, tabs.length > 0);
     dock.sync(activeTab()?.descriptor ?? null, tabs.length > 0);
   }
 
@@ -494,7 +539,19 @@ export function mountShell(appEl: HTMLElement): void {
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!dock.isOpen()));
 
-    controls.append(themeBtn, fontBtn, configBtn, claimsBtn, sep, drawerBtn);
+    // Artifact pane toggle — what the session made, rendered beside the terminal.
+    const artifactOpen = artifactDock.isOpen();
+    const artifactBtn = el("button", `icon-btn${artifactOpen ? " icon-btn--active" : ""}`);
+    artifactBtn.title = artifactOpen
+      ? "Hide artifact pane"
+      : "Show artifact pane (HTML · SVG · markdown the session wrote)";
+    artifactBtn.append(icon("window", 16));
+    artifactBtn.addEventListener("click", () => {
+      setArtifactOpen(!artifactDock.isOpen());
+      renderControls();
+    });
+
+    controls.append(themeBtn, fontBtn, configBtn, claimsBtn, sep, artifactBtn, drawerBtn);
   }
 
   function showClaims() {
@@ -972,6 +1029,8 @@ export function mountShell(appEl: HTMLElement): void {
         void refreshRoster();
       },
       onRefresh: () => void refreshRoster(),
+      hasPlanReview: (row) =>
+        !!row.uuid && artifactDock.reviews().some((r) => r.sessionId === row.uuid),
     },
   );
 
@@ -1117,14 +1176,21 @@ export function mountShell(appEl: HTMLElement): void {
   // page is hidden and resume (with an immediate refresh) when it's shown again.
   openForestStream();
   let pollInterval = setInterval(() => void refreshRoster(), 3000);
+  // Plan reviews are in-memory on the daemon (cheap) and Claude is blocked on them:
+  // poll faster than the roster.
+  let reviewInterval = setInterval(() => void refreshReviews(), 1500);
+  void refreshReviews();
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       clearInterval(pollInterval);
+      clearInterval(reviewInterval);
       closeForestStream();
     } else {
       openForestStream();
       void refreshRoster();
+      void refreshReviews();
       pollInterval = setInterval(() => void refreshRoster(), 3000);
+      reviewInterval = setInterval(() => void refreshReviews(), 1500);
     }
   });
 }

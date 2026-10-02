@@ -23,6 +23,7 @@ eigenform-inspect  = { path = "../inspect" }
 eigenform-surgery  = { path = "../surgery" }
 eigenform-render   = { path = "../render" }
 eigenform-forest   = { path = "../forest" }
+eigenform-codex    = { path = "../codex" }
 eigenform-daemon   = { path = "../daemon" }
 chrono         = { workspace = true }
 tokio          = { workspace = true }

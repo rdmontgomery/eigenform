@@ -2,6 +2,7 @@
 // Run: `node --test` (native TS via --experimental-strip-types in Node 22+).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { artifactWidthFromPointer, ARTIFACT_MIN_W, ARTIFACT_MAX_W } from "./shell-helpers.ts";
 import {
   relativeRecency,
   tabSubtitle,
@@ -487,4 +488,10 @@ test("tabSubtitle: cwd basename, widened to parent/base when it echoes the label
   assert.equal(tabSubtitle("/srv/", "srv"), "/srv");
   assert.equal(tabSubtitle("/", "x"), null);
   assert.equal(tabSubtitle(undefined, "x"), null);
+});
+
+test("artifactWidthFromPointer: grows left from the pane's right edge, clamped", () => {
+  assert.equal(artifactWidthFromPointer(400, 1000), 600);
+  assert.equal(artifactWidthFromPointer(990, 1000), ARTIFACT_MIN_W);
+  assert.equal(artifactWidthFromPointer(-5000, 1000), ARTIFACT_MAX_W);
 });

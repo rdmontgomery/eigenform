@@ -23,30 +23,51 @@ pub(crate) async fn forest_watch_route(State(state): State<AppState>) -> Respons
     forest_sse(state.config)
 }
 
-/// Compute the live-Forest snapshot as a JSON string. Empty array if the dirs aren't set.
+/// Compute the live-Forest snapshot as a JSON string: Claude sessions, then Codex threads
+/// (tagged `"engine": "codex"`). Empty array if neither source is configured.
 fn forest_json(cfg: &Config) -> String {
-    let (Some(projects), Some(sessions), Some(state)) =
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    if let (Some(projects), Some(sessions), Some(state)) =
         (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir)
-    else {
-        return "[]".to_string();
-    };
-    let rows: Vec<serde_json::Value> =
-        eigenform_forest::live_forest(projects, sessions, state, chrono::Utc::now())
-            .into_iter()
-            .map(|s| {
-                serde_json::json!({
-                    "uuid": s.uuid,
-                    "title": s.title,
-                    "cwd": s.cwd.display().to_string(),
-                    "recency": s.recency.to_rfc3339(),
-                    "live": s.live,
-                    "state": s.state.as_str(),
-                    "spark": s.spark,
-                    "headless": s.headless,
-                    "pid": s.pid,
-                })
+    {
+        rows.extend(
+            eigenform_forest::live_forest(projects, sessions, state, chrono::Utc::now())
+                .into_iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "uuid": s.uuid,
+                        "title": s.title,
+                        "cwd": s.cwd.display().to_string(),
+                        "recency": s.recency.to_rfc3339(),
+                        "live": s.live,
+                        "state": s.state.as_str(),
+                        "spark": s.spark,
+                        "headless": s.headless,
+                        "pid": s.pid,
+                    })
+                }),
+        );
+    }
+    if let Some(home) = &cfg.codex_home {
+        rows.extend(eigenform_codex::threads(home).into_iter().map(|t| {
+            serde_json::json!({
+                "uuid": t.id,
+                "title": t.title,
+                "cwd": t.cwd.display().to_string(),
+                "recency": t.recency.to_rfc3339(),
+                "live": t.live(),
+                "state": t.state.as_str(),
+                // No per-turn token metrics for Codex yet; one zero per user turn keeps
+                // the rail's `~N` (spark length) honest.
+                "spark": vec![0u32; t.turns],
+                "headless": t.headless,
+                "pid": t.writer_pid,
+                "engine": "codex",
+                "model": t.model,
+                "parent": t.parent,
             })
-            .collect();
+        }));
+    }
     serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
 }
 
@@ -76,10 +97,14 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
         // timeout and exits once the consumer is gone, so a disconnected client can't
         // strand a watcher (and its inotify instance) until the next filesystem event.
         let (evt_tx, mut evt_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let watch_dirs: Vec<PathBuf> = [cfg.sessions_dir.clone(), cfg.projects_dir.clone()]
-            .into_iter()
-            .flatten()
-            .collect();
+        let watch_dirs: Vec<PathBuf> = [
+            cfg.sessions_dir.clone(),
+            cfg.projects_dir.clone(),
+            cfg.codex_home.as_ref().map(|h| h.join("sessions")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         std::thread::spawn(move || {
             let (raw_tx, raw_rx) = std::sync::mpsc::channel();
             let Ok(mut watcher) = notify::recommended_watcher(move |res| {

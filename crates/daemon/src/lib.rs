@@ -25,6 +25,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 
+pub mod artifacts;
 mod claims;
 pub mod events;
 mod forest;
@@ -32,6 +33,7 @@ pub mod host;
 mod inspect;
 mod launcher;
 mod paths;
+pub mod plan_gate;
 mod pty;
 mod session;
 mod watch;
@@ -90,6 +92,10 @@ pub struct Config {
     pub sessions_dir: Option<PathBuf>,
     /// `~/.eigenform/state`: persisted per-session metrics (the activity spark). None = no spark.
     pub state_dir: Option<PathBuf>,
+    /// `$CODEX_HOME` (default `~/.codex`): Codex CLI threads join the forest as rows, the
+    /// drawer renders their rollouts, and `session=<thread id>` resumes them with
+    /// `codex resume`. None = Claude sessions only.
+    pub codex_home: Option<PathBuf>,
     /// Code root for the new-session launcher (`~/projects` or similar).
     /// `immediate_subdirs` of this path become `recent: false` candidates.
     /// None = no subdirectory suggestions (only recents from projects_dir).
@@ -99,6 +105,10 @@ pub struct Config {
     /// Optional JSONL sink for the structured event stream (`--log-file <path>`).
     /// Each recorded event is appended as one JSON line, best-effort; None = no file.
     pub log_file: Option<PathBuf>,
+    /// How long the plan gate holds an `ExitPlanMode` hook awaiting a decision before
+    /// answering "no decision" (the terminal prompt takes over). 0 = the default
+    /// ([`plan_gate::DEFAULT_HOLD`]).
+    pub plan_review_hold_secs: u64,
 }
 
 /// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
@@ -110,6 +120,8 @@ pub struct AppState {
     pub host: Arc<host::SessionHost>,
     /// Structured observability event bus (ring buffer + SSE + optional log file).
     pub events: Arc<events::EventBus>,
+    /// Plan reviews parked by the `ExitPlanMode` hook, awaiting a human decision.
+    pub plan_gate: Arc<plan_gate::PlanGate>,
 }
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
@@ -125,6 +137,27 @@ pub fn app(config: Config) -> Router {
         )
         .route("/api/session/{uuid}/json", get(session::session_json_route))
         .route("/api/session/{uuid}/fork", post(session::fork_route))
+        .route(
+            "/api/session/{uuid}/artifacts",
+            get(artifacts::artifacts_route),
+        )
+        .route(
+            "/artifact/{uuid}/{*path}",
+            get(artifacts::artifact_file_route),
+        )
+        .route(
+            "/api/hooks/plan-review",
+            post(plan_gate::plan_review_hook_route),
+        )
+        .route("/api/plan-reviews", get(plan_gate::plan_reviews_route))
+        .route(
+            "/api/plan-reviews/{id}/plan",
+            get(plan_gate::plan_review_text_route),
+        )
+        .route(
+            "/api/plan-reviews/{id}/decision",
+            post(plan_gate::plan_review_decision_route),
+        )
         .route("/api/forest", get(forest::forest_route))
         .route("/api/watch/forest", get(forest::forest_watch_route))
         .route("/api/claims", get(claims::claims_route))
@@ -168,6 +201,7 @@ pub fn app(config: Config) -> Router {
         host: Arc::new(host::SessionHost::with_events(Arc::clone(&events))),
         config: Arc::new(config),
         events,
+        plan_gate: Arc::new(plan_gate::PlanGate::default()),
     };
     router.with_state(state)
 }

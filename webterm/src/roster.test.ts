@@ -392,3 +392,14 @@ test("headless flag rides through both the merged-pty and disk-only paths", () =
   // interactive rows carry no key at all (keeps deepEqual fixtures stable).
   assert.equal("headless" in byUuid.get("tui")!, false);
 });
+
+test("buildRoster: a Codex forest row carries its engine tag", () => {
+  const rows = buildRoster(
+    [],
+    [forest({ uuid: "0199a1b2-codex", engine: "codex", headless: true })],
+    {},
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.engine, "codex");
+  assert.equal(rows[0]!.headless, true);
+});

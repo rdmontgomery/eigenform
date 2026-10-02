@@ -104,6 +104,23 @@ export function drawerWidthFromPointer(x: number, containerRight: number): numbe
 }
 
 // ---------------------------------------------------------------------------
+// artifactWidthFromPointer — the artifact pane's width.
+// ---------------------------------------------------------------------------
+
+export const ARTIFACT_MIN_W = 280;
+export const ARTIFACT_MAX_W = 1600;
+export const ARTIFACT_DEFAULT_W = 560;
+
+/**
+ * Map a pointer x to the artifact pane's width, given the pane's right edge (the
+ * dock's left edge when the dock is open, else the terminal host's right). Like the
+ * dock, the pane grows to the LEFT, clamped to [ARTIFACT_MIN_W, ARTIFACT_MAX_W].
+ */
+export function artifactWidthFromPointer(x: number, paneRight: number): number {
+  return Math.min(ARTIFACT_MAX_W, Math.max(ARTIFACT_MIN_W, Math.round(paneRight - x)));
+}
+
+// ---------------------------------------------------------------------------
 // splitHeightFromPointer — reach-region height for the in-drawer vertical split.
 // ---------------------------------------------------------------------------
 

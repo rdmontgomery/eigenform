@@ -48,8 +48,15 @@ export interface ForestItem {
   spark: number[];
   /** Launched non-interactively (`claude -p`, an Agent SDK host). */
   headless?: boolean;
-  /** The live process's pid; null for dead sessions. */
+  /** The live process's pid; null for dead sessions. For a Codex thread, the pid
+   *  holding its writer lock. */
   pid?: number | null;
+  /** Present ("codex") for an OpenAI Codex CLI thread; absent for Claude sessions. */
+  engine?: "codex";
+  /** Codex only: last model the thread ran on. */
+  model?: string | null;
+  /** Codex only: the thread it was forked from / spawned by, when Codex recorded one. */
+  parent?: string | null;
 }
 
 /**

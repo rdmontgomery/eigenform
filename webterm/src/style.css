@@ -488,6 +488,39 @@ button { font: inherit; color: inherit; }
 }
 
 /* approximate turn count chip (~N) — quiet, sits in the meta line */
+/* plan gate: a session whose plan is waiting on you */
+.rail-row-review {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 3px;
+  white-space: nowrap;
+}
+.artifact-review-banner {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--tx);
+  background: var(--accent-wash);
+  border-bottom: 1px solid var(--accent);
+}
+
+/* engine chip: a non-Claude thread (Codex) in the rail */
+.rail-row-engine {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 3px;
+  white-space: nowrap;
+}
+
 .rail-row-count {
   font-family: var(--font-mono);
   font-size: 9.5px;
@@ -1103,6 +1136,182 @@ button { font: inherit; color: inherit; }
 .drawer-resizer--dragging {
   background: color-mix(in oklch, var(--accent) 45%, transparent);
 }
+
+/* ── artifact pane ── what the session made, beside the terminal ─────────── */
+.artifact-host {
+  display: flex;
+  flex-direction: column;
+  width: var(--artifact-w, 560px);
+  flex-shrink: 0;
+  min-width: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+.artifact-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.artifact-picker {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--tx);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.artifact-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-3);
+  white-space: nowrap;
+}
+.artifact-btn { width: 24px; height: 24px; }
+/* The document renders on its own background: artifacts assume a page, not chrome. */
+.artifact-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+.artifact-empty {
+  padding: 24px 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--tx-3);
+}
+/* ── annotator ── plan markup compiled to a staged (never sent) critique ──── */
+.artifact-annotate { flex: 1; min-height: 0; display: flex; }
+.ann { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ann-doc {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 24px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--tx);
+}
+.ann-block { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ann-block--h1 { font-size: 18px; font-weight: 650; margin-top: 6px; }
+.ann-block--h2 { font-size: 15.5px; font-weight: 650; margin-top: 14px; border-bottom: 1px solid var(--line-soft); padding-bottom: 2px; }
+.ann-block--h3, .ann-block--h4, .ann-block--h5, .ann-block--h6 { font-weight: 650; margin-top: 10px; }
+.ann-block--li { padding-left: calc(20px + var(--depth, 0) * 16px); position: relative; }
+.ann-block--li::before { content: attr(data-marker); position: absolute; left: calc(var(--depth, 0) * 16px); color: var(--tx-3); user-select: none; }
+.ann-block--quote { border-left: 2px solid var(--line); padding-left: 10px; color: var(--tx-2); }
+.ann-block--code, .ann-block--table {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.ann-mark { color: inherit; border-radius: 2px; cursor: pointer; padding: 0 1px; }
+.ann-mark--comment { background: color-mix(in oklch, var(--accent) 28%, transparent); }
+.ann-mark--delete { background: color-mix(in oklch, oklch(0.62 0.17 25) 26%, transparent); text-decoration: line-through; }
+.ann-mark--replace { background: color-mix(in oklch, oklch(0.68 0.12 250) 28%, transparent); text-decoration: underline wavy; }
+.ann-empty, .ann-hint { color: var(--tx-3); font-size: 12px; }
+
+.ann-pop {
+  position: absolute;
+  z-index: 20;
+  width: 290px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+.ann-pop-quote {
+  font-size: 11.5px;
+  color: var(--tx-2);
+  border-left: 2px solid var(--accent);
+  padding-left: 7px;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+.ann-kinds { display: flex; gap: 4px; }
+.ann-kind {
+  flex: 1;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 0;
+  color: var(--tx-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ann-kind--on { color: var(--tx); background: var(--accent-wash); border-color: var(--accent); }
+.ann-input {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--tx);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 7px;
+  resize: vertical;
+}
+.ann-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.ann-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  color: var(--tx-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ann-btn--primary { color: var(--tx); background: var(--accent-wash); border-color: var(--accent); }
+.ann-btn:disabled { opacity: 0.45; cursor: default; }
+
+.ann-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 12px 11px;
+  border-top: 1px solid var(--line);
+  max-height: 45%;
+  overflow-y: auto;
+}
+.ann-list { display: flex; flex-direction: column; gap: 3px; }
+.ann-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--tx);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  padding: 3px 4px;
+  cursor: pointer;
+}
+.ann-item:hover { background: var(--accent-wash); }
+.ann-item--orphan { opacity: 0.6; }
+.ann-item-kind { font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tx-3); }
+.ann-item-kind--delete { color: oklch(0.66 0.15 25); }
+.ann-item-kind--replace { color: oklch(0.70 0.11 250); }
+.ann-item-quote, .ann-item-note { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ann-item-note { color: var(--tx-2); }
+.ann-status { font-size: 11.5px; color: var(--tx-3); min-height: 1em; }
+
+/* An iframe under the pointer swallows mousemove; keep resizer drags smooth. */
+.is-dragging iframe { pointer-events: none; }
 
 /* xterm.css is imported in main.ts (xterm does not inject it); this only
    ensures the terminal fills the pane. */

@@ -111,6 +111,8 @@ export interface RosterRow {
   msgCount?: number;
   /** Present (true) iff the session was launched headless (`claude -p`, SDK). */
   headless?: true;
+  /** Present ("codex") for a Codex CLI thread; absent for Claude sessions. */
+  engine?: "codex";
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +295,7 @@ export function buildRoster(
     let forestCwd: string | null = null;
     let sparkCount: number | null = null;
     let headless = false;
+    let engine: "codex" | undefined;
     if (resolvedUuid !== null) {
       const fi = forestByUuid.get(resolvedUuid);
       if (fi) {
@@ -300,6 +303,7 @@ export function buildRoster(
         forestCwd = fi.cwd;
         sparkCount = fi.spark.length;
         headless = fi.headless === true;
+        engine = fi.engine;
         mergedForestUuids.add(resolvedUuid);
       }
     }
@@ -344,6 +348,9 @@ export function buildRoster(
     if (headless) {
       row.headless = true;
     }
+    if (engine) {
+      row.engine = engine;
+    }
 
     liveRows.push(row);
   }
@@ -383,6 +390,7 @@ export function buildRoster(
       msgCount: fi.spark.length,
     };
     if (fi.headless) row.headless = true;
+    if (fi.engine) row.engine = fi.engine;
     diskRows.push(row);
   }
 

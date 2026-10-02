@@ -12,54 +12,132 @@ use std::time::SystemTime;
 use crate::{AppState, Config};
 
 /// `GET /api/session/:uuid/json` — the transcript as structured JSON (exchanges + a
-/// trailing leaf) for the drawer, reach map, and forest preview.
+/// trailing leaf) for the drawer, reach map, and forest preview. A Claude session by
+/// uuid/prefix, else a Codex thread.
 pub(crate) async fn session_json_route(
     AxumPath(uuid): AxumPath<String>,
     State(state): State<AppState>,
 ) -> Response {
-    let cfg = &state.config;
-    let Some(dir) = &cfg.projects_dir else {
-        return (StatusCode::NOT_FOUND, "no projects dir configured").into_response();
-    };
-    let Ok(path) = eigenform_forest::resolve(dir, &uuid) else {
-        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    match session_json_cached(&state.config, &uuid) {
+        Some(json) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            json.to_string(),
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such session").into_response(),
+    }
+}
+
+/// The drawer JSON for a session — a Claude session by uuid/prefix, else a Codex thread
+/// — rendered once per (file, mtime, len). None when neither resolves or the file can't
+/// be read. Shared by the drawer route and the artifact routes.
+pub(crate) fn session_json_cached(cfg: &Config, uuid: &str) -> Option<Arc<str>> {
+    let claude = cfg
+        .projects_dir
+        .as_deref()
+        .and_then(|dir| eigenform_forest::resolve(dir, uuid).ok());
+    let Some(path) = claude else {
+        let home = cfg.codex_home.as_deref()?;
+        let stub = eigenform_codex::resolve(home, uuid).ok()?;
+        return SESSION_CACHE
+            .get_or_render(&stub.path, || {
+                let contents = std::fs::read_to_string(&stub.path).unwrap_or_default();
+                eigenform_codex::session_json(&stub.id, &contents)
+            })
+            .ok();
     };
     // Render once per (file, mtime, len); repeat views and forest-browsing skip the
     // multi-MB read+parse+serialize that dominates the manuscript load latency.
     // NB: the cache key is the parent file only — a subagent still writing its own jsonl
     // while the parent is quiet won't invalidate this cache until the parent changes too.
-    match SESSION_CACHE.get_or_render(&path, || {
-        let contents = std::fs::read_to_string(&path).unwrap_or_default();
-        let session =
-            eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+    SESSION_CACHE
+        .get_or_render(&path, || {
+            let contents = std::fs::read_to_string(&path).unwrap_or_default();
+            let session =
+                eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
 
-        let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
-            eigenform_forest::enumerate_subagents(&path)
-                .into_iter()
-                .filter_map(|stub| {
-                    let contents = std::fs::read_to_string(&stub.path).ok()?;
-                    let sub_session = eigenform_surgery::Session::parse_str(&contents)
-                        .unwrap_or_else(|e| match e {});
-                    Some((
-                        stub.agent_id,
-                        eigenform_render::ResolvedSubagent {
-                            session: sub_session,
-                            agent_type: stub.agent_type,
-                            description: stub.description,
-                        },
-                    ))
-                })
-                .collect();
+            let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
+                eigenform_forest::enumerate_subagents(&path)
+                    .into_iter()
+                    .filter_map(|stub| {
+                        let contents = std::fs::read_to_string(&stub.path).ok()?;
+                        let sub_session = eigenform_surgery::Session::parse_str(&contents)
+                            .unwrap_or_else(|e| match e {});
+                        Some((
+                            stub.agent_id,
+                            eigenform_render::ResolvedSubagent {
+                                session: sub_session,
+                                agent_type: stub.agent_type,
+                                description: stub.description,
+                            },
+                        ))
+                    })
+                    .collect();
 
-        eigenform_render::session_json_with_subagents(&session, &subagents)
-    }) {
-        Ok(json) => (
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            json.to_string(),
-        )
-            .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "could not read session").into_response(),
+            let json = eigenform_render::session_json_with_subagents(&session, &subagents);
+            attach_codex_workers(cfg, json)
+        })
+        .ok()
+}
+
+/// The line `codex-worker spawn` prints so a parent transcript names the thread it
+/// started (`.claude/skills/codex-worker`).
+const CODEX_THREAD_MARKER: &str = "codex-thread: ";
+
+/// Nest each Codex worker's transcript under the parent's Bash call that spawned it — the
+/// same `tool.subagent` slot an Agent call's transcript rides, so the drawer shows a Codex
+/// worker exactly like an internal subagent. The link is the `codex-thread: <id>` line in
+/// the Bash output; a thread that doesn't resolve leaves the call untouched.
+fn attach_codex_workers(cfg: &Config, json: String) -> String {
+    let Some(home) = cfg.codex_home.as_deref() else {
+        return json;
+    };
+    if !json.contains(CODEX_THREAD_MARKER) {
+        return json;
     }
+    let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return json;
+    };
+    let Some(exchanges) = v["exchanges"].as_array_mut() else {
+        return json;
+    };
+    let locks = eigenform_codex::WriterLocks::probe();
+    for ex in exchanges {
+        let tool = &mut ex["tool"];
+        if tool["kind"] != "Bash" {
+            continue;
+        }
+        let Some(id) = tool["output"].as_str().and_then(codex_thread_marker) else {
+            continue;
+        };
+        let Ok(stub) = eigenform_codex::resolve(home, &id) else {
+            continue;
+        };
+        let Ok(contents) = std::fs::read_to_string(&stub.path) else {
+            continue;
+        };
+        let row = eigenform_codex::thread(home, &stub, &locks);
+        let sub: serde_json::Value =
+            serde_json::from_str(&eigenform_codex::session_json(&stub.id, &contents))
+                .unwrap_or_default();
+        tool["subagent"] = serde_json::json!({
+            "agentType": "codex",
+            "description": row.title,
+            "threadId": stub.id,
+            "state": row.state.as_str(),
+            "exchanges": sub["exchanges"],
+        });
+    }
+    serde_json::to_string(&v).unwrap_or(json)
+}
+
+/// The thread id on a `codex-thread: <id>` line, if the text carries one.
+fn codex_thread_marker(text: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let id = l.trim().strip_prefix(CODEX_THREAD_MARKER)?.trim();
+        (!id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
+            .then(|| id.to_string())
+    })
 }
 
 /// `POST /api/session/:uuid/fork` — edit-then-fork at a turn. Body `{turn, text}`:
@@ -160,6 +238,20 @@ static SESSION_CACHE: LazyLock<SessionJsonCache> = LazyLock::new(SessionJsonCach
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn codex_thread_marker_is_read_from_bash_output() {
+        assert_eq!(
+            super::codex_thread_marker("worker: x\ncodex-thread: 0199a1b2-c3d4\nworktree: /w")
+                .as_deref(),
+            Some("0199a1b2-c3d4")
+        );
+        assert_eq!(
+            super::codex_thread_marker("codex-thread: not an id; rm -rf"),
+            None
+        );
+        assert_eq!(super::codex_thread_marker("nothing here"), None);
+    }
+
     use super::*;
 
     #[test]

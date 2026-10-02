@@ -39,6 +39,21 @@ dev port="4317":
     cd ..
     cargo watch -w crates -w Cargo.toml -x 'run -q -p eigenform-cli -- daemon --port {{port}} --dev'
 
+# --- codex workers -------------------------------------------------------
+
+# Make the codex-worker skill available in every repo: link the skill into
+# ~/.claude/skills and the script onto PATH (~/.local/bin). Spawns nothing.
+install-codex-skill bindir="~/.local/bin":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="$(pwd)/.claude/skills/codex-worker"
+    bindir="{{bindir}}"; bindir="${bindir/#\~/$HOME}"
+    mkdir -p "$HOME/.claude/skills" "$bindir"
+    ln -sfn "$src" "$HOME/.claude/skills/codex-worker"
+    ln -sf "$src/codex-worker" "$bindir/codex-worker"
+    echo "linked skill → ~/.claude/skills/codex-worker, script → $bindir/codex-worker"
+    command -v codex >/dev/null || echo "note: 'codex' not on PATH yet (npm i -g @openai/codex && codex login)"
+
 # --- testing -------------------------------------------------------------
 
 # Format the Rust workspace (CI fails on unformatted code).

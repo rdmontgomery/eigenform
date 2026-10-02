@@ -45,6 +45,8 @@ export interface RailDeps {
   onFork: (newUuid: string, text: string) => void;
   /** Re-fetch the roster (after a rename commits or is cancelled). */
   onRefresh: () => void;
+  /** True when Claude is waiting on this row's plan (plan gate). */
+  hasPlanReview?: (row: RosterRow) => boolean;
 }
 
 export interface RailHandle {
@@ -297,6 +299,18 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     const project = el("span", "rail-row-project");
     project.textContent = row.cwdChip;
     meta.append(project);
+    if (deps.hasPlanReview?.(row)) {
+      const pending = el("span", "rail-row-review");
+      pending.textContent = "plan review";
+      pending.title = "Claude is waiting on plan approval: open the session to review it";
+      meta.append(pending);
+    }
+    if (row.engine) {
+      const engine = el("span", "rail-row-engine");
+      engine.textContent = row.engine;
+      engine.title = "OpenAI Codex CLI thread — opens with `codex resume`";
+      meta.append(engine);
+    }
     if (row.msgCount !== undefined) {
       const count = el("span", "rail-row-count");
       count.textContent = `~${row.msgCount}`;

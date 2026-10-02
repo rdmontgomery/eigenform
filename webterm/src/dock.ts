@@ -5,7 +5,7 @@
 // tab's session uuid; a tab with no uuid yet shows a placeholder instead.
 // Open state and geometry (width, reach height) persist across reloads.
 
-import { el } from "./dom.ts";
+import { el, makeDragHandle } from "./dom.ts";
 import { mountDrawer } from "./drawer.ts";
 import type { DrawerHandle } from "./drawer.ts";
 import { mountReachMap } from "./reachmap.ts";
@@ -174,35 +174,7 @@ export function mountDock(
   // mirror the rail resizer: drag updates the CSS var live; state persists on
   // mouseup. The width drag re-fits the terminal once at the end — a per-pixel
   // resize would SIGWINCH the pty on every move (spike 09's repaint handles one).
-  function makeDragHandle(
-    handle: HTMLElement,
-    cls: string,
-    cursor: string,
-    onMove: (e: MouseEvent) => void,
-    onEnd: () => void,
-  ) {
-    let dragging = false;
-    handle.addEventListener("mousedown", (e) => {
-      dragging = true;
-      e.preventDefault();
-      handle.classList.add(cls);
-      document.body.style.cursor = cursor;
-      document.body.style.userSelect = "none";
-    });
-    window.addEventListener("mousemove", (e) => {
-      if (!dragging) return;
-      onMove(e);
-    });
-    window.addEventListener("mouseup", () => {
-      if (!dragging) return;
-      dragging = false;
-      handle.classList.remove(cls);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      onEnd();
-    });
-  }
-
+  // (makeDragHandle lives in dom.ts, shared with the artifact pane.)
   makeDragHandle(
     dockResizer,
     "drawer-resizer--dragging",
