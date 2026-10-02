@@ -1117,6 +1117,55 @@ button { font: inherit; color: inherit; }
   background: color-mix(in oklch, var(--accent) 45%, transparent);
 }
 
+/* ── artifact pane ── what the session made, beside the terminal ─────────── */
+.artifact-host {
+  display: flex;
+  flex-direction: column;
+  width: var(--artifact-w, 560px);
+  flex-shrink: 0;
+  min-width: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+}
+.artifact-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.artifact-picker {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--tx);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.artifact-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tx-3);
+  white-space: nowrap;
+}
+.artifact-btn { width: 24px; height: 24px; }
+/* The document renders on its own background: artifacts assume a page, not chrome. */
+.artifact-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+.artifact-empty {
+  padding: 24px 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--tx-3);
+}
+/* An iframe under the pointer swallows mousemove; keep resizer drags smooth. */
+.is-dragging iframe { pointer-events: none; }
+
 /* xterm.css is imported in main.ts (xterm 5.x does not inject it); this only
    ensures the terminal fills the pane. */
 .xterm { height: 100%; }

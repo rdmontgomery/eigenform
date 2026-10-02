@@ -52,6 +52,8 @@ import {
   RAIL_DEFAULT,
   drawerWidthFromPointer,
   DRAWER_DEFAULT_W,
+  artifactWidthFromPointer,
+  ARTIFACT_DEFAULT_W,
   splitHeightFromPointer,
   REACH_DEFAULT_H,
   seedDue,
@@ -62,6 +64,8 @@ import {
 } from "./shell-helpers.ts";
 import { mountPicker } from "./picker.ts";
 import { mountDrawer } from "./drawer.ts";
+import { mountArtifactPane } from "./artifacts.ts";
+import type { ArtifactPaneHandle } from "./artifacts.ts";
 import type { DrawerHandle } from "./drawer.ts";
 import { mountReachMap } from "./reachmap.ts";
 import type { ReachHandle } from "./reachmap.ts";
@@ -106,6 +110,8 @@ const LS_RAIL = "eigenform:term:rail:v1";
 const LS_GROUPS = "eigenform:term:rail-groups:v1";
 const LS_LINKS_FOLD = "eigenform:term:rail-links-fold:v1";
 const LS_FONT = "eigenform:term:font:v1";
+const LS_ARTIFACT = "eigenform:term:artifact:v1"; // "1" = artifact pane open
+const LS_ARTIFACT_W = "eigenform:term:artifact-w:v1";
 
 /** Terminal typefaces offered in the font popover. macOS-first: "System Mono"
  *  resolves to SF Mono / Menlo with no webfont round-trip. */
@@ -391,7 +397,12 @@ export function mountShell(appEl: HTMLElement): void {
   // it self-collapses to just its header when folded.
   const eventsRegion = el("div", "events-region");
   drawerDock.append(reachRegion, dockVsplit, transcriptRegion, eventsRegion);
-  termHost.append(termStack, dockResizer, drawerDock);
+  // Artifact pane: what the active session made (HTML/SVG/markdown/images), split
+  // beside the terminal and left of the dock. See artifacts.ts for its sandboxing.
+  const artifactResizer = el("div", "drawer-resizer artifact-resizer");
+  artifactResizer.title = "drag to resize the artifact pane";
+  const artifactHost = el("div", "artifact-host");
+  termHost.append(termStack, artifactResizer, artifactHost, dockResizer, drawerDock);
   termArea.append(termHeader, termHost);
 
   main.append(topbar, termArea);
@@ -636,6 +647,38 @@ export function mountShell(appEl: HTMLElement): void {
     localStorage.setItem(LS_REACH_H, String(reachH));
   }
 
+  // ── Artifact pane ─────────────────────────────────────────────────────────
+  // GLOBAL toggle like the dock, following the active tab's session uuid.
+  let artifactOpen = localStorage.getItem(LS_ARTIFACT) === "1";
+  let artifactPane: ArtifactPaneHandle | null = null;
+  let artifactW = artifactWidthFromPointer(0, readNum(LS_ARTIFACT_W, ARTIFACT_DEFAULT_W));
+  function applyArtifactGeometry() {
+    document.documentElement.style.setProperty("--artifact-w", `${artifactW}px`);
+  }
+  applyArtifactGeometry();
+
+  function setArtifactOpen(open: boolean) {
+    artifactOpen = open;
+    localStorage.setItem(LS_ARTIFACT, open ? "1" : "0");
+    syncArtifactPane();
+    renderControls();
+    fitActive();
+  }
+
+  /** Reconcile the artifact pane against (artifactOpen, active tab's uuid). */
+  function syncArtifactPane() {
+    const open = artifactOpen && tabs.length > 0;
+    artifactHost.style.display = open ? "flex" : "none";
+    artifactResizer.style.display = open ? "" : "none";
+    if (!open) {
+      artifactPane?.close();
+      artifactPane = null;
+      return;
+    }
+    artifactPane ??= mountArtifactPane(artifactHost);
+    artifactPane.setSession(activeTab()?.descriptor.uuid ?? null);
+  }
+
   function setDrawerOpen(open: boolean) {
     drawerOpen = open;
     localStorage.setItem(LS_DRAWER, open ? "1" : "0");
@@ -649,6 +692,8 @@ export function mountShell(appEl: HTMLElement): void {
     // The rail's Links section tracks the active tab's uuid the same way the
     // dock does, but it's a permanent sidebar fixture — not gated by drawerOpen.
     syncLinks();
+    // The artifact pane follows the same tab/uuid changes (its own open state).
+    syncArtifactPane();
 
     const open = drawerOpen && tabs.length > 0;
     drawerDock.style.display = open ? "flex" : "none";
@@ -836,6 +881,8 @@ export function mountShell(appEl: HTMLElement): void {
       dragging = true;
       e.preventDefault();
       handle.classList.add(cls);
+      // An iframe (the artifact pane) under the pointer would swallow mousemove.
+      document.body.classList.add("is-dragging");
       document.body.style.cursor = cursor;
       document.body.style.userSelect = "none";
     });
@@ -847,11 +894,29 @@ export function mountShell(appEl: HTMLElement): void {
       if (!dragging) return;
       dragging = false;
       handle.classList.remove(cls);
+      document.body.classList.remove("is-dragging");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       onEnd();
     });
   }
+
+  makeDragHandle(
+    artifactResizer,
+    "drawer-resizer--dragging",
+    "col-resize",
+    (e) => {
+      const right = drawerDock.style.display === "none"
+        ? termHost.getBoundingClientRect().right
+        : drawerDock.getBoundingClientRect().left;
+      artifactW = artifactWidthFromPointer(e.clientX, right);
+      applyArtifactGeometry();
+    },
+    () => {
+      localStorage.setItem(LS_ARTIFACT_W, String(artifactW));
+      fitActive();
+    },
+  );
 
   makeDragHandle(
     dockResizer,
@@ -919,7 +984,13 @@ export function mountShell(appEl: HTMLElement): void {
     drawerBtn.append(icon("panel", 16));
     drawerBtn.addEventListener("click", () => setDrawerOpen(!drawerOpen));
 
-    controls.append(themeBtn, fontBtn, configBtn, claimsBtn, sep, drawerBtn);
+    // Artifact pane toggle — what the session made, rendered beside the terminal.
+    const artifactBtn = el("button", `icon-btn${artifactOpen ? " icon-btn--active" : ""}`);
+    artifactBtn.title = artifactOpen ? "Hide artifact pane" : "Show artifact pane (HTML · SVG · markdown the session wrote)";
+    artifactBtn.append(icon("window", 16));
+    artifactBtn.addEventListener("click", () => setArtifactOpen(!artifactOpen));
+
+    controls.append(themeBtn, fontBtn, configBtn, claimsBtn, sep, artifactBtn, drawerBtn);
   }
 
   function showClaims() {

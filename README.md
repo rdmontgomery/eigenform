@@ -20,6 +20,8 @@ One local daemon, one browser tab, every Claude Code session you have.
 
 - **Codex workers.** OpenAI Codex CLI threads join the rail (tagged `codex`) with transcript and reach map. A worker Claude spawned nests under the Bash call that started it, and double-clicking a thread opens `codex resume` in a tab, refused while a worker still holds it. The [`codex-worker`](.claude/skills/codex-worker/SKILL.md) skill gives Claude the delegate → verify → correct loop; `just install-codex-skill` makes it available in every repo. Design: [`docs/plans/2026-10-02-codex-workers-design.md`](docs/plans/2026-10-02-codex-workers-design.md).
 
+- **Artifact pane.** What the session *made*: HTML, SVG, markdown and images it wrote, rendered in a split beside the terminal. It follows the newest write (or you pin one) and reloads as the agent edits, including files a subagent or Codex worker wrote. Each artifact runs in a sandbox with an opaque origin, so agent-written pages can't reach the daemon's API or the pty socket.
+
 Nothing leaves your machine. The daemon reads `~/.claude` (and `~/.codex`); it never calls an API.
 
 ## Install & run

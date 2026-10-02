@@ -21,6 +21,7 @@ use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Deserialize;
 
+pub mod artifacts;
 pub mod events;
 pub mod host;
 
@@ -112,6 +113,8 @@ pub fn app(config: Config) -> Router {
         .route("/api/pty/:id", axum::routing::delete(pty_delete_route))
         .route("/api/session/:uuid/json", get(session_json_route))
         .route("/api/session/:uuid/fork", post(fork_route))
+        .route("/api/session/:uuid/artifacts", get(artifacts_route))
+        .route("/artifact/:uuid/*path", get(artifact_file_route))
         .route("/api/forest", get(forest_route))
         .route("/api/watch/forest", get(forest_watch_route))
         .route("/api/claims", get(claims_route))
@@ -172,51 +175,189 @@ async fn session_json_route(
     AxumPath(uuid): AxumPath<String>,
     State(state): State<AppState>,
 ) -> Response {
-    let cfg = &state.config;
+    match session_json_cached(&state.config, &uuid) {
+        Some(json) => (
+            [(axum::http::header::CONTENT_TYPE, "application/json")],
+            json.to_string(),
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such session").into_response(),
+    }
+}
+
+/// The drawer JSON for a session — a Claude session by uuid/prefix, else a Codex thread
+/// — rendered once per (file, mtime, len). None when neither resolves or the file can't
+/// be read.
+fn session_json_cached(cfg: &Config, uuid: &str) -> Option<Arc<str>> {
     let claude = cfg
         .projects_dir
         .as_deref()
-        .and_then(|dir| eigenform_forest::resolve(dir, &uuid).ok());
+        .and_then(|dir| eigenform_forest::resolve(dir, uuid).ok());
     let Some(path) = claude else {
-        return codex_session_json(cfg, &uuid);
+        let home = cfg.codex_home.as_deref()?;
+        let stub = eigenform_codex::resolve(home, uuid).ok()?;
+        return SESSION_CACHE
+            .get_or_render(&stub.path, || {
+                let contents = std::fs::read_to_string(&stub.path).unwrap_or_default();
+                eigenform_codex::session_json(&stub.id, &contents)
+            })
+            .ok();
     };
     // Render once per (file, mtime, len); repeat views and forest-browsing skip the
     // multi-MB read+parse+serialize that dominates the manuscript load latency.
     // NB: the cache key is the parent file only — a subagent still writing its own jsonl
     // while the parent is quiet won't invalidate this cache until the parent changes too.
-    match SESSION_CACHE.get_or_render(&path, || {
-        let contents = std::fs::read_to_string(&path).unwrap_or_default();
-        let session =
-            eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+    SESSION_CACHE
+        .get_or_render(&path, || {
+            let contents = std::fs::read_to_string(&path).unwrap_or_default();
+            let session =
+                eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
 
-        let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
-            eigenform_forest::enumerate_subagents(&path)
-                .into_iter()
-                .filter_map(|stub| {
-                    let contents = std::fs::read_to_string(&stub.path).ok()?;
-                    let sub_session = eigenform_surgery::Session::parse_str(&contents)
-                        .unwrap_or_else(|e| match e {});
-                    Some((
-                        stub.agent_id,
-                        eigenform_render::ResolvedSubagent {
-                            session: sub_session,
-                            agent_type: stub.agent_type,
-                            description: stub.description,
-                        },
-                    ))
-                })
-                .collect();
+            let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
+                eigenform_forest::enumerate_subagents(&path)
+                    .into_iter()
+                    .filter_map(|stub| {
+                        let contents = std::fs::read_to_string(&stub.path).ok()?;
+                        let sub_session = eigenform_surgery::Session::parse_str(&contents)
+                            .unwrap_or_else(|e| match e {});
+                        Some((
+                            stub.agent_id,
+                            eigenform_render::ResolvedSubagent {
+                                session: sub_session,
+                                agent_type: stub.agent_type,
+                                description: stub.description,
+                            },
+                        ))
+                    })
+                    .collect();
 
-        let json = eigenform_render::session_json_with_subagents(&session, &subagents);
-        attach_codex_workers(cfg, json)
-    }) {
-        Ok(json) => (
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            json.to_string(),
-        )
-            .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "could not read session").into_response(),
+            let json = eigenform_render::session_json_with_subagents(&session, &subagents);
+            attach_codex_workers(cfg, json)
+        })
+        .ok()
+}
+
+/// `GET /api/session/:uuid/artifacts` — the renderable files (HTML, SVG, markdown,
+/// images) the session wrote or edited, newest write first, each with the sandboxed
+/// `/artifact/…` URL the pane loads and the file's current mtime (null if it's gone).
+async fn artifacts_route(
+    AxumPath(uuid): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(json) = session_json_cached(&state.config, &uuid) else {
+        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    };
+    let rows: Vec<serde_json::Value> = artifacts::from_session_json(&json)
+        .into_iter()
+        .map(|a| {
+            let mtime = std::fs::metadata(&a.path)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+            serde_json::json!({
+                "path": a.path.display().to_string(),
+                "name": a.path.file_name().map(|n| n.to_string_lossy().into_owned()),
+                "kind": a.kind,
+                "turn": a.turn,
+                "by": a.by,
+                "mtime": mtime,
+                "url": artifact_url(&uuid, &a.path),
+            })
+        })
+        .collect();
+    axum::Json(rows).into_response()
+}
+
+/// `/artifact/<uuid>/<absolute path, leading slash dropped, each segment
+/// percent-encoded>` — relative references inside the document resolve beside it.
+fn artifact_url(uuid: &str, path: &std::path::Path) -> String {
+    let mut url = format!("/artifact/{}", percent_encode(uuid));
+    for part in path.components() {
+        if let std::path::Component::Normal(seg) = part {
+            url.push('/');
+            url.push_str(&percent_encode(&seg.to_string_lossy()));
+        }
     }
+    url
+}
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ArtifactQuery {
+    /// `raw=1` serves a markdown file as text instead of the rendered page.
+    #[serde(default)]
+    raw: u8,
+}
+
+/// `GET /artifact/:uuid/*path` — one file in an artifact's scope (see
+/// [`artifacts::authorize`]), always under a `sandbox` CSP so the document gets an
+/// opaque origin and can't reach the daemon's API or pty socket. Markdown is rendered
+/// to a script-free page unless `?raw=1`.
+async fn artifact_file_route(
+    AxumPath((uuid, path)): AxumPath<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<ArtifactQuery>,
+    State(state): State<AppState>,
+) -> Response {
+    use axum::http::header;
+    let Some(json) = session_json_cached(&state.config, &uuid) else {
+        return (StatusCode::NOT_FOUND, "no such session").into_response();
+    };
+    let requested = PathBuf::from("/").join(path.trim_start_matches('/'));
+    let arts = artifacts::from_session_json(&json);
+    let canon = match artifacts::authorize(&requested, &arts) {
+        Ok(p) => p,
+        Err(artifacts::Denied::Missing) => {
+            return (StatusCode::NOT_FOUND, "no such file").into_response()
+        }
+        Err(artifacts::Denied::OutOfScope) => {
+            return (StatusCode::FORBIDDEN, "not an artifact of this session").into_response()
+        }
+    };
+    let Ok(bytes) = std::fs::read(&canon) else {
+        return (StatusCode::NOT_FOUND, "no such file").into_response();
+    };
+    let common = |ct: &'static str, csp: &'static str| {
+        [
+            (header::CONTENT_TYPE, ct),
+            (header::CONTENT_SECURITY_POLICY, csp),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ]
+    };
+    if artifacts::kind_of(&canon) == Some("markdown") {
+        if q.raw != 0 {
+            return (
+                common("text/plain; charset=utf-8", artifacts::csp(false)),
+                bytes,
+            )
+                .into_response();
+        }
+        let title = canon
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let page = artifacts::markdown_page(&title, &String::from_utf8_lossy(&bytes));
+        return (
+            common("text/html; charset=utf-8", artifacts::csp(false)),
+            page,
+        )
+            .into_response();
+    }
+    let ct = artifacts::content_type(&canon);
+    let scripts = ct.starts_with("text/html") || ct == "image/svg+xml";
+    (common(ct, artifacts::csp(scripts)), bytes).into_response()
 }
 
 /// The line `codex-worker spawn` prints so a parent transcript names the thread it
@@ -277,29 +418,6 @@ fn codex_thread_marker(text: &str) -> Option<String> {
         (!id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
             .then(|| id.to_string())
     })
-}
-
-/// The drawer JSON for a Codex thread, or 404 when `uuid` is no Codex thread either.
-/// Shares the render cache, so a static rollout is parsed once.
-fn codex_session_json(cfg: &Config, uuid: &str) -> Response {
-    let Some(stub) = cfg
-        .codex_home
-        .as_deref()
-        .and_then(|home| eigenform_codex::resolve(home, uuid).ok())
-    else {
-        return (StatusCode::NOT_FOUND, "no such session").into_response();
-    };
-    match SESSION_CACHE.get_or_render(&stub.path, || {
-        let contents = std::fs::read_to_string(&stub.path).unwrap_or_default();
-        eigenform_codex::session_json(&stub.id, &contents)
-    }) {
-        Ok(json) => (
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            json.to_string(),
-        )
-            .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "could not read session").into_response(),
-    }
 }
 
 /// `POST /api/session/:uuid/fork` — edit-then-fork at a turn. Body `{turn, text}`:
@@ -1126,6 +1244,16 @@ async fn pty_ws(
             }
         };
 
+        // A resume continues a known id: record it now so the drawer, artifact pane and
+        // a later attach all know the session without waiting on a claim file.
+        if let Some(uuid) = command.resumes.clone() {
+            live.set_uuid(uuid.clone());
+            events.record(
+                "session-uuid-adopted",
+                serde_json::json!({ "ptyId": live.id.to_string(), "uuid": uuid, "source": "resume" }),
+            );
+        }
+
         // For a fresh session: watch for its new JSONL, then record the uuid on the
         // LivePty and broadcast it to attached clients. The watcher holds a `Weak`
         // (mirroring the pump) so an abandoned connection can't keep the pty alive.
@@ -1242,6 +1370,7 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
             args: vec![],
             cwd: Some(expanded),
             watch: Some((projects.clone(), escaped)),
+            resumes: None,
         };
     }
     if let Some(cwd) = &query.term {
@@ -1250,24 +1379,27 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
             args: cfg.args.clone(),
             cwd: Some(expand_tilde(cwd)),
             watch: None,
+            resumes: None,
         };
     }
     if let (Some(uuid), Some(dir)) = (&query.session, &cfg.projects_dir) {
         if let Ok(stub) = eigenform_forest::resolve_stub(dir, uuid) {
             return PtyCommand {
                 program: "claude".to_string(),
-                args: vec!["--resume".to_string(), stub.uuid],
+                args: vec!["--resume".to_string(), stub.uuid.clone()],
                 cwd: Some(stub.cwd),
                 watch: None,
+                resumes: Some(stub.uuid),
             };
         }
     }
     if let Some(thread) = query.session.as_deref().and_then(|q| codex_thread(cfg, q)) {
         return PtyCommand {
             program: "codex".to_string(),
-            args: vec!["resume".to_string(), thread.id],
+            args: vec!["resume".to_string(), thread.id.clone()],
             cwd: Some(thread.cwd),
             watch: None,
+            resumes: Some(thread.id),
         };
     }
     PtyCommand {
@@ -1275,6 +1407,7 @@ fn pty_command(cfg: &Config, query: &PtyQuery) -> PtyCommand {
         args: cfg.args.clone(),
         cwd: cfg.cwd.clone(),
         watch: None,
+        resumes: None,
     }
 }
 
@@ -1461,6 +1594,10 @@ struct PtyCommand {
     cwd: Option<PathBuf>,
     /// For a fresh session: (projects_dir, escaped-cwd dir name) to watch for the new JSONL.
     watch: Option<(PathBuf, String)>,
+    /// For a resume: the session/thread id it continues. Resume keeps the id (spike 13;
+    /// `codex resume` appends to the same thread), so it's recorded at spawn rather than
+    /// waiting on a claim file — `codex` never writes one, and claude's is lazy.
+    resumes: Option<String>,
 }
 
 // The bridge's outbound type now lives in `host` (Task 1.3), where Task 1.4's pump
@@ -1893,6 +2030,7 @@ mod tests {
         let cmd = pty_command(&cfg, &q);
         assert_eq!(cmd.program, "codex");
         assert_eq!(cmd.args, vec!["resume".to_string(), id.to_string()]);
+        assert_eq!(cmd.resumes.as_deref(), Some(id));
         assert_eq!(cmd.cwd.as_deref(), Some(std::path::Path::new("/w/repo")));
         assert_eq!(codex_resume_leased(&cfg, &q), None, "no writer → resumable");
 
@@ -1934,6 +2072,17 @@ mod tests {
             create: 0,
         };
         assert!(session_resume_unresolved(&cfg, &unknown));
+    }
+
+    #[test]
+    fn an_opaque_origin_is_not_local() {
+        // Artifacts are served under a `sandbox` CSP, so their documents send
+        // `Origin: null` — which must never pass the pty socket's guard.
+        let mut h = HeaderMap::new();
+        h.insert("origin", "null".parse().unwrap());
+        assert!(!origin_is_local(&h));
+        h.insert("origin", "http://127.0.0.1:4317".parse().unwrap());
+        assert!(origin_is_local(&h));
     }
 
     #[test]
@@ -1979,6 +2128,8 @@ mod tests {
         );
         assert_eq!(resumed.program, "claude");
         assert_eq!(resumed.args, vec!["--resume".to_string(), uuid.to_string()]);
+        // Resume keeps the id (spike 13), so the pty is bound to it at spawn.
+        assert_eq!(resumed.resumes.as_deref(), Some(uuid));
         assert_eq!(
             resumed.cwd.as_deref(),
             Some(std::path::Path::new("/home/me/proj"))

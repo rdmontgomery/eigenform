@@ -25,6 +25,7 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 chrono       = { workspace = true }
 notify       = { workspace = true }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 tokio-stream = { workspace = true }
 eigenform-forest   = { path = "../forest" }
 eigenform-codex    = { path = "../codex" }
