@@ -119,7 +119,10 @@ pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty::pty_ws))
         .route("/api/pty", get(pty::pty_list_route))
-        .route("/api/pty/{id}", axum::routing::delete(pty::pty_delete_route))
+        .route(
+            "/api/pty/{id}",
+            axum::routing::delete(pty::pty_delete_route),
+        )
         .route("/api/session/{uuid}/json", get(session::session_json_route))
         .route("/api/session/{uuid}/fork", post(session::fork_route))
         .route("/api/forest", get(forest::forest_route))
