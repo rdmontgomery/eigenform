@@ -27,6 +27,7 @@ import { icon } from "./icons.ts";
 import { subscribeWatch } from "./watch.ts";
 import { renderBands } from "./reachviews.ts";
 import type { ReachViewCtx } from "./reachviews.ts";
+import { el } from "./dom.ts";
 
 /** The selectable reach renderings, cycled from the header. */
 type ReachView = "web" | "bands";
@@ -124,11 +125,6 @@ function svg<K extends keyof SVGElementTagNameMap>(
   return e;
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
-}
 
 function trunc(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + "…";

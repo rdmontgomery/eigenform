@@ -16,6 +16,7 @@
  */
 
 import { icon } from "./icons.ts";
+import { el } from "./dom.ts";
 
 // ---------------------------------------------------------------------------
 // Wire types — mirror eigenform_render::inspect_json field-for-field.
@@ -103,11 +104,6 @@ export function inspectSummary(data: InspectData): InspectSummary {
 // DOM — the navigable tree (typecheck-only; no node --test coverage)
 // ---------------------------------------------------------------------------
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
-}
 
 /** Keyboard-nav handle for a collapsible group, keyed by its header button.
  *  Lets the overlay's arrow-key handler drive any node it lands on. */

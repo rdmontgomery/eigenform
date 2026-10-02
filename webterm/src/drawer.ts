@@ -54,6 +54,7 @@ import { toolView, toolsSummary } from "./toolview.ts";
 import type { ToolView } from "./toolview.ts";
 import { icon } from "./icons.ts";
 import { subscribeWatch } from "./watch.ts";
+import { el } from "./dom.ts";
 
 // ---------------------------------------------------------------------------
 // Minimal session fetch (mirrors web/src/data.ts fetchSession — do not import
@@ -871,12 +872,3 @@ export function mountDrawer(
 // ---------------------------------------------------------------------------
 // DOM utility (local — same pattern as shell.ts)
 // ---------------------------------------------------------------------------
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  cls?: string,
-): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  return e;
-}
