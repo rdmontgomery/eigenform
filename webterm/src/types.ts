@@ -19,7 +19,9 @@ export type PtyState = "working" | "waiting" | "idle" | "exited";
  * - `id`: u64 serialised as a string (JS Number cannot hold u64 exactly).
  * - `cwd`: None when the pty was spawned without a working directory → null.
  * - `uuid`: None until the JSONL watcher or reconcile detects the session → null.
- * - `spawnedAt` / `lastActivity`: ISO-8601 (rfc3339).
+ * - `spawnedAt` / `lastActivity` / `lastInput`: ISO-8601 (rfc3339).
+ * - `lastInput`: when a person last typed into the pty (spawn counts). Optional
+ *   so an older daemon that doesn't report it still parses; fall back to spawnedAt.
  */
 export interface PtyInfo {
   id: string;
@@ -28,6 +30,7 @@ export interface PtyInfo {
   state: PtyState;
   spawnedAt: string;
   lastActivity: string;
+  lastInput?: string;
 }
 
 /**

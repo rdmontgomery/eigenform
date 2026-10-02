@@ -128,18 +128,38 @@ test("live ptys sort above recent forest rows", () => {
   assert.equal(rows[1]!.live, false, "forest-only row should come second");
 });
 
-test("within live group, rows sort by spawnedAt newest-first — NOT lastActivity", () => {
-  // lastActivity deliberately orders the opposite way: it churns on every pty
-  // output chunk, so sorting on it made live rows leapfrog on each poll.
+test("within live group, the session you typed into last is on top", () => {
+  // Spawn order says 2,3,1; input says 1 was used most recently.
+  const ptys: PtyInfo[] = [
+    pty({ id: "1", uuid: null, spawnedAt: "2026-06-11T08:00:00Z", lastInput: "2026-06-11T12:00:00Z" }),
+    pty({ id: "2", uuid: null, spawnedAt: "2026-06-11T10:00:00Z", lastInput: "2026-06-11T10:00:00Z" }),
+    pty({ id: "3", uuid: null, spawnedAt: "2026-06-11T09:00:00Z", lastInput: "2026-06-11T11:00:00Z" }),
+  ];
+  const rows = buildRoster(ptys, [], {});
+  assert.deepEqual(rows.map((r) => r.ptyId), ["1", "3", "2"]);
+  assert.equal(rows[0]!.recency, "2026-06-11T12:00:00Z", "recency shows last use");
+});
+
+test("within live group, rows do NOT sort by lastActivity", () => {
+  // lastActivity churns on every pty output chunk (spinner frames), so sorting
+  // on it made live rows leapfrog on each poll. Same input time → spawn order.
+  const ptys: PtyInfo[] = [
+    pty({ id: "1", uuid: null, spawnedAt: "2026-06-11T08:00:00Z", lastInput: "2026-06-11T11:00:00Z", lastActivity: "2026-06-11T12:00:03Z" }),
+    pty({ id: "2", uuid: null, spawnedAt: "2026-06-11T10:00:00Z", lastInput: "2026-06-11T11:00:00Z", lastActivity: "2026-06-11T12:00:01Z" }),
+    pty({ id: "3", uuid: null, spawnedAt: "2026-06-11T09:00:00Z", lastInput: "2026-06-11T11:00:00Z", lastActivity: "2026-06-11T12:00:02Z" }),
+  ];
+  const rows = buildRoster(ptys, [], {});
+  assert.deepEqual(rows.map((r) => r.ptyId), ["2", "3", "1"]);
+});
+
+test("without lastInput (older daemon), live rows fall back to spawn order", () => {
   const ptys: PtyInfo[] = [
     pty({ id: "1", uuid: null, spawnedAt: "2026-06-11T08:00:00Z", lastActivity: "2026-06-11T12:00:03Z" }),
     pty({ id: "2", uuid: null, spawnedAt: "2026-06-11T10:00:00Z", lastActivity: "2026-06-11T12:00:01Z" }),
-    pty({ id: "3", uuid: null, spawnedAt: "2026-06-11T09:00:00Z", lastActivity: "2026-06-11T12:00:02Z" }),
   ];
   const rows = buildRoster(ptys, [], {});
-  assert.equal(rows[0]!.ptyId, "2");
-  assert.equal(rows[1]!.ptyId, "3");
-  assert.equal(rows[2]!.ptyId, "1");
+  assert.deepEqual(rows.map((r) => r.ptyId), ["2", "1"]);
+  assert.equal(rows[0]!.recency, "2026-06-11T10:00:00Z");
 });
 
 test("live group order is stable when only lastActivity changes between polls", () => {

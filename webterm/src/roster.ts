@@ -98,8 +98,8 @@ export interface RosterRow {
    */
   uuid?: string;
   /** ISO-8601 string shown as the row's relative-recency text and used for
-   *  age-group bucketing. For live rows: lastActivity from pty (display only —
-   *  live rows sort by spawn order, see buildRoster). For disk-only rows:
+   *  age-group bucketing. For live rows: when you last typed into the pty
+   *  (lastInput, else spawnedAt), which also sorts the live group. For disk-only rows:
    *  recency from forest, which also sorts the disk group (lexicographic
    *  comparison is chronological here because all timestamps share the same
    *  +00:00 UTC offset from the backend). */
@@ -195,6 +195,11 @@ function idDesc(a: string, b: string): number {
   return a > b ? -1 : a < b ? 1 : 0;
 }
 
+/** When a person last used a live pty: lastInput, else (older daemon) spawn. */
+function lastUsed(p: PtyInfo): string {
+  return p.lastInput ?? p.spawnedAt;
+}
+
 // ---------------------------------------------------------------------------
 // buildRoster
 // ---------------------------------------------------------------------------
@@ -203,13 +208,15 @@ function idDesc(a: string, b: string): number {
  * Build a sorted roster from live registry ptys + disk forest items.
  *
  * Ordering:
- *   1. Live (registry-backed) rows first, sorted by spawnedAt DESC (newest
- *      session on top), ties broken by pty id DESC. Deliberately NOT
- *      lastActivity: the daemon stamps that on every pty output chunk, and a
- *      live claude TUI emits output near-constantly (spinner frames, status
- *      repaints) — sorting on it made rows leapfrog on every roster poll.
- *      Spawn order is stable for a session's whole lifetime; the status dots
- *      carry the activity signal instead.
+ *   1. Live (registry-backed) rows first, sorted by last use DESC: lastInput
+ *      (the daemon stamps it when a person types into the pty, spawn counts as
+ *      the first use; an older daemon without it falls back to spawnedAt), ties
+ *      by spawnedAt DESC then pty id DESC. Deliberately NOT lastActivity: the
+ *      daemon stamps that on every pty output chunk, and a live claude TUI
+ *      emits output near-constantly (spinner frames, status repaints) — sorting
+ *      on it made rows leapfrog on every roster poll. lastInput only moves when
+ *      you act, so the session you just used rises and the rest hold still;
+ *      the status dots carry the activity signal.
  *   2. Disk-only (forest) rows second, sorted by recency DESC.
  *
  * Merge: a pty row and a forest row sharing the same uuid are collapsed into
@@ -272,16 +279,16 @@ export function buildRoster(
   const mergedForestUuids = new Set<string>();
 
   // ------------------------------------------------------------------
-  // Step 3: Emit live (registry-backed) rows, in stable spawn order (newest
-  // first, ties by id). Sorting the inputs up front keeps the emit loop's
+  // Step 3: Emit live (registry-backed) rows, last-used first (ties by spawn
+  // order, then id). Sorting the inputs up front keeps the emit loop's
   // output order canonical — no post-sort on a churning timestamp.
   // ------------------------------------------------------------------
-  mutPtys.sort((a, b) =>
-    a.info.spawnedAt > b.info.spawnedAt
-      ? -1
-      : a.info.spawnedAt < b.info.spawnedAt
-        ? 1
-        : idDesc(a.info.id, b.info.id),
+  const desc = (a: string, b: string) => (a > b ? -1 : a < b ? 1 : 0);
+  mutPtys.sort(
+    (a, b) =>
+      desc(lastUsed(a.info), lastUsed(b.info)) ||
+      desc(a.info.spawnedAt, b.info.spawnedAt) ||
+      idDesc(a.info.id, b.info.id),
   );
 
   const liveRows: RosterRow[] = [];
@@ -334,7 +341,7 @@ export function buildRoster(
       liveness: p.state === "exited" ? "none" : "eigenform",
       activity: ptyActivity(p.state),
       ptyId: p.id,
-      recency: p.lastActivity,
+      recency: lastUsed(p),
     };
     if (effectiveCwd !== null) {
       row.cwd = effectiveCwd;
