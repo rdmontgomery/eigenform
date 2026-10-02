@@ -26,7 +26,14 @@ Nothing leaves your machine. The daemon reads `~/.claude` (and `~/.codex`); it n
 
 ## Install & run
 
-eigenform is a single local daemon that serves a browser app and hosts your Claude Code pty sessions. Install it once and the app is baked into the binary — no Node, no build step, no flags:
+eigenform is a single local daemon that serves a browser app and hosts your Claude Code pty sessions. Every merge to `main` that passes CI is released as a prebuilt binary (macOS arm/intel, Linux x86_64) to a Homebrew tap, which also installs the `ef` shortcut:
+
+```sh
+brew install rdmontgomery/eigenform/eigenform
+brew upgrade eigenform      # later; then `ef stop && ef` if a daemon was running
+```
+
+Or build from a checkout. The app is baked into the binary — no Node, no build step, no flags at runtime:
 
 ```sh
 just install        # builds the frontend, then `cargo install` with assets embedded

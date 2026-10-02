@@ -10,7 +10,7 @@ const DEFAULT_PORT: u16 = 4317;
 #[derive(Parser, Debug)]
 #[command(
     name = "eigenform",
-    version,
+    version = eigenform_daemon::VERSION,
     about = "control surface over Claude Code sessions"
 )]
 struct Cli {
@@ -758,8 +758,17 @@ fn health_probe(port: u16) -> Option<DaemonHealth> {
 /// Zero-arg `eigenform`: reuse a running daemon, else start one detached and open the app.
 fn launch(port: u16) -> Result<()> {
     let url = format!("http://127.0.0.1:{port}");
-    if health_probe(port).is_some() {
+    if let Some(h) = health_probe(port) {
         println!("eigenform → {url}  (already running) — opening browser");
+        if h.version != eigenform_daemon::VERSION {
+            // An upgrade replaced the binary but the old daemon is still serving.
+            println!(
+                "  note: the running daemon is v{}, this eigenform is v{} — \
+                 `eigenform stop && eigenform` switches over (ends open sessions)",
+                h.version,
+                eigenform_daemon::VERSION
+            );
+        }
         open_browser(&url);
         return Ok(());
     }

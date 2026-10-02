@@ -26,6 +26,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 
+/// The eigenform version: `EIGENFORM_VERSION` when the release workflow stamps it at
+/// build time (one per merge to main), else the crate version with a `-dev` suffix for
+/// local builds. `/api/health` reports it so the launcher can spot a stale daemon.
+pub const VERSION: &str = match option_env!("EIGENFORM_VERSION") {
+    Some(v) => v,
+    None => concat!(env!("CARGO_PKG_VERSION"), "-dev"),
+};
+
 pub mod artifacts;
 mod claims;
 pub mod events;
@@ -232,7 +240,7 @@ pub async fn serve(addr: std::net::SocketAddr, config: Config) -> anyhow::Result
 async fn health_route() -> Response {
     axum::Json(serde_json::json!({
         "app": "eigenform",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": VERSION,
         "pid": std::process::id(),
     }))
     .into_response()
