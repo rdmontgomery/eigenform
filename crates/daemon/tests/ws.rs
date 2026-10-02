@@ -27,11 +27,9 @@ async fn ws_forwards_stdin_and_streams_pty_output() {
         .expect("connect");
 
     // stdin control message → pty; cat echoes it back as binary output
-    ws.send(Message::Text(
-        r#"{"type":"stdin","data":"ping\n"}"#.to_string(),
-    ))
-    .await
-    .unwrap();
+    ws.send(Message::Text(r#"{"type":"stdin","data":"ping\n"}"#.into()))
+        .await
+        .unwrap();
 
     let mut got = Vec::new();
     for _ in 0..50 {
@@ -81,13 +79,13 @@ async fn ws_accepts_a_resize_message_without_closing() {
         .expect("connect");
 
     ws.send(Message::Text(
-        r#"{"type":"resize","cols":100,"rows":40}"#.to_string(),
+        r#"{"type":"resize","cols":100,"rows":40}"#.into(),
     ))
     .await
     .unwrap();
     // still usable afterward: stdin still round-trips
     ws.send(Message::Text(
-        r#"{"type":"stdin","data":"after-resize\n"}"#.to_string(),
+        r#"{"type":"stdin","data":"after-resize\n"}"#.into(),
     ))
     .await
     .unwrap();

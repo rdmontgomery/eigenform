@@ -59,3 +59,12 @@ jobs:
         run: npm ci && npm run build
       - name: embedded-assets test
         run: cargo test -p eigenform-daemon --features embed-assets --test embedded --locked
+
+  msrv:
+    name: rust MSRV (1.88 — keep in sync with workspace rust-version)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --locked

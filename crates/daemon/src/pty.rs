@@ -475,7 +475,9 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
     // 1. Announce the id.
     if sink
         .send(Message::Text(
-            serde_json::json!({"type": "pty", "id": live.id.to_string()}).to_string(),
+            serde_json::json!({"type": "pty", "id": live.id.to_string()})
+                .to_string()
+                .into(),
         ))
         .await
         .is_err()
@@ -487,7 +489,7 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
     let (snapshot, mut rx) = live.attach();
 
     // 3a. Repaint. (Always send, even if empty — keeps the frame ordering uniform.)
-    if sink.send(Message::Binary(snapshot)).await.is_err() {
+    if sink.send(Message::Binary(snapshot.into())).await.is_err() {
         return;
     }
 
@@ -515,8 +517,8 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
                 out = rx.recv() => match out {
                     Some(out) => {
                         let msg = match out {
-                            Outbound::Binary(b) => Message::Binary(b),
-                            Outbound::Text(t) => Message::Text(t),
+                            Outbound::Binary(b) => Message::Binary(b.into()),
+                            Outbound::Text(t) => Message::Text(t.into()),
                         };
                         if sink.send(msg).await.is_err() {
                             break; // socket gone: stop pumping (and drop rx → detach).
@@ -525,7 +527,7 @@ async fn attach_socket(socket: WebSocket, live: Arc<host::LivePty>) {
                     None => break, // channel closed: nothing left to pump.
                 },
                 _ = keepalive.tick() => {
-                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                    if sink.send(Message::Ping(Default::default())).await.is_err() {
                         break; // socket gone.
                     }
                 }

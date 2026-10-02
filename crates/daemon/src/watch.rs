@@ -53,6 +53,14 @@ pub(crate) async fn dev_reload(State(state): State<AppState>) -> Response {
     watch_sse(term_dir.join("dist"), None)
 }
 
+/// Whether a filesystem event is a real change. notify ≥7's inotify backend also
+/// reports *access* (open / close-without-write), so the daemon's own reads of a
+/// transcript would otherwise look like writes — and every SSE ping triggers a
+/// client refetch, i.e. another read: an unbounded request loop.
+pub(crate) fn is_change(event: &notify::Event) -> bool {
+    !matches!(event.kind, notify::EventKind::Access(_))
+}
+
 /// Spawn a filesystem watcher on `watch_dir`, returning a receiver that yields `()` each time a
 /// file (matching `target`, if set) is written, plus the watcher thread's handle.
 ///
@@ -87,6 +95,8 @@ fn watch_channel(
         }
         loop {
             match raw_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                // Reads are not changes (see [`is_change`]).
+                Ok(Ok(event)) if !is_change(&event) => {}
                 Ok(Ok(event)) => {
                     let touches = match &target {
                         Some(name) => event
@@ -202,6 +212,27 @@ mod tests {
         assert!(
             !recv_within(&mut rx, Duration::from_millis(800)),
             "writes to non-target files must not signal",
+        );
+    }
+
+    #[test]
+    fn watch_channel_ignores_reads_of_the_target() {
+        // The daemon reads the transcript to serve /api/session/:uuid/json. If a read
+        // signalled a change, each SSE ping would trigger a refetch → another read →
+        // another ping: an unbounded request loop. Only writes may signal.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("session.jsonl");
+        std::fs::write(&target, b"{}\n").unwrap();
+        let (mut rx, _h) = watch_channel(dir.path().to_path_buf(), Some("session.jsonl".into()));
+        std::thread::sleep(Duration::from_millis(300));
+
+        for _ in 0..3 {
+            let _ = std::fs::read_to_string(&target).unwrap();
+        }
+
+        assert!(
+            !recv_within(&mut rx, Duration::from_millis(800)),
+            "reading the target file must not signal a change",
         );
     }
 

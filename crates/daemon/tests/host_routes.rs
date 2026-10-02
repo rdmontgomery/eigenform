@@ -79,7 +79,7 @@ async fn reattach_repaints_prior_output() {
 
     // Emit a distinctive marker into the shell.
     ws.send(Message::Text(
-        r#"{"type":"stdin","data":"printf REPAINT_ME\n"}"#.to_string(),
+        r#"{"type":"stdin","data":"printf REPAINT_ME\n"}"#.into(),
     ))
     .await
     .unwrap();
@@ -194,7 +194,7 @@ async fn get_api_pty_reconciles_uuid_from_pid_file() {
     let sessions = dir.path().display().to_string();
     ws.send(Message::Text(format!(
         r#"{{"type":"stdin","data":"printf '{{\"pid\":%d,\"sessionId\":\"sess-xyz\",\"cwd\":\"/tmp\"}}' $$ > {sessions}/$$.json\n"}}"#,
-    )))
+    ).into()))
     .await
     .unwrap();
 
@@ -273,7 +273,7 @@ async fn attach_to_an_exited_pty_repaints_then_signals_exit() {
 
     // Print a marker, then exit the shell so the pty's child dies.
     ws.send(Message::Text(
-        r#"{"type":"stdin","data":"printf GOODBYE\n"}"#.to_string(),
+        r#"{"type":"stdin","data":"printf GOODBYE\n"}"#.into(),
     ))
     .await
     .unwrap();
@@ -291,11 +291,9 @@ async fn attach_to_an_exited_pty_repaints_then_signals_exit() {
             _ => break,
         }
     }
-    ws.send(Message::Text(
-        r#"{"type":"stdin","data":"exit\n"}"#.to_string(),
-    ))
-    .await
-    .unwrap();
+    ws.send(Message::Text(r#"{"type":"stdin","data":"exit\n"}"#.into()))
+        .await
+        .unwrap();
     // Drain this socket until it closes / we see the exit frame, confirming the child died.
     let mut got_exit = false;
     for _ in 0..50 {
