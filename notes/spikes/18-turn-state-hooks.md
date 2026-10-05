@@ -50,7 +50,7 @@ B. Permission prompt, then an Esc interrupt.
 {"t": 1791212357.92, "hook_event_name": "PermissionRequest", "tool_name": "Bash", ...}
 {"t": 1791212363.92, "hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission"}
 --- tree during the foreground tool:
-claude(679)-+-bash(1119)---python3(1119+1)
+claude(679)-+-bash(1119)---python3(1120)
   1119 /bin/bash -c source .../cfg/shell-snapshots/snapshot-bash-....sh ... && eval 'python3 -c ...'
 --- after Esc: no further hook events (no Stop, no PostToolUse), tree empty.
     No idle_prompt either in the following 75s.
