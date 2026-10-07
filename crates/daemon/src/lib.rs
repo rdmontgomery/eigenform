@@ -46,6 +46,7 @@ pub mod plan_gate;
 mod pty;
 mod session;
 pub mod snooze;
+pub mod turns;
 mod watch;
 
 pub use pty::Pty;
@@ -119,6 +120,10 @@ pub struct Config {
     /// answering "no decision" (the terminal prompt takes over). 0 = the default
     /// ([`plan_gate::DEFAULT_HOLD`]).
     pub plan_review_hold_secs: u64,
+    /// The port this daemon listens on, for the turn hooks each spawned claude POSTs
+    /// back to (`turns`). 0 = spawn claude without them, so no pty is ever provably
+    /// safe to kill and a close always detaches.
+    pub hook_port: u16,
 }
 
 /// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
@@ -134,6 +139,8 @@ pub struct AppState {
     pub plan_gate: Arc<plan_gate::PlanGate>,
     /// Snoozed tabs awaiting their wake time (persisted under `state_dir`).
     pub snoozes: Arc<snooze::SnoozeStore>,
+    /// Per-spawn turn state from the claude turn hooks: is a pty safe to kill?
+    pub turns: Arc<turns::SessionTurns>,
 }
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
@@ -161,6 +168,7 @@ pub fn app(config: Config) -> Router {
             "/api/hooks/plan-review",
             post(plan_gate::plan_review_hook_route),
         )
+        .route("/api/hooks/turn/{token}", post(turns::turn_hook_route))
         .route("/api/plan-reviews", get(plan_gate::plan_reviews_route))
         .route(
             "/api/plan-reviews/{id}/plan",
@@ -223,6 +231,7 @@ pub fn app(config: Config) -> Router {
         config: Arc::new(config),
         events,
         plan_gate: Arc::new(plan_gate::PlanGate::default()),
+        turns: Arc::new(turns::SessionTurns::default()),
     };
     router.with_state(state)
 }

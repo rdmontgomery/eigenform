@@ -253,6 +253,34 @@ async fn delete_kills_and_unlists() {
 }
 
 #[tokio::test]
+async fn delete_if_safe_keeps_a_pty_without_turn_hooks() {
+    // A shell is never spawned with turn hooks, so nothing can prove it idle: a tab
+    // close (`if_safe=1`) leaves it running; an explicit kill still works.
+    let base = start().await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(&base, ""))
+        .await
+        .expect("connect bare");
+    let hello = first_text_frame(&mut ws).await;
+    let id = hello["id"].as_str().unwrap().to_string();
+    ws.close(None).await.ok();
+    drop(ws);
+
+    let code = helpers::http_delete(&base, &format!("/api/pty/{id}?if_safe=1")).await;
+    assert_eq!(code, 409, "unproven pty is kept");
+    let body = helpers::http_get(&base, "/api/pty").await;
+    let arr: serde_json::Value = serde_json::from_str(&body).expect("json array");
+    assert!(
+        arr.as_array().unwrap().iter().any(|p| p["id"] == id),
+        "still listed"
+    );
+
+    let code = helpers::http_delete(&base, &format!("/api/pty/{id}")).await;
+    assert_eq!(code, 204, "explicit kill");
+    let code = helpers::http_delete(&base, &format!("/api/pty/{id}?if_safe=1")).await;
+    assert_eq!(code, 404, "unknown id");
+}
+
+#[tokio::test]
 async fn attach_to_a_missing_id_closes_the_socket() {
     let base = start().await;
     // No such id: the handshake upgrades, then the server closes with a reason.

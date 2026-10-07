@@ -100,3 +100,15 @@ A pty is **safe to kill** only when all of these hold:
 - **Known state:** the daemon has seen at least one hook event from this pty since it spawned it. Otherwise the state is unknown and close falls back to detach.
 
 `idle_prompt` and `Stop` on their own are not enough (C, D). The screen classifier (`host.rs` `classify`) is unrelated to this and stays as the status-dot signal only.
+
+## Follow-up (2026-10-07, implemented in `crates/daemon/src/turns.rs`)
+
+A resumed session that's opened and closed without a prompt fires no turn hook, so it would never count as seen. `SessionStart` accepts only command hooks, so the daemon forwards it with `curl … --data-binary @- <url>` and `-o /dev/null`, because SessionStart stdout becomes Claude's context. Verified end to end through the daemon (claude 2.1.289, real ptys driven over `/pty`):
+
+```
+[fresh, no prompt yet]                 if_safe → 204
+[foreground tool running]              if_safe → 409 a turn is in progress
+[after Esc]                            if_safe → 204
+[turn ended, background shell running] if_safe → 409 1 shell(s) still running
+[background shell finished]            if_safe → 204
+```

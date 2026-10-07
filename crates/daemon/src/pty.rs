@@ -160,8 +160,22 @@ pub(crate) async fn pty_ws(
         });
     }
 
+    // Every claude gets the turn hooks (spike 18), so a later close can tell whether
+    // killing it would lose work. Added here, not in `pty_command`, because the token
+    // is per spawn. A shell or codex gets none and is never killed by a close.
+    let mut command = command;
+    let hook_token = (command.program == "claude" && state.config.hook_port != 0).then(|| {
+        let token = state.turns.new_token();
+        command.args.push("--settings".to_string());
+        command
+            .args
+            .push(crate::turns::settings_arg(state.config.hook_port, &token));
+        token
+    });
+
     let host = Arc::clone(&state.host);
     let events = Arc::clone(&state.events);
+    let turns = Arc::clone(&state.turns);
     ws.on_upgrade(move |socket| async move {
         let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
         let live = match host.spawn(&command.program, &args, command.cwd.as_deref(), (80, 24)) {
@@ -175,6 +189,10 @@ pub(crate) async fn pty_ws(
                 return;
             }
         };
+
+        if let Some(token) = hook_token {
+            turns.bind(live.id, token);
+        }
 
         // A resume continues a known id: record it now so the drawer, artifact pane and
         // a later attach all know the session without waiting on a claim file.
@@ -271,16 +289,63 @@ pub(crate) async fn pty_list_route(State(state): State<AppState>) -> Response {
     axum::Json(rows).into_response()
 }
 
-/// `DELETE /api/pty/:id` — kill the child and unlist. 204 on success, 404 if unknown.
+#[derive(serde::Deserialize)]
+pub(crate) struct DeleteQuery {
+    /// `if_safe=1`: kill only if nothing would be lost (`turns::SessionTurns::kill_safety`),
+    /// else answer 409 with the reason and leave the pty running. This is what closing a
+    /// tab sends; a bare DELETE is the explicit kill.
+    #[serde(default)]
+    if_safe: u8,
+}
+
+/// `DELETE /api/pty/:id[?if_safe=1]` — kill the child and unlist. 204 on success, 404
+/// if unknown, 409 (`{"reason"}`) when `if_safe` is set and killing would lose work.
 pub(crate) async fn pty_delete_route(
     AxumPath(id): AxumPath<String>,
+    axum::extract::Query(query): axum::extract::Query<DeleteQuery>,
     State(state): State<AppState>,
 ) -> Response {
     let Ok(id) = id.parse::<host::PtyId>() else {
         return (StatusCode::NOT_FOUND, "no live pty with that id").into_response();
     };
+    if query.if_safe != 0 {
+        let Some(live) = state.host.get(id) else {
+            return (StatusCode::NOT_FOUND, "no live pty with that id").into_response();
+        };
+        let (exited, child_pid) = {
+            let meta = live
+                .meta
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (meta.exited_at.is_some(), meta.child_pid)
+        };
+        // An exited child has nothing left to lose; anything else must prove it.
+        let turns = Arc::clone(&state.turns);
+        let verdict = if exited {
+            Ok(())
+        } else {
+            // `ps` and a transcript read: off the async runtime.
+            tokio::task::spawn_blocking(move || turns.kill_safety(id, child_pid))
+                .await
+                .unwrap_or(Err(crate::turns::Unsafe::NoProcessTree))
+        };
+        if let Err(why) = verdict {
+            state.events.record(
+                "pty-kept",
+                serde_json::json!({ "id": id.to_string(), "reason": why.to_string() }),
+            );
+            return (
+                StatusCode::CONFLICT,
+                axum::Json(serde_json::json!({ "reason": why.to_string() })),
+            )
+                .into_response();
+        }
+    }
     match state.host.kill(id) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            state.turns.forget(id);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(host::KillError::NotFound) => {
             (StatusCode::NOT_FOUND, "no live pty with that id").into_response()
         }

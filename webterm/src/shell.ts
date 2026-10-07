@@ -447,6 +447,22 @@ export function mountShell(appEl: HTMLElement): void {
     syncWakeTitle();
   }
 
+  /**
+   * The tab X: close the tab, and end its session too when the daemon can prove
+   * nothing would be lost (turn finished, no subagents or shells running — see
+   * crates/daemon/src/turns.rs). Otherwise the session keeps running, reachable from
+   * the rail, exactly like a plain detach.
+   */
+  function closeAndEndIfIdle(id: string) {
+    const ptyId = tabs.find((t) => t.id === id)?.descriptor.ptyId;
+    closeTab(id);
+    if (!ptyId) return;
+    void fetch(`/api/pty/${ptyId}?if_safe=1`, { method: "DELETE" })
+      .catch(() => {}) // best-effort: worst case the session stays running.
+      .then(() => refreshRoster());
+  }
+
+  /** Shift+X: end the session regardless of what it's doing. */
   async function killTab(id: string) {
     const t = tabs.find((t) => t.id === id);
     if (!t) return;
@@ -455,7 +471,7 @@ export function mountShell(appEl: HTMLElement): void {
       closeTab(id);
       return;
     }
-    if (!confirm(`Kill pty ${ptyId}? (The child process will be terminated.)`)) return;
+    if (!confirm(`End this session now? Anything it's still doing is lost.`)) return;
     try {
       await fetch(`/api/pty/${ptyId}`, { method: "DELETE" });
     } catch {
@@ -694,14 +710,6 @@ export function mountShell(appEl: HTMLElement): void {
         textEl.append(subEl);
       }
 
-      const kill = el("button", "tab-kill");
-      kill.title = "Kill pty (process terminated)";
-      kill.append(icon("stop", 11, 2));
-      kill.addEventListener("click", (e) => {
-        e.stopPropagation();
-        void killTab(t.id);
-      });
-
       const snooze = el("button", "tab-snooze");
       snooze.title = "Snooze — close now, reopen later";
       snooze.append(icon("clock", 11, 2));
@@ -711,11 +719,13 @@ export function mountShell(appEl: HTMLElement): void {
       });
 
       const close = el("button", "tab-close");
-      close.title = "Detach — close tab, pty stays alive";
+      close.title =
+        "Close — ends the session if it's finished, else leaves it running · Shift: end it now";
       close.append(icon("x", 11, 2));
       close.addEventListener("click", (e) => {
         e.stopPropagation();
-        closeTab(t.id);
+        if (e.shiftKey) void killTab(t.id);
+        else closeAndEndIfIdle(t.id);
       });
 
       tab.append(badge);
@@ -725,7 +735,7 @@ export function mountShell(appEl: HTMLElement): void {
         termIco.append(icon("terminal", 11, 2));
         tab.append(termIco);
       }
-      tab.append(textEl, snooze, kill, close);
+      tab.append(textEl, snooze, close);
       tab.addEventListener("click", () => activateTab(t.id));
       tabStrip.append(tab);
     }

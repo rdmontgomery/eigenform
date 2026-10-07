@@ -801,7 +801,6 @@ button { font: inherit; color: inherit; }
 .tab--active .tab-label { font-weight: 600; }
 
 .tab-snooze,
-.tab-kill,
 .tab-close {
   background: none;
   border: none;
@@ -819,8 +818,8 @@ button { font: inherit; color: inherit; }
   line-height: 1;
   padding: 0;
 }
-.tab:hover .tab-snooze, .tab:hover .tab-kill, .tab:hover .tab-close,
-.tab--active .tab-snooze, .tab--active .tab-kill, .tab--active .tab-close { opacity: 1; }
+.tab:hover .tab-snooze, .tab:hover .tab-close,
+.tab--active .tab-snooze, .tab--active .tab-close { opacity: 1; }
 .tab-snooze:hover { color: var(--accent); background: var(--raised-2); }
 
 /* A snoozed tab that just woke: pulses its ink until it is looked at. */
@@ -836,7 +835,6 @@ button { font: inherit; color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .tab--woke { animation: none; background: color-mix(in oklch, var(--tab-ink, var(--accent)) 20%, transparent); }
 }
-.tab-kill:hover  { color: var(--st-error); background: var(--raised-2); }
 .tab-close:hover { color: var(--tx); background: var(--raised-2); }
 
 .tab-new {
