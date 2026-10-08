@@ -339,6 +339,24 @@ export function reconnectQuery(
   return null;
 }
 
+/** The daemon's close reason when a `session=` resume names no session on disk. */
+export const UNRESOLVED_SESSION = "session could not be resolved";
+
+/**
+ * When a resume is refused because the session isn't on disk, the query that
+ * restarts the tab as a fresh claude in its directory, else null.
+ *
+ * This is the session that was opened and never prompted: claude writes its pid
+ * file (and so its session id, which the roster adopts) at startup, but its
+ * transcript only on the first message. After a restart there is nothing to
+ * resume, and an empty session in the same directory is exactly what the tab was.
+ */
+export function freshRestartQuery(desc: TabDescriptor, reason: string): string | null {
+  if (reason !== UNRESOLVED_SESSION) return null;
+  if (desc.kind === "terminal" || !desc.cwd) return null;
+  return `?new=${encodeURIComponent(desc.cwd)}`;
+}
+
 /** Base delay before the first reconnect attempt (attempt 0), in ms. */
 export const RECONNECT_BASE_MS = 500;
 /**

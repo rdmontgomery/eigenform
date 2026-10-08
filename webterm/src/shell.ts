@@ -49,6 +49,7 @@ import {
   reconcileTabs,
   reorderTabs,
   reconnectQuery,
+  freshRestartQuery,
   reconnectDelay,
   tabSubtitle,
   railFromPointer,
@@ -927,11 +928,24 @@ export function mountShell(appEl: HTMLElement): void {
         disarmSeed();
         if (entry.disposed) return; // tab being closed by the user.
         const attachMiss = reason === "no live pty with that id";
+        const fresh = freshRestartQuery(entry.descriptor, reason);
         if (attachMiss && !entry.descriptor.uuid) {
           // Stale ephemeral attach (e.g. a boot-restore race) with nothing to
           // resume from: drop the tab, as before.
           closeTab(entry.id);
           void refreshRoster();
+        } else if (fresh) {
+          // Opened and never prompted, so nothing was ever written to resume:
+          // start it again empty, in place, rather than leaving a dead tab.
+          clearReconnect(entry);
+          // A tab saved while dead carries the old "✗ <reason>" label: put a name back.
+          const label = entry.descriptor.label.startsWith("✗ ")
+            ? (entry.descriptor.cwd!.split("/").filter(Boolean).pop() ?? "claude")
+            : entry.descriptor.label;
+          entry.descriptor = { ...entry.descriptor, label, uuid: undefined, ptyId: undefined };
+          entry.handle.term.reset();
+          entry.ptyHandle?.dispose();
+          connectEntry(entry, fresh);
         } else if (reason === "" || attachMiss) {
           // Recoverable drop — daemon restart (cargo watch), idle reaping, or a
           // renumbered/resumable pty. Keep the tab and reconnect with backoff.
