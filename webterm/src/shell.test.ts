@@ -9,6 +9,7 @@ import {
   reconcileTabs,
   reorderTabs,
   reconnectQuery,
+  freshRestartQuery,
   reconnectDelay,
   RECONNECT_BASE_MS,
   RECONNECT_CAP_MS,
@@ -494,4 +495,14 @@ test("artifactWidthFromPointer: grows left from the pane's right edge, clamped",
   assert.equal(artifactWidthFromPointer(400, 1000), 600);
   assert.equal(artifactWidthFromPointer(990, 1000), ARTIFACT_MIN_W);
   assert.equal(artifactWidthFromPointer(-5000, 1000), ARTIFACT_MAX_W);
+});
+
+test("freshRestartQuery: an unresolvable claude session restarts empty in its cwd", () => {
+  const desc = { uuid: "u1", label: "proj", cwd: "/w/my proj" };
+  assert.equal(freshRestartQuery(desc, "session could not be resolved"), "?new=%2Fw%2Fmy%20proj");
+  // Any other refusal is surfaced as before.
+  assert.equal(freshRestartQuery(desc, "session's project directory no longer exists"), null);
+  // A terminal never resumes, and without a cwd there's nowhere to restart.
+  assert.equal(freshRestartQuery({ ...desc, kind: "terminal" }, "session could not be resolved"), null);
+  assert.equal(freshRestartQuery({ uuid: "u1", label: "x" }, "session could not be resolved"), null);
 });
