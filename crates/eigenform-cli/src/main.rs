@@ -703,6 +703,7 @@ fn daemon(
         dev,
         log_file,
         plan_review_hold_secs: 0,
+        hook_port: port,
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let url = format!("http://{addr}");
