@@ -424,16 +424,42 @@ export function mountPicker(
 function positionOverlay(overlay: HTMLElement, anchor: HTMLElement) {
   const rect = anchor.getBoundingClientRect();
   overlay.style.position = "fixed";
-  overlay.style.top = `${rect.bottom + 4}px`;
+  // Size from CSS (.picker-overlay { width: 440px; max-height: 320px }). Use the max
+  // height, not the current one: candidates load after mount and grow the list.
+  const css = getComputedStyle(overlay);
+  const place = overlayPlacement(
+    rect,
+    {
+      width: overlay.offsetWidth || 440,
+      height: parseFloat(css.maxHeight) || 320,
+    },
+    { width: window.innerWidth, height: window.innerHeight },
+  );
+  overlay.style.left = `${place.left}px`;
+  if ("top" in place) overlay.style.top = `${place.top}px`;
+  else overlay.style.bottom = `${place.bottom}px`;
+}
 
-  // Right-justify to the window rather than left-aligning to the "+" button.
-  // With several tabs open the button sits far right, and a left-aligned
-  // overlay spills past the viewport edge — the options become unreadable.
-  // Anchoring the overlay's right edge to the window keeps every row on screen.
-  // The overlay width is fixed in CSS (.picker-overlay { width: 440px }); read
-  // it back so the math survives a stylesheet change, falling back to 440.
+/**
+ * Where the picker goes: left edge under the "+" that opened it, so it drops
+ * from the button rather than from the far edge of the window. Clamped so it
+ * never spills off-screen: a "+" near the right edge (many tabs) slides it left
+ * until it fits, and a "+" too low to fit it below flips it above, pinned by its
+ * bottom edge so a short list still hugs the button.
+ */
+export function overlayPlacement(
+  anchor: { left: number; top: number; bottom: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+): { left: number; top: number } | { left: number; bottom: number } {
   const MARGIN = 12;
-  const width = overlay.offsetWidth || 440;
-  const left = Math.max(MARGIN, window.innerWidth - width - MARGIN);
-  overlay.style.left = `${left}px`;
+  const GAP = 4;
+  const maxLeft = viewport.width - size.width - MARGIN;
+  const left = Math.max(MARGIN, Math.min(anchor.left, maxLeft));
+  const fitsBelow = anchor.bottom + GAP + size.height <= viewport.height - MARGIN;
+  const fitsAbove = anchor.top - GAP - size.height >= MARGIN;
+  if (!fitsBelow && fitsAbove) {
+    return { left, bottom: viewport.height - anchor.top + GAP };
+  }
+  return { left, top: anchor.bottom + GAP };
 }

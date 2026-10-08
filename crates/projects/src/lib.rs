@@ -107,6 +107,15 @@ pub fn unique_cwds<I: IntoIterator<Item = PathBuf>>(cwds: I) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Keep only cwds that are still directories on disk, preserving order.
+///
+/// Recents come from transcripts, which outlive the dirs they ran in — macOS per-user
+/// temp dirs (`/private/var/folders/...`) from scripted or SDK-driven `claude` runs are
+/// the usual offenders. Offering them in the launcher only leads to "no such directory".
+pub fn existing_dirs<I: IntoIterator<Item = PathBuf>>(cwds: I) -> Vec<PathBuf> {
+    cwds.into_iter().filter(|c| c.is_dir()).collect()
+}
+
 /// Merge recent session cwds with the immediate subdirs of the code root into
 /// one candidate list: recents first (in order, de-duplicated), then any
 /// subdir not already present as a recent, each tagged `recent: false`.
