@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eigenform_projects::{immediate_subdirs, merge_candidates, unique_cwds, Candidate};
+use eigenform_projects::{
+    existing_dirs, immediate_subdirs, merge_candidates, unique_cwds, Candidate,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -39,6 +41,24 @@ fn unique_cwds_no_duplicates_returns_same_order() {
     ];
     let result = unique_cwds(input.clone());
     assert_eq!(result, input);
+}
+
+#[test]
+fn existing_dirs_drops_vanished_paths_and_files_keeping_order() {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("b")).unwrap();
+    fs::create_dir(root.path().join("a")).unwrap();
+    fs::write(root.path().join("file"), "x").unwrap();
+    let input = vec![
+        root.path().join("b"),
+        root.path().join("gone"),
+        root.path().join("file"),
+        root.path().join("a"),
+    ];
+    assert_eq!(
+        existing_dirs(input),
+        vec![root.path().join("b"), root.path().join("a")]
+    );
 }
 
 #[test]

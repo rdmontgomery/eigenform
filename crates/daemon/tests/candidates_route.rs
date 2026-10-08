@@ -110,3 +110,22 @@ async fn candidates_missing_workspace_root_returns_only_recents() {
     assert_eq!(arr.len(), 1, "one recent cwd, no subdirs:\n{body}");
     assert_eq!(arr[0]["recent"], true);
 }
+
+#[tokio::test]
+async fn candidates_drop_recents_whose_dir_is_gone() {
+    // The session's cwd (beta) was deleted after the run — e.g. a macOS temp dir under
+    // /private/var/folders. It must not be offered; alpha (still on disk) remains.
+    let (ws, _proj, cfg) = fixture();
+    std::fs::remove_dir(ws.path().join("beta")).unwrap();
+    let base = start(cfg).await;
+    let body = helpers::http_get(&base, "/api/candidates").await;
+    let v: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or_else(|_| panic!("expected JSON, got:\n{body}"));
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "only alpha survives:\n{body}");
+    assert!(
+        arr[0]["path"].as_str().unwrap().ends_with("alpha"),
+        "{body}"
+    );
+    assert_eq!(arr[0]["recent"], false);
+}

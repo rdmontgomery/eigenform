@@ -29,7 +29,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolvePick } from "./picker.ts";
+import { overlayPlacement, resolvePick } from "./picker.ts";
 import type { Candidate } from "./types.ts";
 
 function c(path: string, recent = false): Candidate {
@@ -181,4 +181,36 @@ test("relative path with leading dot-slash → null (unsupported)", () => {
 test("relative path with multiple segments → null (unsupported)", () => {
   const result = resolvePick("parent/child/leaf", null, [c("/root/a", false)]);
   assert.equal(result, null);
+});
+
+// ---------------------------------------------------------------------------
+// overlayPlacement — the dropdown opens at the "+" that was clicked
+// ---------------------------------------------------------------------------
+
+const VIEW = { width: 1600, height: 900 };
+const SIZE = { width: 440, height: 320 };
+
+test("placement: drops from the button, left edges aligned", () => {
+  const p = overlayPlacement({ left: 200, top: 40, bottom: 64 }, SIZE, VIEW);
+  assert.deepEqual(p, { left: 200, top: 68 });
+});
+
+test("placement: button near the right edge slides the overlay left to fit", () => {
+  const p = overlayPlacement({ left: 1500, top: 40, bottom: 64 }, SIZE, VIEW);
+  assert.deepEqual(p, { left: 1600 - 440 - 12, top: 68 });
+});
+
+test("placement: never past the left margin", () => {
+  const p = overlayPlacement({ left: 2, top: 40, bottom: 64 }, SIZE, VIEW);
+  assert.deepEqual(p, { left: 12, top: 68 });
+});
+
+test("placement: button near the bottom flips the overlay above it", () => {
+  const p = overlayPlacement({ left: 200, top: 800, bottom: 824 }, SIZE, VIEW);
+  assert.deepEqual(p, { left: 200, bottom: 900 - 800 + 4 });
+});
+
+test("placement: no room either way stays below", () => {
+  const p = overlayPlacement({ left: 200, top: 300, bottom: 324 }, SIZE, { width: 1600, height: 500 });
+  assert.deepEqual(p, { left: 200, top: 328 });
 });

@@ -390,7 +390,9 @@ fn candidates_list(workspace: Option<PathBuf>) -> Result<()> {
             None,
             chrono::Utc::now(),
         ) {
-            Ok(sessions) => eigenform_projects::unique_cwds(sessions.into_iter().map(|s| s.cwd)),
+            Ok(sessions) => eigenform_projects::existing_dirs(eigenform_projects::unique_cwds(
+                sessions.into_iter().map(|s| s.cwd),
+            )),
             Err(_) => vec![],
         }
     };
