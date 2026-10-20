@@ -26,6 +26,16 @@ pub(crate) async fn forest_watch_route(State(state): State<AppState>) -> Respons
 /// Compute the live-Forest snapshot as a JSON string: Claude sessions, then Codex threads
 /// (tagged `"engine": "codex"`). Empty array if neither source is configured.
 fn forest_json(cfg: &Config) -> String {
+    serde_json::to_string(&forest_rows(cfg)).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// True when `uuid` is a row of the forest snapshot (what `GET /api/forest` lists).
+pub(crate) fn forest_knows(cfg: &Config, uuid: &str) -> bool {
+    forest_rows(cfg).iter().any(|r| r["uuid"] == uuid)
+}
+
+/// The forest snapshot rows behind [`forest_json`].
+fn forest_rows(cfg: &Config) -> Vec<serde_json::Value> {
     let mut rows: Vec<serde_json::Value> = Vec::new();
     if let (Some(projects), Some(sessions), Some(state)) =
         (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir)
@@ -68,7 +78,7 @@ fn forest_json(cfg: &Config) -> String {
             })
         }));
     }
-    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+    rows
 }
 
 /// Quiet period after a filesystem event before the forest is rescanned (see [`forest_sse`]).
