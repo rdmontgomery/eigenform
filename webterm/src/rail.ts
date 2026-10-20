@@ -58,6 +58,8 @@ export interface RailHandle {
   render(): void;
   /** User label overrides (uuid or ptyId → label), for buildRoster + tab titles. */
   overrides(): Readonly<Record<string, string>>;
+  /** Scroll a row into view, if it's rendered (not folded away or filtered out). */
+  reveal(key: string): void;
 }
 
 export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
@@ -399,5 +401,8 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     rows: () => lastRows,
     render: renderRail,
     overrides: () => overrides,
+    reveal(key) {
+      rowEls.get(key)?.scrollIntoView({ block: "nearest" });
+    },
   };
 }

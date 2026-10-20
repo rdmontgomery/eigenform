@@ -98,7 +98,8 @@ impl EventBus {
     /// Record an event: stamp it, push it onto the ring (evicting the oldest past
     /// `RING_CAP`), fan it out to live subscribers, and best-effort append it to the
     /// log file. Callable from any thread; never blocks on a subscriber or the disk.
-    pub fn record(&self, kind: impl Into<String>, data: serde_json::Value) {
+    /// Returns the stamped event (the focus hub holds it for replay).
+    pub fn record(&self, kind: impl Into<String>, data: serde_json::Value) -> Event {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         let event = Event {
             seq,
@@ -122,6 +123,7 @@ impl EventBus {
         let _ = self.tx.send(event.clone());
 
         self.append_log(&event);
+        event
     }
 
     /// The buffered events, oldest first, optionally only those with `seq > since`.
@@ -187,12 +189,32 @@ pub(crate) async fn events_route(
 /// `/api/watch/forest`. We bridge the broadcast receiver into an mpsc→SSE stream (the
 /// same shape `forest_sse` uses) rather than pulling in tokio-stream's `BroadcastStream`
 /// feature. A lagging subscriber's gap is skipped; `/api/events` is the catch-up path.
+///
+/// Every app window holds one of these, so the connection doubles as the focus hub's
+/// client count (`focus`): a `focus` request held while no window was connected is
+/// replayed as this stream's first frame.
 pub(crate) async fn events_stream_route(State(state): State<AppState>) -> Response {
-    let mut rx = state.events.subscribe();
+    let (mut rx, replay, guard) = state.focus.connect(&state.events);
     let (tx, out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    if let Some(mut event) = replay {
+        // Marked so the app acts on it even if this isn't its most recently focused
+        // window: a replay goes to one window only, so nobody else would.
+        if let Some(data) = event.data.as_object_mut() {
+            data.insert("replayed".into(), true.into());
+        }
+        let _ = tx.try_send(serde_json::to_string(&event).unwrap_or_default());
+    }
     tokio::spawn(async move {
+        // Held for the task's life: the client counts as connected until its stream ends.
+        let _guard = guard;
         loop {
-            match rx.recv().await {
+            let recv = tokio::select! {
+                r = rx.recv() => r,
+                // Client gone: exit now, not at the next event, so the focus hub's client
+                // count drops promptly (a stale count would answer 200 to nobody).
+                _ = tx.closed() => break,
+            };
+            match recv {
                 Ok(event) => {
                     let json = serde_json::to_string(&event).unwrap_or_default();
                     if tx.send(json).await.is_err() {
