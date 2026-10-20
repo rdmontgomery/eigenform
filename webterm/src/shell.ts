@@ -63,6 +63,8 @@ import { mountPicker } from "./picker.ts";
 import { createAppearance } from "./appearance.ts";
 import { mountRailLinks } from "./rail-links.ts";
 import { mountRail } from "./rail.ts";
+import { eventStream } from "./event-stream.ts";
+import { focusTarget, sessionFromSearch, trackWindowPresence } from "./focus.ts";
 import { mountDock } from "./dock.ts";
 import { mountArtifactDock } from "./artifact-dock.ts";
 import type { PlanReview } from "./artifacts.ts";
@@ -1231,6 +1233,38 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
+  // Deep-link focus (see focus.ts): a `focus` event from POST /api/focus, or
+  // ?session=<uuid> at startup, does what launching the session's rail row
+  // does — open or activate its tab (attaching a hosted pty) — and scrolls the
+  // row into view.
+  // ------------------------------------------------------------------
+
+  async function focusSession(uuid: string) {
+    // A live pty and its forest session merge into one row; prefer a pty row if
+    // the roster has both, so a hosted session attaches rather than resumes.
+    const find = () => {
+      const rows = railView.rows().filter((r) => r.uuid === uuid);
+      return rows.find((r) => r.ptyId) ?? rows[0];
+    };
+    let row = find();
+    if (!row) {
+      // The forest stream is closed while the page is hidden, so a session born
+      // since then is missing: refetch the snapshot instead of the cached one.
+      lastForest = null;
+      await refreshRoster();
+      row = find();
+    }
+    if (row) {
+      launchRow(row);
+      railView.reveal(row.key);
+    } else {
+      const open = tabs.find((t) => t.descriptor.uuid === uuid);
+      if (open) activateTab(open.id);
+    }
+    window.focus();
+  }
+
+  // ------------------------------------------------------------------
   // Snooze — close a tab until a wake time. The daemon stores the snooze
   // (/api/snoozes, persisted); this page polls, and when one is due claims it
   // (DELETE — only one window wins) and reopens the tab in the background with
@@ -1357,7 +1391,33 @@ export function mountShell(appEl: HTMLElement): void {
     void refreshSnoozes();
   }
 
-  void boot();
+  // Strip ?session= before anything else so a reload never re-triggers it.
+  const linked = sessionFromSearch(location.search);
+  if (linked) {
+    history.replaceState(history.state, "", location.pathname + linked.rest + location.hash);
+  }
+
+  const booted = boot().catch(() => undefined);
+  // Deep links act after boot: tab restore activates each restored tab in turn
+  // and would otherwise bury the one we were asked for.
+  const focusAfterBoot = (uuid: string) => void booted.then(() => focusSession(uuid));
+  if (linked?.uuid) focusAfterBoot(linked.uuid);
+
+  // Open for the window's whole life (hidden too: a notification click is
+  // exactly when the window is in the background), so the daemon counts this
+  // window as connected and a cold-start request replays to it.
+  const presence = trackWindowPresence();
+  eventStream.subscribe({
+    onEvent(ev) {
+      const uuid = focusTarget(ev);
+      if (!uuid) return;
+      // A replay went to this window alone; a live event went to every window,
+      // and only the most recently focused one acts on it.
+      if (ev.data.replayed !== true && !presence.shouldAct()) return;
+      focusAfterBoot(uuid);
+    },
+  });
+
   // Snoozes keep polling while the page is hidden: a wake is exactly when the
   // ⏰ title matters (browsers throttle hidden timers, but still fire them).
   setInterval(() => void refreshSnoozes(), SNOOZE_POLL_MS);

@@ -17,6 +17,7 @@
 //! - `inspect` — `/api/inspect`, the skills + memory inventory
 //! - `snooze` — `/api/snoozes`, tabs closed until a wake time (persisted)
 //! - [`events`] — the observability bus and `/api/events` (+ `/stream`)
+//! - [`focus`] — `POST /api/focus`, deep-linking a session to the front of the app
 //! - [`host`] — the [`host::SessionHost`] pty registry; `paths` — tilde/normalize helpers
 
 use std::path::PathBuf;
@@ -37,6 +38,7 @@ pub const VERSION: &str = match option_env!("EIGENFORM_VERSION") {
 pub mod artifacts;
 mod claims;
 pub mod events;
+pub mod focus;
 mod forest;
 pub mod host;
 mod inspect;
@@ -141,6 +143,8 @@ pub struct AppState {
     pub snoozes: Arc<snooze::SnoozeStore>,
     /// Per-spawn turn state from the claude turn hooks: is a pty safe to kill?
     pub turns: Arc<turns::SessionTurns>,
+    /// Connected app windows + the focus request held while none was (`/api/focus`).
+    pub focus: Arc<focus::FocusHub>,
 }
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
@@ -199,6 +203,7 @@ pub fn app(config: Config) -> Router {
         .route("/api/health", get(health_route))
         .route("/api/events", get(events::events_route))
         .route("/api/events/stream", get(events::events_stream_route))
+        .route("/api/focus", post(focus::focus_route))
         .route("/api/watch/{uuid}", get(watch::watch_route));
 
     // eigenform (the terminal app) is the front door at `/`.
@@ -232,6 +237,7 @@ pub fn app(config: Config) -> Router {
         events,
         plan_gate: Arc::new(plan_gate::PlanGate::default()),
         turns: Arc::new(turns::SessionTurns::default()),
+        focus: Arc::new(focus::FocusHub::default()),
     };
     router.with_state(state)
 }
