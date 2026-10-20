@@ -22,6 +22,8 @@ One local daemon, one browser tab, every Claude Code session you have.
 
 - **Artifact pane.** What the session *made*: HTML, SVG, markdown and images it wrote, rendered in a split beside the terminal. It follows the newest write (or you pin one) and reloads as the agent edits, including files a subagent or Codex worker wrote. Each artifact runs in a sandbox with an opaque origin, so agent-written pages can't reach the daemon's API or the pty socket. On a markdown plan, the pencil switches to **annotate**: select text to comment, strike, or replace it, then **Stage in terminal** types the compiled critique into the input. It is never sent; you review it and press Enter. Opt in to the **plan gate** (`eigenform plan-gate` prints the hook) and Claude's plan approval comes to the pane: annotate, then Approve or Send back, with your marks as the feedback. If eigenform isn't running, Claude Code shows its usual prompt.
 
+- **Deep links.** An outside tool can bring a session to the front: `POST /api/focus` with `{"session": "<uuid>"}` switches the open app to that session's tab (200), or, if no window is open, holds the request for 30 s and opens on it when the app next connects (202); an unknown uuid is a 404. Loading the app with `?session=<uuid>` does the same once. With several windows open, the most recently focused one acts. The contract lives in [`crates/daemon/src/focus.rs`](crates/daemon/src/focus.rs).
+
 Nothing leaves your machine. The daemon reads `~/.claude` (and `~/.codex`); it never calls an API.
 
 ## Install & run

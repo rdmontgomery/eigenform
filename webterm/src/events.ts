@@ -4,7 +4,7 @@
  *
  * The daemon has no logs; this pane is the browser surface for its event bus.
  * It loads history from GET /api/events on mount, then live-appends from the
- * /api/events/stream SSE. Each row is `time · kind chip · one-line summary`,
+ * window's shared /api/events/stream connection (event-stream.ts). Each row is `time · kind chip · one-line summary`,
  * newest at the bottom with stick-to-bottom scrolling (like the transcript).
  *
  * Unlike the reach map + transcript, events are GLOBAL (not session-scoped), so
@@ -21,6 +21,7 @@
 
 import type { EventRecord } from "./types.ts";
 import { el } from "./dom.ts";
+import { eventStream } from "./event-stream.ts";
 
 // ---------------------------------------------------------------------------
 // Pure formatting helpers (unit-tested)
@@ -77,6 +78,10 @@ export function eventSummary(ev: EventRecord): string {
       return `pty ${str("ptyId") ?? "?"} → ${shortId(d.uuid)} (${str("source") ?? "?"})`;
     case "fork-created":
       return `${shortId(d.srcUuid)} → ${shortId(d.branchUuid)} @ ${shortId(d.turn)}`;
+    case "focus":
+      return [`session ${shortId(d.session)}`, d.replayed === true ? "replayed" : undefined]
+        .filter(Boolean)
+        .join(" · ");
     case "spawn-refused":
     case "resume-refused": {
       const where = str("cwd") ?? (str("session") ? shortId(d.session) : undefined);
@@ -98,7 +103,6 @@ export interface EventsHandle {
 
 const LS_EVENTS = "eigenform:term:events:v1"; // "open" | "closed" (default closed)
 const STICK_THRESHOLD = 60; // px from bottom — re-stick after append if closer
-const RECONNECT_MS = 1500;
 
 /**
  * Mount the Events pane into `hostEl` (its region in the dock). Loads history,
@@ -219,48 +223,20 @@ export function mountEvents(hostEl: HTMLElement): EventsHandle {
     }
   }
 
-  let es: EventSource | null = null;
-  let reconnectTimer: number | null = null;
-
-  function connect() {
-    if (closed) return;
-    es = new EventSource("/api/events/stream");
-    es.onmessage = (e) => {
-      try {
-        append(JSON.parse(e.data) as EventRecord);
-      } catch {
-        // Ignore a malformed frame.
-      }
-    };
-    es.onerror = () => {
-      // /api/events/stream is always a 200 (the bus always exists), so an error
-      // here is a transport drop (daemon restart, idle reaping). Close, then
-      // reconnect after a backoff, backfilling the gap via ?since=lastSeq.
-      es?.close();
-      es = null;
-      if (reconnectTimer === null) {
-        reconnectTimer = window.setTimeout(() => {
-          reconnectTimer = null;
-          if (closed) return;
-          void backfill().then(connect);
-        }, RECONNECT_MS);
-      }
-    };
-  }
+  // The shared stream reconnects on its own after a drop; backfill the gap via
+  // ?since=lastSeq when it comes back (append dedups on seq).
+  const unsubscribe = eventStream.subscribe({
+    onEvent: append,
+    onReopen: () => void backfill(),
+  });
 
   void loadHistory();
-  connect();
 
   return {
     close() {
       if (closed) return;
       closed = true;
-      if (reconnectTimer !== null) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      es?.close();
-      es = null;
+      unsubscribe();
       panel.remove();
     },
   };

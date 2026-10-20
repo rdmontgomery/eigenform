@@ -88,3 +88,9 @@ test("an unknown (future) kind still renders a generic summary", () => {
   // No payload → empty summary, not a crash.
   assert.equal(eventSummary(ev("mystery", {})), "");
 });
+
+test("focus summarizes the session and marks a replay", () => {
+  const session = "abcdef00-0000-4000-8000-000000000000";
+  assert.equal(eventSummary(ev("focus", { session })), "session abcdef00");
+  assert.equal(eventSummary(ev("focus", { session, replayed: true })), "session abcdef00 · replayed");
+});
