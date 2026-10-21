@@ -215,9 +215,6 @@ export type TabReconcileAction =
  *     (possibly renumbered) id. uuid identity is preferred over the saved ptyId
  *     because pty ids are reassigned across a daemon restart — a stale ptyId can
  *     now belong to a different session.
- *   - Else if saved.uuid exists and the saved ptyId is still live AND not reused
- *     for a conflicting session → action="attach" by that id (the boot window
- *     before a live pty has reported its uuid).
  *   - Else if saved.uuid exists (pty died or its id was reused) → action="resume"
  *     (reconnect via ?session=uuid).
  *   - Else if a uuid-less tab's saved ptyId is still live → action="attach".
@@ -246,18 +243,12 @@ export function reconcileTabs(
           descriptor: { ...desc, ptyId: liveByUuid.id, uuid: desc.uuid },
         };
       }
-      // No live pty carries this uuid. Trust the saved ptyId only if it hasn't
-      // been reused for another session (its live uuid must not contradict ours);
-      // this covers the boot window before a live pty has reported its uuid.
-      if (desc.ptyId) {
-        const liveById = ptyById.get(desc.ptyId);
-        if (liveById && (liveById.uuid === null || liveById.uuid === desc.uuid)) {
-          return {
-            action: "attach",
-            descriptor: { ...desc, ptyId: desc.ptyId },
-          };
-        }
-      }
+      // No live pty carries this uuid, so the saved ptyId is not ours either —
+      // even when that id is live with no uuid. Ids restart at 0 with the daemon,
+      // so a fresh session spawned since (from the launcher, or POST /api/pty
+      // before this page loaded) can hold it; attaching would give this tab's
+      // label and uuid to that session. The daemon never forgets a pty's uuid,
+      // so the pty this tab knew would still report it.
       // pty gone (or its id was reused) — the disk session exists to resume.
       return {
         action: "resume",
