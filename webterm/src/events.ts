@@ -79,7 +79,10 @@ export function eventSummary(ev: EventRecord): string {
     case "fork-created":
       return `${shortId(d.srcUuid)} → ${shortId(d.branchUuid)} @ ${shortId(d.turn)}`;
     case "focus":
-      return [`session ${shortId(d.session)}`, d.replayed === true ? "replayed" : undefined]
+      return [
+        str("pty") !== undefined ? `pty ${str("pty")}` : `session ${shortId(d.session)}`,
+        d.replayed === true ? "replayed" : undefined,
+      ]
         .filter(Boolean)
         .join(" · ");
     case "spawn-refused":

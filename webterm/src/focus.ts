@@ -5,7 +5,9 @@
  * scroll its rail row into view):
  *
  * - a `focus` event on the daemon's bus, sent by `POST /api/focus` (Stead's
- *   notification click). Every open window gets it; only the most recently
+ *   notification click). It names a session uuid, or a live pty id for a session
+ *   launched headless (`POST /api/pty`) that has no uuid yet. Every open window
+ *   gets it; only the most recently
  *   focused one acts, so two windows don't both jump. A `replayed` event (held
  *   by the daemon while no window was connected, handed to the first one to
  *   connect) is acted on by whoever gets it, since nobody else will.
@@ -28,11 +30,18 @@ export function isSessionUuid(s: unknown): s is string {
   return typeof s === "string" && UUID_RE.test(s);
 }
 
-/** The session a `focus` event asks for (lowercased), else null. */
-export function focusTarget(ev: EventRecord): string | null {
+/** What a deep link asks to bring forward: a session by uuid, or a live pty by id. */
+export type FocusTarget = { session: string } | { pty: string };
+
+const PTY_ID_RE = /^\d+$/;
+
+/** The target a `focus` event asks for (a session uuid lowercased), else null. */
+export function focusTarget(ev: EventRecord): FocusTarget | null {
   if (ev.kind !== "focus") return null;
   const s = ev.data?.session;
-  return isSessionUuid(s) ? s.toLowerCase() : null;
+  if (isSessionUuid(s)) return { session: s.toLowerCase() };
+  const p = ev.data?.pty;
+  return typeof p === "string" && PTY_ID_RE.test(p) ? { pty: p } : null;
 }
 
 /**
