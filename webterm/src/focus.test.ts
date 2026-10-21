@@ -29,12 +29,20 @@ test("isSessionUuid accepts canonical uuids only", () => {
 });
 
 test("focusTarget reads a focus event's session, lowercased", () => {
-  assert.equal(focusTarget(ev("focus", { session: U })), U);
-  assert.equal(focusTarget(ev("focus", { session: U.toUpperCase() })), U);
-  assert.equal(focusTarget(ev("focus", { session: U, replayed: true })), U);
+  assert.deepEqual(focusTarget(ev("focus", { session: U })), { session: U });
+  assert.deepEqual(focusTarget(ev("focus", { session: U.toUpperCase() })), { session: U });
+  assert.deepEqual(focusTarget(ev("focus", { session: U, replayed: true })), { session: U });
   assert.equal(focusTarget(ev("focus", { session: "nope" })), null);
   assert.equal(focusTarget(ev("focus", {})), null);
   assert.equal(focusTarget(ev("pty-spawned", { session: U })), null);
+});
+
+test("focusTarget reads a focus event's pty id", () => {
+  assert.deepEqual(focusTarget(ev("focus", { pty: "12" })), { pty: "12" });
+  assert.deepEqual(focusTarget(ev("focus", { pty: "12", replayed: true })), { pty: "12" });
+  assert.equal(focusTarget(ev("focus", { pty: 12 })), null, "the daemon sends ids as strings");
+  assert.equal(focusTarget(ev("focus", { pty: "12; rm" })), null);
+  assert.equal(focusTarget(ev("focus", { pty: "" })), null);
 });
 
 test("sessionFromSearch splits ?session= off and keeps the rest", () => {

@@ -65,6 +65,7 @@ import { mountRailLinks } from "./rail-links.ts";
 import { mountRail } from "./rail.ts";
 import { eventStream } from "./event-stream.ts";
 import { focusTarget, sessionFromSearch, trackWindowPresence } from "./focus.ts";
+import type { FocusTarget } from "./focus.ts";
 import { mountDock } from "./dock.ts";
 import { mountArtifactDock } from "./artifact-dock.ts";
 import type { PlanReview } from "./artifacts.ts";
@@ -1236,14 +1237,15 @@ export function mountShell(appEl: HTMLElement): void {
   // Deep-link focus (see focus.ts): a `focus` event from POST /api/focus, or
   // ?session=<uuid> at startup, does what launching the session's rail row
   // does — open or activate its tab (attaching a hosted pty) — and scrolls the
-  // row into view.
+  // row into view. The target is a session uuid or a live pty id.
   // ------------------------------------------------------------------
 
-  async function focusSession(uuid: string) {
+  async function focusSession(target: FocusTarget) {
     // A live pty and its forest session merge into one row; prefer a pty row if
     // the roster has both, so a hosted session attaches rather than resumes.
     const find = () => {
-      const rows = railView.rows().filter((r) => r.uuid === uuid);
+      if ("pty" in target) return railView.rows().find((r) => r.ptyId === target.pty);
+      const rows = railView.rows().filter((r) => r.uuid === target.session);
       return rows.find((r) => r.ptyId) ?? rows[0];
     };
     let row = find();
@@ -1258,7 +1260,9 @@ export function mountShell(appEl: HTMLElement): void {
       launchRow(row);
       railView.reveal(row.key);
     } else {
-      const open = tabs.find((t) => t.descriptor.uuid === uuid);
+      const open = tabs.find((t) =>
+        "pty" in target ? t.descriptor.ptyId === target.pty : t.descriptor.uuid === target.session,
+      );
       if (open) activateTab(open.id);
     }
     window.focus();
@@ -1400,8 +1404,8 @@ export function mountShell(appEl: HTMLElement): void {
   const booted = boot().catch(() => undefined);
   // Deep links act after boot: tab restore activates each restored tab in turn
   // and would otherwise bury the one we were asked for.
-  const focusAfterBoot = (uuid: string) => void booted.then(() => focusSession(uuid));
-  if (linked?.uuid) focusAfterBoot(linked.uuid);
+  const focusAfterBoot = (target: FocusTarget) => void booted.then(() => focusSession(target));
+  if (linked?.uuid) focusAfterBoot({ session: linked.uuid });
 
   // Open for the window's whole life (hidden too: a notification click is
   // exactly when the window is in the background), so the daemon counts this
@@ -1409,12 +1413,12 @@ export function mountShell(appEl: HTMLElement): void {
   const presence = trackWindowPresence();
   eventStream.subscribe({
     onEvent(ev) {
-      const uuid = focusTarget(ev);
-      if (!uuid) return;
+      const target = focusTarget(ev);
+      if (!target) return;
       // A replay went to this window alone; a live event went to every window,
       // and only the most recently focused one acts on it.
       if (ev.data.replayed !== true && !presence.shouldAct()) return;
-      focusAfterBoot(uuid);
+      focusAfterBoot(target);
     },
   });
 
