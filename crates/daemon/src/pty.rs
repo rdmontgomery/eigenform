@@ -1,4 +1,5 @@
 //! The pty websocket: spawn / resume / attach a session pty and bridge it to the browser.
+//! Plus the `/api/pty` routes: the roster, kill, and a headless fresh-session spawn.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
@@ -38,7 +39,8 @@ pub(crate) struct PtyQuery {
     /// from query strings require a custom handler because `"true"` ≠ `true`).
     #[serde(default)]
     create: u8,
-    // Absent all = the default command (a shell). Only a real connection spawns anything.
+    // Absent all = the default command (a shell). Only a real connection spawns anything
+    // here; `POST /api/pty` is the one route that spawns without a socket.
 }
 
 pub(crate) async fn pty_ws(
@@ -71,42 +73,13 @@ pub(crate) async fn pty_ws(
     // Otherwise spawn-and-register through the host (uniform model: even bare `/pty`
     // registers a pty that outlives this socket).
 
-    // `new=<cwd>` / `term=<cwd>` directory policy (full-freedom + confirm; the launcher
-    // gates `create=1` behind a user "Create <path>?" prompt, and `origin_is_local` above
-    // is the CSRF guard).
-    //   - create=1 + missing → mkdir_all it (anywhere), then spawn.
-    //   - create=0 + missing → refuse: don't spawn claude (or a shell) in a missing cwd.
-    //   - existing dir        → spawn as-is, no mkdir, regardless of the create flag.
-    // Resolved here (before on_upgrade) so a rejection closes the socket with a clear reason.
+    // `new=<cwd>` / `term=<cwd>` directory policy (`ensure_cwd`). Resolved here (before
+    // on_upgrade) so a rejection closes the socket with a clear reason.
     if let Some(cwd_str) = query.new.as_deref().or(query.term.as_deref()) {
-        let dir = normalize_path(&expand_tilde(cwd_str));
-        let exists = dir.is_dir();
-        if !exists {
-            if query.create != 0 {
-                if std::fs::create_dir_all(&dir).is_err() {
-                    state.events.record(
-                        "spawn-refused",
-                        serde_json::json!({
-                            "reason": "failed to create directory",
-                            "cwd": dir.display().to_string(),
-                        }),
-                    );
-                    return ws.on_upgrade(move |socket| async move {
-                        let _ = close_with_reason(socket, "failed to create directory").await;
-                    });
-                }
-            } else {
-                state.events.record(
-                    "spawn-refused",
-                    serde_json::json!({
-                        "reason": "no such directory",
-                        "cwd": dir.display().to_string(),
-                    }),
-                );
-                return ws.on_upgrade(move |socket| async move {
-                    let _ = close_with_reason(socket, "no such directory").await;
-                });
-            }
+        if let Err(reason) = ensure_cwd(&state, cwd_str, query.create != 0) {
+            return ws.on_upgrade(move |socket| async move {
+                let _ = close_with_reason(socket, reason).await;
+            });
         }
     }
 
@@ -160,78 +133,226 @@ pub(crate) async fn pty_ws(
         });
     }
 
-    // Every claude gets the turn hooks (spike 18), so a later close can tell whether
-    // killing it would lose work. Added here, not in `pty_command`, because the token
-    // is per spawn. A shell or codex gets none and is never killed by a close.
     let mut command = command;
-    let hook_token = (command.program == "claude" && state.config.hook_port != 0).then(|| {
+    let hook_token = add_turn_hooks(&state, &mut command);
+    ws.on_upgrade(move |socket| async move {
+        match spawn_registered(&state, command, hook_token) {
+            Ok(live) => attach_socket(socket, live).await,
+            Err(_) => {
+                let _ = close_with_reason(socket, "failed to spawn pty").await;
+            }
+        }
+    })
+}
+
+/// The `new=`/`term=` directory policy (full-freedom + confirm; the launcher gates
+/// `create` behind a user "Create <path>?" prompt, and `origin_is_local` is the CSRF
+/// guard):
+///   - create + missing → mkdir_all it (anywhere), then spawn.
+///   - missing, no create → refuse: don't spawn claude (or a shell) in a missing cwd.
+///   - existing dir → spawn as-is, no mkdir, regardless of the create flag.
+///
+/// A refusal is recorded as `spawn-refused` and returned as its reason.
+fn ensure_cwd(state: &AppState, cwd_str: &str, create: bool) -> Result<(), &'static str> {
+    let dir = normalize_path(&expand_tilde(cwd_str));
+    if dir.is_dir() {
+        return Ok(());
+    }
+    let reason = if !create {
+        "no such directory"
+    } else if std::fs::create_dir_all(&dir).is_err() {
+        "failed to create directory"
+    } else {
+        return Ok(());
+    };
+    state.events.record(
+        "spawn-refused",
+        serde_json::json!({ "reason": reason, "cwd": dir.display().to_string() }),
+    );
+    Err(reason)
+}
+
+/// Every claude gets the turn hooks (spike 18), so a later close can tell whether
+/// killing it would lose work. Added at spawn, not in `pty_command`, because the token
+/// is per spawn. A shell or codex gets none and is never killed by a close.
+fn add_turn_hooks(state: &AppState, command: &mut PtyCommand) -> Option<String> {
+    (command.program == "claude" && state.config.hook_port != 0).then(|| {
         let token = state.turns.new_token();
         command.args.push("--settings".to_string());
         command
             .args
             .push(crate::turns::settings_arg(state.config.hook_port, &token));
         token
-    });
-
-    let host = Arc::clone(&state.host);
-    let events = Arc::clone(&state.events);
-    let turns = Arc::clone(&state.turns);
-    ws.on_upgrade(move |socket| async move {
-        let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
-        let live = match host.spawn(&command.program, &args, command.cwd.as_deref(), (80, 24)) {
-            Ok(live) => live,
-            Err(_) => {
-                events.record(
-                    "spawn-refused",
-                    serde_json::json!({ "reason": "failed to spawn pty" }),
-                );
-                let _ = close_with_reason(socket, "failed to spawn pty").await;
-                return;
-            }
-        };
-
-        if let Some(token) = hook_token {
-            turns.bind(live.id, token);
-        }
-
-        // A resume continues a known id: record it now so the drawer, artifact pane and
-        // a later attach all know the session without waiting on a claim file.
-        if let Some(uuid) = command.resumes.clone() {
-            live.set_uuid(uuid.clone());
-            events.record(
-                "session-uuid-adopted",
-                serde_json::json!({ "ptyId": live.id.to_string(), "uuid": uuid, "source": "resume" }),
-            );
-        }
-
-        // For a fresh session: watch for its new JSONL, then record the uuid on the
-        // LivePty and broadcast it to attached clients. The watcher holds a `Weak`
-        // (mirroring the pump) so an abandoned connection can't keep the pty alive.
-        if let Some((projects, dir_name)) = command.watch.clone() {
-            let weak = Arc::downgrade(&live);
-            let events = Arc::clone(&events);
-            std::thread::spawn(move || {
-                if let Some(uuid) = watch_new_session(projects, dir_name, weak.clone()) {
-                    if let Some(live) = weak.upgrade() {
-                        live.set_uuid(uuid.clone());
-                        events.record(
-                            "session-uuid-adopted",
-                            serde_json::json!({
-                                "ptyId": live.id.to_string(),
-                                "uuid": uuid,
-                                "source": "watcher",
-                            }),
-                        );
-                        live.broadcast_text(
-                            serde_json::json!({"type": "session", "uuid": uuid}).to_string(),
-                        );
-                    }
-                }
-            });
-        }
-
-        attach_socket(socket, live).await;
     })
+}
+
+/// Spawn `command` into the host registry and wire up everything a pty needs whether or
+/// not a socket is attached: the turn-hook binding, the resumed uuid, and (for a fresh
+/// session) the watcher that adopts its new JSONL's uuid. Shared by the `/pty` socket
+/// and the headless `POST /api/pty`.
+fn spawn_registered(
+    state: &AppState,
+    command: PtyCommand,
+    hook_token: Option<String>,
+) -> anyhow::Result<Arc<host::LivePty>> {
+    let args: Vec<&str> = command.args.iter().map(String::as_str).collect();
+    let live = match state
+        .host
+        .spawn(&command.program, &args, command.cwd.as_deref(), (80, 24))
+    {
+        Ok(live) => live,
+        Err(e) => {
+            state.events.record(
+                "spawn-refused",
+                serde_json::json!({ "reason": "failed to spawn pty" }),
+            );
+            return Err(e);
+        }
+    };
+
+    if let Some(token) = hook_token {
+        state.turns.bind(live.id, token);
+    }
+
+    // A resume continues a known id: record it now so the drawer, artifact pane and
+    // a later attach all know the session without waiting on a claim file.
+    if let Some(uuid) = command.resumes.clone() {
+        live.set_uuid(uuid.clone());
+        state.events.record(
+            "session-uuid-adopted",
+            serde_json::json!({ "ptyId": live.id.to_string(), "uuid": uuid, "source": "resume" }),
+        );
+    }
+
+    // For a fresh session: watch for its new JSONL, then record the uuid on the
+    // LivePty and broadcast it to attached clients. The watcher holds a `Weak`
+    // (mirroring the pump) so an abandoned connection can't keep the pty alive.
+    if let Some((projects, dir_name)) = command.watch.clone() {
+        let weak = Arc::downgrade(&live);
+        let events = Arc::clone(&state.events);
+        std::thread::spawn(move || {
+            if let Some(uuid) = watch_new_session(projects, dir_name, weak.clone()) {
+                if let Some(live) = weak.upgrade() {
+                    live.set_uuid(uuid.clone());
+                    events.record(
+                        "session-uuid-adopted",
+                        serde_json::json!({
+                            "ptyId": live.id.to_string(),
+                            "uuid": uuid,
+                            "source": "watcher",
+                        }),
+                    );
+                    live.broadcast_text(
+                        serde_json::json!({"type": "session", "uuid": uuid}).to_string(),
+                    );
+                }
+            }
+        });
+    }
+
+    Ok(live)
+}
+
+#[derive(serde::Deserialize)]
+struct CreateBody {
+    /// The cwd to start a fresh `claude` in, exactly as `/pty?new=` takes it.
+    new: String,
+    /// The first message, passed as `claude -- "<prompt>"` (argv, no shell). Absent or
+    /// blank = a fresh session waiting at its prompt.
+    #[serde(default)]
+    prompt: Option<String>,
+    /// Create a missing `new` dir instead of refusing it (`/pty`'s `create=1`).
+    #[serde(default)]
+    create: bool,
+}
+
+/// `POST /api/pty` — start a fresh claude session with no browser attached, so an outside
+/// tool can launch one. Body `{"new": "<cwd>", "prompt"?: "<text>", "create"?: bool}`
+/// with `content-type: application/json`.
+///
+/// - 201 `{"id", "cwd"}`: spawned and registered. It lists in `GET /api/pty` (so the
+///   rail shows it) and `/pty?attach=<id>` opens it. The uuid lands later, as on `/pty`:
+///   on the roster row and as a `session-uuid-adopted` event.
+/// - 400 bad body, 403 non-local Origin, 415 not JSON
+/// - 404 `new` doesn't exist and `create` is off; 500 mkdir or spawn failed
+/// - 503 no `projects_dir`: without it the daemon can't run or track a claude session
+pub(crate) async fn pty_create_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // Same CSRF posture as the other POST routes, and stricter than `/pty`'s need: this
+    // runs claude with caller-chosen input, so a JSON content type (which can't be sent
+    // cross-origin without a preflight) is required on top of a local Origin.
+    if !origin_is_local(&headers) {
+        return (StatusCode::FORBIDDEN, "local requests only").into_response();
+    }
+    let json_ct = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"));
+    if !json_ct {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "send content-type: application/json",
+        )
+            .into_response();
+    }
+    let Ok(body) = serde_json::from_slice::<CreateBody>(&body) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "need {\"new\": \"<cwd>\", \"prompt\"?: \"<text>\"}",
+        )
+            .into_response();
+    };
+    // `pty_command` would fall back to the default program here: never answer "start
+    // claude" with a shell.
+    if state.config.projects_dir.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no projects_dir configured: can't start a claude session",
+        )
+            .into_response();
+    }
+    if let Err(reason) = ensure_cwd(&state, &body.new, body.create) {
+        let status = if reason == "no such directory" {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return (status, reason).into_response();
+    }
+
+    let query = PtyQuery {
+        attach: None,
+        session: None,
+        new: Some(body.new),
+        term: None,
+        create: 0,
+    };
+    let mut command = pty_command(&state.config, &query);
+    let hook_token = add_turn_hooks(&state, &mut command);
+    push_prompt(&mut command, body.prompt);
+    match spawn_registered(&state, command, hook_token) {
+        Ok(live) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({
+                "id": live.id.to_string(),
+                "cwd": live.cwd.as_ref().map(|c| c.display().to_string()),
+            })),
+        )
+            .into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "failed to spawn pty").into_response(),
+    }
+}
+
+/// Append a first message to a claude command. Last, after `--`, so a prompt that starts
+/// with `-` is a message and not a flag; a blank prompt adds nothing.
+fn push_prompt(command: &mut PtyCommand, prompt: Option<String>) {
+    if let Some(prompt) = prompt.filter(|p| !p.trim().is_empty()) {
+        command.args.push("--".to_string());
+        command.args.push(prompt);
+    }
 }
 
 /// Close a websocket with a human-readable reason (used when an attach target is gone
@@ -1121,6 +1242,27 @@ mod tests {
             &cfg_no_projects,
             &q(Some("abcdef00"))
         ));
+    }
+
+    #[test]
+    fn a_prompt_goes_last_after_the_hook_settings_behind_a_double_dash() {
+        let mut cmd = PtyCommand {
+            program: "claude".into(),
+            args: vec!["--settings".into(), "{}".into()],
+            cwd: None,
+            watch: None,
+            resumes: None,
+        };
+        push_prompt(&mut cmd, Some("-p looks like a flag".into()));
+        assert_eq!(cmd.args, ["--settings", "{}", "--", "-p looks like a flag"]);
+
+        let mut bare = PtyCommand {
+            args: vec![],
+            ..cmd.clone()
+        };
+        push_prompt(&mut bare, Some(" \n".into()));
+        push_prompt(&mut bare, None);
+        assert!(bare.args.is_empty(), "a blank prompt adds nothing");
     }
 
     #[test]
