@@ -2,13 +2,14 @@
 //!
 //! Hosts pty sessions (a [`host::SessionHost`] that outlives any one browser socket),
 //! serves the transcript / forest / claims / inspect APIs, and bridges each pty to a
-//! websocket. The bridge drives ANY command; real `claude` is launched only by the user
-//! from inside the app, never by the daemon, tests, or the agent.
+//! websocket. The bridge drives ANY command; real `claude` is launched only on request,
+//! by the user from inside the app or a local tool via `POST /api/pty`, never by the
+//! daemon on its own, tests, or the agent.
 //!
 //! This file is the composition root — [`Config`], [`AppState`], and the router. Each
 //! route family lives in its own module:
 //!
-//! - `pty` — `/pty` websocket (spawn / resume / attach), `/api/pty` list + kill
+//! - `pty` — `/pty` websocket (spawn / resume / attach), `/api/pty` list + kill + headless spawn
 //! - `session` — `/api/session/:uuid/json` (cached transcript) and `/fork`
 //! - `forest` — `/api/forest` snapshot and its `/api/watch/forest` push stream
 //! - `claims` — `/api/claims`, the active-sessions audit
@@ -153,7 +154,10 @@ pub struct AppState {
 pub fn app(config: Config) -> Router {
     let mut router = Router::new()
         .route("/pty", get(pty::pty_ws))
-        .route("/api/pty", get(pty::pty_list_route))
+        .route(
+            "/api/pty",
+            get(pty::pty_list_route).post(pty::pty_create_route),
+        )
         .route(
             "/api/pty/{id}",
             axum::routing::delete(pty::pty_delete_route),
