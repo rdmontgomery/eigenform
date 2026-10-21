@@ -225,13 +225,28 @@ pub type PtyId = u64;
 /// [`PtyId`], stores the entry, and serves get/list/remove. Spawning the process,
 /// the reader-thread pump, and attach/detach fan-out all land in Task 1.4 — this
 /// type intentionally knows nothing about them.
-#[derive(Default)]
 pub struct SessionHost {
     inner: Mutex<HashMap<PtyId, Arc<LivePty>>>,
+    /// Seeded from the start time (epoch ms), not 0, so ids never repeat across daemon
+    /// restarts: a browser's saved tabs hold ids from the last run, and a fresh pty that
+    /// reused one would be adopted by the stale tab — its label, uuid and transcript.
     next_id: AtomicU64,
     /// Observability bus, when wired by `app()`. `None` in the registry-semantics unit
     /// tests (which never build a bus); event recording is skipped in that case.
     events: Option<Arc<crate::events::EventBus>>,
+}
+
+impl Default for SessionHost {
+    fn default() -> Self {
+        let now_ms = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        Self {
+            inner: Mutex::default(),
+            next_id: AtomicU64::new(now_ms),
+            events: None,
+        }
+    }
 }
 
 impl SessionHost {
@@ -1103,6 +1118,21 @@ mod tests {
         let b = live_pty(&host, None);
         assert!(b > a, "ids must be monotonic: {b} > {a}");
         assert_ne!(a, b, "ids must be unique");
+    }
+
+    #[test]
+    fn ids_do_not_repeat_across_restarts() {
+        // A restarted daemon is a new host; its ids must not collide with the last
+        // run's, which a browser's saved tabs still hold.
+        let before = SessionHost::default();
+        let old = live_pty(&before, None);
+        std::thread::sleep(Duration::from_millis(2));
+        let after = SessionHost::default();
+        let new = live_pty(&after, None);
+        assert!(
+            new > old,
+            "a restart's first id {new} must pass the last run's {old}"
+        );
     }
 
     #[test]
