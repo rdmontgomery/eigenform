@@ -281,14 +281,15 @@ test("reconcileTabs: attaches by renumbered id when uuid matches a live pty", ()
   assert.equal(actions[0]!.descriptor.ptyId, "42");
 });
 
-test("reconcileTabs: attaches by saved id when the live pty has no uuid yet", () => {
-  // Boot window: the pty is live under its saved id but hasn't reported its uuid.
-  // A null live uuid doesn't contradict the saved uuid, so attach by id.
+test("reconcileTabs: resumes (not attach) when the saved ptyId now holds a fresh, uuid-less session", () => {
+  // Daemon restarted, then a new session (launcher, or POST /api/pty before the
+  // page loaded) took id "10" and hasn't resolved its uuid yet. Attaching would
+  // put this tab's label and uuid-a on that session — the wrong-title-on-load bug.
   const ptys: PtyInfo[] = [pty({ id: "10", uuid: null })];
   const saved = [{ ptyId: "10", uuid: "uuid-a", label: "My tab" }];
   const actions = reconcileTabs(saved, ptys);
-  assert.equal(actions[0]!.action, "attach");
-  assert.equal(actions[0]!.descriptor.ptyId, "10");
+  assert.equal(actions[0]!.action, "resume");
+  assert.equal(actions[0]!.descriptor.uuid, "uuid-a");
 });
 
 test("reconcileTabs: handles multiple saved tabs with different outcomes", () => {
