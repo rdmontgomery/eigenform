@@ -1,6 +1,7 @@
 //! `POST /api/focus`: the deep-link contract Stead depends on. 200 when a window is
 //! listening on `/api/events/stream`, 202 (held, replayed to the next window) when none
 //! is, 404 for a uuid that is neither a live pty nor a forest session, 400 for junk.
+//! `{"pty": "<id>"}` targets a live pty by id instead (404 when none has it).
 
 mod helpers;
 
@@ -127,6 +128,9 @@ async fn junk_is_rejected_before_any_lookup() {
     assert_eq!(focus(&f.base, "not json").await.0, 400);
     assert_eq!(focus(&f.base, "{\"uuid\":\"x\"}").await.0, 400);
     assert_eq!(focus(&f.base, "{\"session\":\"../../etc\"}").await.0, 400);
+    assert_eq!(focus(&f.base, "{\"pty\":\"one\"}").await.0, 400);
+    let both = format!("{{\"session\":\"{FOREST_UUID}\",\"pty\":\"1\"}}");
+    assert_eq!(focus(&f.base, &both).await.0, 400, "exactly one target");
     let (code, _) = helpers::http_post(&f.base, "/api/focus", &[], &body_for(FOREST_UUID)).await;
     assert_eq!(code, 415, "a JSON content type is required");
     let (code, _) = helpers::http_post(
@@ -278,4 +282,40 @@ async fn a_live_pty_session_is_known_even_outside_the_forest() {
     for p in ptys.as_array().unwrap() {
         helpers::http_delete(&f.base, &format!("/api/pty/{}", p["id"].as_str().unwrap())).await;
     }
+}
+
+#[tokio::test]
+async fn a_pty_is_focused_by_id_before_it_has_a_uuid() {
+    let f = start().await;
+    let host = f.base.strip_prefix("http://").unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{host}/pty"))
+        .await
+        .unwrap();
+    let id = loop {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                let hello: serde_json::Value = serde_json::from_str(&t).unwrap();
+                break hello["id"].as_str().unwrap().to_string();
+            }
+            Ok(Some(Ok(_))) => continue,
+            other => panic!("no pty hello: {other:?}"),
+        }
+    };
+
+    let mut win = open_stream(&f.base).await;
+    let (code, body) = focus(&f.base, &format!("{{\"pty\":\"{id}\"}}")).await;
+    assert_eq!(code, 200, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["pty"], id.as_str());
+    let ev = next_focus_frame(&mut win).await.expect("live focus frame");
+    assert_eq!(ev["data"]["pty"], id.as_str());
+    assert!(ev["data"].get("session").is_none());
+
+    // A bare number names the same pty.
+    let (code, _) = focus(&f.base, &format!("{{\"pty\":{id}}}")).await;
+    assert_eq!(code, 200);
+
+    helpers::http_delete(&f.base, &format!("/api/pty/{id}")).await;
+    let (code, body) = focus(&f.base, &format!("{{\"pty\":\"{id}\"}}")).await;
+    assert_eq!(code, 404, "a killed pty is gone: {body}");
 }

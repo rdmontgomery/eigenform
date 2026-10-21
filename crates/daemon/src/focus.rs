@@ -1,16 +1,21 @@
 //! Deep-link focus: `POST /api/focus` asks the open app windows to bring one session to
 //! the front. This is the contract Stead's notification click depends on — keep it stable:
 //!
-//! - body `{"session": "<uuid>"}` with `content-type: application/json`
+//! - body `{"session": "<uuid>"}` or `{"pty": "<id>"}` (exactly one) with
+//!   `content-type: application/json`. `pty` takes the id `POST /api/pty` returns, so a
+//!   tool that just launched a session can focus it before claude has written a
+//!   transcript (and so before it has a uuid); a number is accepted too.
 //! - 200: a `focus` event went out over `/api/events/stream` to at least one window
 //! - 202: no window was connected; the request is held for [`PENDING_TTL`] and replayed
 //!   as the first frame to the next window that connects, marked `"replayed": true`
 //!   (the click often opens the app cold, so the POST lands before any window exists)
-//! - 400: the body is not JSON or `session` is not a uuid
-//! - 404: the uuid is neither a live pty (`/api/pty`) nor a session the forest knows
+//! - 400: the body is not JSON, names both or neither, or `session` is not a uuid
+//! - 404: the uuid is neither a live pty (`/api/pty`) nor a session the forest knows,
+//!   or no live pty has that id
 //!
-//! The `focus` event rides the existing bus (so it shows in `/api/events` too); which
-//! window acts on it is the app's call (the most recently focused one).
+//! The `focus` event (`{"session"}` or `{"pty"}`, as asked) rides the existing bus (so it
+//! shows in `/api/events` too); which window acts on it is the app's call (the most
+//! recently focused one).
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -92,15 +97,15 @@ impl FocusHub {
         (rx, replay, guard)
     }
 
-    /// Record a `focus` event for `uuid` on the bus. With no client connected, hold it
+    /// Record a `focus` event for `target` on the bus. With no client connected, hold it
     /// (replacing any older held request: only the most recent click matters).
-    pub fn request(&self, bus: &EventBus, uuid: &str) -> Delivery {
-        self.request_at(bus, uuid, Instant::now())
+    pub fn request(&self, bus: &EventBus, target: &Target) -> Delivery {
+        self.request_at(bus, target, Instant::now())
     }
 
-    fn request_at(&self, bus: &EventBus, uuid: &str, now: Instant) -> Delivery {
+    fn request_at(&self, bus: &EventBus, target: &Target, now: Instant) -> Delivery {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let event = bus.record("focus", serde_json::json!({ "session": uuid }));
+        let event = bus.record("focus", target.to_json());
         if inner.clients > 0 {
             inner.pending = None;
             Delivery::Delivered(inner.clients)
@@ -121,9 +126,50 @@ pub(crate) fn is_uuid(s: &str) -> bool {
             .all(|(g, n)| g.len() == n && g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// What a focus request names: a session by uuid, or a live pty by id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// A lowercased session uuid.
+    Session(String),
+    Pty(crate::host::PtyId),
+}
+
+impl Target {
+    /// The event data and the response's echo: `{"session": uuid}` or `{"pty": "<id>"}`
+    /// (a string, as `/api/pty` serves ids: JS can't hold every u64).
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Target::Session(uuid) => serde_json::json!({ "session": uuid }),
+            Target::Pty(id) => serde_json::json!({ "pty": id.to_string() }),
+        }
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct FocusBody {
-    session: String,
+    session: Option<String>,
+    pty: Option<serde_json::Value>,
+}
+
+/// Validate a body into its target, or the 400 message.
+fn parse_target(body: &[u8]) -> Result<Target, &'static str> {
+    const NEED: &str = "need {\"session\": \"<uuid>\"} or {\"pty\": \"<id>\"}";
+    let Ok(body) = serde_json::from_slice::<FocusBody>(body) else {
+        return Err(NEED);
+    };
+    match (body.session, body.pty) {
+        (Some(session), None) if is_uuid(&session) => {
+            Ok(Target::Session(session.to_ascii_lowercase()))
+        }
+        (Some(_), None) => Err("`session` is not a uuid"),
+        (None, Some(pty)) => pty
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .or_else(|| pty.as_u64())
+            .map(Target::Pty)
+            .ok_or("`pty` is not a pty id"),
+        _ => Err(NEED),
+    }
 }
 
 /// `POST /api/focus` — see the module docs for the contract.
@@ -148,37 +194,36 @@ pub(crate) async fn focus_route(
         )
             .into_response();
     }
-    let Ok(FocusBody { session }) = serde_json::from_slice(&body) else {
-        return (StatusCode::BAD_REQUEST, "need {\"session\": \"<uuid>\"}").into_response();
+    let target = match parse_target(&body) {
+        Ok(target) => target,
+        Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
     };
-    if !is_uuid(&session) {
-        return (StatusCode::BAD_REQUEST, "`session` is not a uuid").into_response();
-    }
-    let uuid = session.to_ascii_lowercase();
 
-    if !session_known(&state, &uuid).await {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "unknown session", "session": uuid })),
-        )
-            .into_response();
+    let known = match &target {
+        Target::Session(uuid) => session_known(&state, uuid).await,
+        Target::Pty(id) => state.host.get(*id).is_some(),
+    };
+    if !known {
+        let mut body = target.to_json();
+        body["error"] = match target {
+            Target::Session(_) => "unknown session",
+            Target::Pty(_) => "no live pty with that id",
+        }
+        .into();
+        return (StatusCode::NOT_FOUND, Json(body)).into_response();
     }
 
-    match state.focus.request(&state.events, &uuid) {
-        Delivery::Delivered(clients) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "session": uuid, "delivered": clients })),
-        )
-            .into_response(),
-        Delivery::Pending => (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({
-                "session": uuid,
-                "pending": true,
-                "ttlSecs": PENDING_TTL.as_secs(),
-            })),
-        )
-            .into_response(),
+    let mut body = target.to_json();
+    match state.focus.request(&state.events, &target) {
+        Delivery::Delivered(clients) => {
+            body["delivered"] = clients.into();
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Delivery::Pending => {
+            body["pending"] = true.into();
+            body["ttlSecs"] = PENDING_TTL.as_secs().into();
+            (StatusCode::ACCEPTED, Json(body)).into_response()
+        }
     }
 }
 
@@ -209,6 +254,28 @@ mod tests {
 
     const U: &str = "aaaa1111-0000-4000-8000-000000000001";
 
+    fn session(uuid: &str) -> Target {
+        Target::Session(uuid.to_string())
+    }
+
+    #[test]
+    fn a_body_names_exactly_one_target() {
+        let t = |b: &str| parse_target(b.as_bytes());
+        assert_eq!(t(&format!("{{\"session\":\"{U}\"}}")), Ok(session(U)));
+        assert_eq!(
+            t(&format!("{{\"session\":\"{}\"}}", U.to_uppercase())),
+            Ok(session(U))
+        );
+        assert_eq!(t(r#"{"pty":"7"}"#), Ok(Target::Pty(7)));
+        assert_eq!(t(r#"{"pty":7}"#), Ok(Target::Pty(7)));
+        assert!(t(r#"{"pty":"seven"}"#).is_err());
+        assert!(t(r#"{"pty":-1}"#).is_err());
+        assert!(t(r#"{"session":"nope"}"#).is_err());
+        assert!(t(&format!("{{\"session\":\"{U}\",\"pty\":\"7\"}}")).is_err());
+        assert!(t("{}").is_err());
+        assert!(t("not json").is_err());
+    }
+
     #[test]
     fn uuid_shape_is_strict() {
         assert!(is_uuid(U));
@@ -226,7 +293,7 @@ mod tests {
         let bus = EventBus::default();
         let hub = Arc::new(FocusHub::default());
         let t0 = Instant::now();
-        assert_eq!(hub.request_at(&bus, U, t0), Delivery::Pending);
+        assert_eq!(hub.request_at(&bus, &session(U), t0), Delivery::Pending);
 
         let (_rx, replay, _g) = hub.connect_at(&bus, t0 + Duration::from_secs(5));
         let ev = replay.expect("first client gets the held request");
@@ -242,7 +309,7 @@ mod tests {
         let bus = EventBus::default();
         let hub = Arc::new(FocusHub::default());
         let t0 = Instant::now();
-        hub.request_at(&bus, U, t0);
+        hub.request_at(&bus, &session(U), t0);
         let (_rx, replay, _g) = hub.connect_at(&bus, t0 + PENDING_TTL);
         assert!(replay.is_none(), "stale after {PENDING_TTL:?}");
     }
@@ -252,8 +319,8 @@ mod tests {
         let bus = EventBus::default();
         let hub = Arc::new(FocusHub::default());
         let t0 = Instant::now();
-        hub.request_at(&bus, "aaaa1111-0000-4000-8000-00000000000a", t0);
-        hub.request_at(&bus, U, t0);
+        hub.request_at(&bus, &session("aaaa1111-0000-4000-8000-00000000000a"), t0);
+        hub.request_at(&bus, &session(U), t0);
         let (_rx, replay, _g) = hub.connect_at(&bus, t0);
         assert_eq!(replay.unwrap().data["session"], U);
     }
@@ -264,11 +331,15 @@ mod tests {
         let hub = Arc::new(FocusHub::default());
         let (mut rx, replay, guard) = hub.connect(&bus);
         assert!(replay.is_none());
-        assert_eq!(hub.request(&bus, U), Delivery::Delivered(1));
+        assert_eq!(hub.request(&bus, &session(U)), Delivery::Delivered(1));
         let ev = rx.try_recv().expect("broadcast reached the subscriber");
         assert_eq!(ev.kind, "focus");
 
         drop(guard);
-        assert_eq!(hub.request(&bus, U), Delivery::Pending, "no clients left");
+        assert_eq!(
+            hub.request(&bus, &session(U)),
+            Delivery::Pending,
+            "no clients left"
+        );
     }
 }

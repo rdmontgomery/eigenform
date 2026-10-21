@@ -93,4 +93,5 @@ test("focus summarizes the session and marks a replay", () => {
   const session = "abcdef00-0000-4000-8000-000000000000";
   assert.equal(eventSummary(ev("focus", { session })), "session abcdef00");
   assert.equal(eventSummary(ev("focus", { session, replayed: true })), "session abcdef00 · replayed");
+  assert.equal(eventSummary(ev("focus", { pty: "7" })), "pty 7");
 });
