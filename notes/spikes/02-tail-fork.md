@@ -1,7 +1,7 @@
 # 02 — Tail fork via `--fork-session`
 
 **Claim:** `claude --resume <uuid> --fork-session` creates a new session with a new uuid whose JSONL begins as a copy/derivation of the source session's history, and which the engine resumes cleanly without the user having to write any JSONL bytes.
-**Status:** PENDING
+**Status:** RETIRED 2026-10-23 (was PENDING, never run). Surgery writes every fork itself, the drawer's edit-then-fork included, and nothing shells out to `--fork-session`; the foundation design's rule 5 is amended to match. Out of the re-vet set.
 **claude version:** 2.1.161
 **Date:** —
 

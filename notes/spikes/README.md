@@ -22,7 +22,7 @@ What happened. Paste real output, do not summarise.
 What this means for the design. If REFUTED, what changes.
 ```
 
-Spikes 2–4 were the original gate on implementation start; 3 is confirmed, and 2 (tail fork) and 4 (billing flip) are still pending, with nothing built on them yet. The cache-TTL spike the foundation design deferred to step 9 was never numbered; spike 05 is bundled skills.
+Spikes 2–4 were the original gate on implementation start. 3 is confirmed; 2 (tail fork) and 4 (billing flip) were retired 2026-10-23 without being run, since nothing was built on either. The cache-TTL spike the foundation design deferred to step 9 was never numbered; spike 05 is bundled skills.
 
 RETIRED means the claim may still be true but nothing depends on it anymore; it is skipped by re-vetting (`.claude/skills/vetting-claude-internals`).
 

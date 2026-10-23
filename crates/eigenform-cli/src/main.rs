@@ -161,7 +161,6 @@ enum SessionsAction {
 enum RenderFormat {
     Text,
     Json,
-    Html,
 }
 
 #[derive(Subcommand, Debug)]
@@ -470,11 +469,9 @@ fn ago(then: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) 
 fn require_text(render: RenderFormat) -> Result<()> {
     match render {
         RenderFormat::Text => Ok(()),
-        RenderFormat::Json | RenderFormat::Html => anyhow::bail!(
-            "--render {:?} isn't available here: only `sessions show` and `inspect` have a \
-             json projection, and nothing renders html (the app draws from the json). Use \
-             --render text.",
-            render
+        RenderFormat::Json => anyhow::bail!(
+            "--render json isn't available here: only `sessions show` and `inspect` have a \
+             json projection. Use --render text."
         ),
     }
 }
@@ -996,7 +993,7 @@ fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
 
 /// `eigenform inspect` — the unified config inventory. Skills + memory across
 /// resolution layers, token-budgeted, projected through the render crate's View IR
-/// to text or json (there is no html projection: the app renders the json).
+/// to text or json.
 fn inspect_cmd(
     cwd_override: Option<PathBuf>,
     all_projects: bool,
@@ -1020,9 +1017,6 @@ fn inspect_cmd(
             )
         }
         RenderFormat::Json => println!("{}", eigenform_render::inspect_json(&data)),
-        RenderFormat::Html => anyhow::bail!(
-            "there is no html projection (the app renders the json); use text or json"
-        ),
     }
     Ok(())
 }
