@@ -11,6 +11,9 @@
 //!
 //! - `pty` — `/pty` websocket (spawn / resume / attach), `/api/pty` list + kill + headless spawn
 //! - `session` — `/api/session/:uuid/json` (cached transcript) and `/fork`
+//! - [`artifacts`] — `/api/session/:uuid/artifacts` and the sandboxed `/artifact/...` files
+//! - [`plan_gate`] — the `ExitPlanMode` hook (`/api/hooks/plan-review`) and `/api/plan-reviews`
+//! - [`turns`] — the per-spawn turn hooks (`/api/hooks/turn/:token`): is a pty safe to kill?
 //! - `forest` — `/api/forest` snapshot and its `/api/watch/forest` push stream
 //! - `claims` — `/api/claims`, the active-sessions audit
 //! - `watch` — `/api/watch/:uuid` change pings and the dev live-reload stream
@@ -53,6 +56,7 @@ pub mod turns;
 mod watch;
 
 pub use pty::Pty;
+pub use session::claude_session_json;
 
 /// Webterm assets baked into the binary so an installed `eigenform` is self-contained
 /// (no Node, no build, no `--term` flag). Only compiled with `--features embed-assets`,
@@ -89,8 +93,9 @@ mod embedded {
     }
 }
 
-/// What the daemon runs when a terminal connects. For slice 1 this is a fixed command
-/// (a shell for the demo, a dummy in tests) — NOT arbitrary exec from the request.
+/// What the daemon runs and reads. `program` is the fixed command a bare terminal tab runs
+/// (your shell, a dummy in tests), never arbitrary exec from the request; claude is spawned
+/// only for the session routes (`new=`, `session=`, `POST /api/pty`).
 #[derive(Clone, Debug, Default)]
 pub struct Config {
     pub program: String,
@@ -129,9 +134,10 @@ pub struct Config {
     pub hook_port: u16,
 }
 
-/// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
-/// holds no runtime state; the host owns the live pty registry the handlers reach for.
-/// Both fields are `Arc`, so `Clone` is cheap (axum requires `State: Clone`).
+/// Shared router state: pure [`Config`] plus the runtime pieces the handlers reach for
+/// (the [`host::SessionHost`] pty registry, the event bus, plan reviews, snoozes, turn
+/// state, focus). `Config` holds no runtime state. Every field is an `Arc`, so `Clone` is
+/// cheap (axum requires `State: Clone`).
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,

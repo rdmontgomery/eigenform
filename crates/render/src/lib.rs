@@ -1,8 +1,12 @@
-//! eigenform-render: project an internal View tree to text (and later json/html).
+//! eigenform-render: the view logic, projected two ways.
 //!
-//! The View tree is an internal, refactor-freely IR — not a published schema. v0.1
-//! ships the `text` projection only; json/html land when a consumer exists (browser
-//! play, daemon). See `docs/plans/2026-06-03-render-crate-design.md`.
+//! - `text`: an internal View tree (a refactor-freely IR, not a published schema) and
+//!   [`render_text`], behind the CLI's `--render text`.
+//! - `json`: [`session_json`] (the transcript the app's drawer, reach map and preview
+//!   read) and [`inspect_json`]. The app does its own presentation from these; there is
+//!   no html projection.
+//!
+//! See `docs/plans/2026-06-03-render-crate-design.md` (the v0.1 text design).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;

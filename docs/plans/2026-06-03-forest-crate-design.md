@@ -1,6 +1,6 @@
 # crates/forest — design (v0.1)
 
-Status: designing 2026-06-03. Implements build step 5 (session side) — enough to stop
+Status: shipped 2026-06-03 (the live Forest, subagent discovery and the rail grew on it later; see the crate docs). Implements build step 5 (session side) — enough to stop
 pasting paths: resolve a session by uuid globally, and list recent sessions per project.
 Skills/memory indexing under the same crate is deferred.
 

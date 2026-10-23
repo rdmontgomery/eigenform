@@ -13,7 +13,7 @@ The binary is `eigenform`; alias it to taste (`alias ef=eigenform`). Dual-licens
 One local daemon, one browser tab, every Claude Code session you have.
 
 - **A real terminal, tabbed.** Full-fidelity xterm sessions hosted by the daemon — they survive a closed browser, a reload, a dropped socket. Tabs drag, restore by session uuid, and reconnect on their own.
-- **The rail.** Every session on disk, live or not, ranked by state and recency, with shape-coded status dots (working / ready / external / headless), search, inline rename, a fuzzy launcher for new sessions, and a Links section that collects the URLs mentioned in chat.
+- **The rail.** Every session on disk, live or not, ranked by state and recency, with two-channel status dots (color for activity: working / your turn / idle; fill for where it runs: in eigenform / outside it / stopped), search, inline rename, a fuzzy launcher for new sessions, and a Links section that collects the URLs mentioned in chat.
 - **Transcript + reach map.** A docked drawer renders the session semantically — turns, tool calls, mini-diffs — alongside a reach map of how far the agent's hands stretched — subdirs, sibling repos, web hosts, MCP servers, subagents — with a secret-read-then-egress pair flagged.
 - **Context surgery.** Edit any past prompt and fork: a copy-on-write branch is written beside the original (never touched), resumed in a new tab, with your edited prompt staged in the input — **never sent**.
 - **Audit panes.** Active-sessions modal (what Claude *thinks* is running vs. what is), an events stream, and an inspect view of the skills and memory layers each project actually sees.
@@ -51,7 +51,7 @@ eigenform status    # is a daemon running? (pid + version)
 eigenform stop      # shut the daemon down (ends the sessions it hosts)
 ```
 
-For a foreground daemon (dev, debugging, scripting) use the explicit `eigenform daemon` (`--port`, `--open`, `--cmd`, `--workspace`, `--dev`); there `Ctrl-C` stops it. Background logs go to `~/.eigenform/state/daemon.log`. The pty spawns your `$SHELL`; **`claude` is only ever launched from inside the app**, never by the daemon.
+For a foreground daemon (dev, debugging, scripting) use the explicit `eigenform daemon` (`--port`, `--open`, `--cmd`, `--workspace`, `--term`, `--log-file`, `--dev`); there `Ctrl-C` stops it. Background logs go to `~/.eigenform/state/daemon.log`. A plain terminal tab runs your `$SHELL`. **`claude` is launched only on request**: from the app, or by a local tool through `POST /api/pty`. The daemon never starts one on its own.
 
 ### Prerequisites
 
@@ -82,7 +82,7 @@ echo 'alias ef=eigenform' >> ~/.zshrc   # or ~/.bashrc
 source ~/.zshrc
 ```
 
-Then `ef` launches the app and `ef daemon`, `ef sessions`, `ef surgery …` all work.
+Then `ef` launches the app and every subcommand works through it: `ef daemon`, `ef sessions`, `ef surgery …`, `ef forest`, `ef inspect` (`ef --help` lists them all). `ef sessions show <uuid> --render json` prints the same transcript JSON the app reads.
 
 ## Develop
 
@@ -97,7 +97,7 @@ In a dev checkout the daemon serves the frontend from disk (`webterm/dist`), so 
 
 ## Status
 
-Early but running. The browser app — a full-fidelity terminal centerpiece with a session host, launcher, and transcript drawer — is implemented and self-contained via `just install`. The context-surgery, forest, render, skills, memory, and inspect crates are built and tested; the eigenform graph is still ahead. The original design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md), and spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
+Early but running. The daemon and browser app (terminal host, rail, dock, artifact pane, plan gate, deep links) ship as one self-contained binary. The surgery, forest, render, projects, skills, memory, inspect and codex crates are built and tested. Still ahead: the token economy, the semantic (rhizome) layer and the eigenform graph itself. The original design is at [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md); its preface says where the build has moved past it. Spike notes (load-bearing empirical claims) live in [`notes/spikes/`](notes/spikes/).
 
 ## What this is
 
@@ -117,6 +117,6 @@ The Aleph is the failure mode (all-seeing as simultaneity = paralysis). Coarse-g
 
 ## How to read this repo
 
-1. Start with [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md).
+1. Start with [`docs/plans/2026-06-02-eigen-foundation-design.md`](docs/plans/2026-06-02-eigen-foundation-design.md), preface first. The later `docs/plans/` files are dated design records for each feature as it was built.
 2. Then [`notes/spikes/`](notes/spikes/) — what we've verified empirically, what's pending, what would falsify the design.
 3. Then [`justfile`](justfile) — the canonical commands. Engine-touching targets are human-triggered.

@@ -164,7 +164,7 @@ fn surgery_fork_diff_flag_prints_diff_to_stderr() {
 }
 
 #[test]
-fn render_json_is_not_yet_supported() {
+fn render_json_prints_the_transcript_json_the_app_reads() {
     let dir = tempdir().unwrap();
     let src = dir.path().join(format!("{SID}.jsonl"));
     std::fs::write(&src, session_text()).unwrap();
@@ -176,10 +176,24 @@ fn render_json_is_not_yet_supported() {
         "--render",
         "json",
     ]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is json");
+    let exchange = &json["exchanges"][0];
+    assert_eq!(exchange["user"], "hello there", "got: {json}");
+    assert_eq!(exchange["assistant"], "hi back", "got: {json}");
+}
+
+#[test]
+fn render_json_is_refused_where_there_is_no_json_projection() {
+    let out = run(&["sessions", "list", "--all-projects", "--render", "json"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
-        stderr.contains("browser"),
-        "expected a 'not until browser' message, got: {stderr}"
+        stderr.contains("only `sessions show` and `inspect`"),
+        "expected the json-projection message, got: {stderr}"
     );
 }

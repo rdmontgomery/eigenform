@@ -2,10 +2,9 @@
  * drawer.ts — Transcript drawer: turn cards, per-type tool calls, SSE live
  * updates, auto-scroll, outliner-style expand/collapse.
  *
- * The drawer is an absolute overlay panel anchored to the right side of .term-host.
- * The pty is NOT resized when the drawer opens (the terminal stays primary; the
- * drawer overlays it). It is mounted/unmounted by the shell's GLOBAL top-right
- * toggle and follows the active tab.
+ * The drawer fills the region it is mounted into: the transcript half of the
+ * inspect dock (dock.ts), which docks beside the terminal and follows the active
+ * tab, or the forest preview float (forest-preview.ts, `live: false`).
  *
  * Card model (eigenform design, tool-call pass 2026-06-12):
  *   - Each turn group renders as a user card followed by an assistant card.
@@ -121,9 +120,9 @@ export interface DrawerActions {
 }
 
 /**
- * Mount the transcript drawer for `uuid` into `hostEl` (.term-host).
+ * Mount the transcript drawer for `uuid` into `hostEl`.
  *
- * @param hostEl   The .term-host element — the drawer overlays it absolutely.
+ * @param hostEl   The region to fill: the dock's transcript pane, or the preview float.
  * @param uuid     Session uuid for /api/session/:uuid/json + /api/watch/:uuid
  * @param onFork   Called with the new session uuid and the edited prompt text when a
  *                 fork succeeds. The daemon never writes `text` into the branch file

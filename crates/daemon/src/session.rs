@@ -51,33 +51,37 @@ pub(crate) fn session_json_cached(cfg: &Config, uuid: &str) -> Option<Arc<str>> 
     // NB: the cache key is the parent file only — a subagent still writing its own jsonl
     // while the parent is quiet won't invalidate this cache until the parent changes too.
     SESSION_CACHE
-        .get_or_render(&path, || {
-            let contents = std::fs::read_to_string(&path).unwrap_or_default();
-            let session =
-                eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
-
-            let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
-                eigenform_forest::enumerate_subagents(&path)
-                    .into_iter()
-                    .filter_map(|stub| {
-                        let contents = std::fs::read_to_string(&stub.path).ok()?;
-                        let sub_session = eigenform_surgery::Session::parse_str(&contents)
-                            .unwrap_or_else(|e| match e {});
-                        Some((
-                            stub.agent_id,
-                            eigenform_render::ResolvedSubagent {
-                                session: sub_session,
-                                agent_type: stub.agent_type,
-                                description: stub.description,
-                            },
-                        ))
-                    })
-                    .collect();
-
-            let json = eigenform_render::session_json_with_subagents(&session, &subagents);
-            attach_codex_workers(cfg, json)
-        })
+        .get_or_render(&path, || claude_session_json(cfg, &path))
         .ok()
+}
+
+/// The drawer JSON for the Claude session at `path`, uncached: the transcript with its
+/// async subagents and Codex workers attached. `eigenform sessions show --render json`
+/// prints this too, so the CLI and `/api/session/:uuid/json` give the same bytes.
+pub fn claude_session_json(cfg: &Config, path: &Path) -> String {
+    let contents = std::fs::read_to_string(path).unwrap_or_default();
+    let session = eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+
+    let subagents: std::collections::HashMap<String, eigenform_render::ResolvedSubagent> =
+        eigenform_forest::enumerate_subagents(path)
+            .into_iter()
+            .filter_map(|stub| {
+                let contents = std::fs::read_to_string(&stub.path).ok()?;
+                let sub_session =
+                    eigenform_surgery::Session::parse_str(&contents).unwrap_or_else(|e| match e {});
+                Some((
+                    stub.agent_id,
+                    eigenform_render::ResolvedSubagent {
+                        session: sub_session,
+                        agent_type: stub.agent_type,
+                        description: stub.description,
+                    },
+                ))
+            })
+            .collect();
+
+    let json = eigenform_render::session_json_with_subagents(&session, &subagents);
+    attach_codex_workers(cfg, json)
 }
 
 /// The line `codex-worker spawn` prints so a parent transcript names the thread it

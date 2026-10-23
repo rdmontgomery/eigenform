@@ -124,7 +124,8 @@ enum Cmd {
 
 #[derive(Subcommand, Debug)]
 enum SessionsAction {
-    /// render a session as a turn-tree (resolve by uuid, prefix, or path)
+    /// render a session as a turn-tree (resolve by uuid, prefix, or path); `--render json`
+    /// prints the transcript JSON the app reads from `GET /api/session/:uuid/json`
     Show {
         /// session uuid, unique prefix, or a path to the JSONL
         session: String,
@@ -470,8 +471,9 @@ fn require_text(render: RenderFormat) -> Result<()> {
     match render {
         RenderFormat::Text => Ok(()),
         RenderFormat::Json | RenderFormat::Html => anyhow::bail!(
-            "--render {:?} is not supported yet; the json/html schema is deferred until we \
-             render in the browser. Use --render text.",
+            "--render {:?} isn't available here: only `sessions show` and `inspect` have a \
+             json projection, and nothing renders html (the app draws from the json). Use \
+             --render text.",
             render
         ),
     }
@@ -523,8 +525,18 @@ fn resolve_session(session: &str) -> Result<PathBuf> {
 }
 
 fn sessions_show(session: String, render: RenderFormat) -> Result<()> {
-    require_text(render)?;
     let path = resolve_session(&session)?;
+    if let RenderFormat::Json = render {
+        // The same bytes `GET /api/session/:uuid/json` serves the app.
+        let cfg = eigenform_daemon::Config {
+            projects_dir: Some(projects_dir()?),
+            codex_home: eigenform_codex::codex_home().filter(|h| h.is_dir()),
+            ..Default::default()
+        };
+        println!("{}", eigenform_daemon::claude_session_json(&cfg, &path));
+        return Ok(());
+    }
+    require_text(render)?;
     let src = load_session(&path)?;
     let view = eigenform_render::session_view(&src);
     print!("{}", eigenform_render::render_text(&view));
@@ -984,7 +996,7 @@ fn skills_tree(cwd_override: Option<PathBuf>) -> Result<()> {
 
 /// `eigenform inspect` — the unified config inventory. Skills + memory across
 /// resolution layers, token-budgeted, projected through the render crate's View IR
-/// to text or json (html is deferred until the browser consumes it).
+/// to text or json (there is no html projection: the app renders the json).
 fn inspect_cmd(
     cwd_override: Option<PathBuf>,
     all_projects: bool,
@@ -1009,7 +1021,7 @@ fn inspect_cmd(
         }
         RenderFormat::Json => println!("{}", eigenform_render::inspect_json(&data)),
         RenderFormat::Html => anyhow::bail!(
-            "--render html for inspect is deferred until the browser consumes it; use text or json"
+            "there is no html projection (the app renders the json); use text or json"
         ),
     }
     Ok(())
