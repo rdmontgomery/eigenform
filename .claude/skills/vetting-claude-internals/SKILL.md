@@ -6,11 +6,11 @@ description: Use when `claude --version` differs from the version recorded on an
 # Vetting Claude Code internals
 
 eigenform's design rests on a small set of empirically verified claims about
-Claude Code's internals — the JSONL format, `--fork-session` semantics,
-the billing flip, cold-load behavior, the bundled-skill gap, the plugin
-layouts on disk. Each is recorded in `notes/spikes/<NN>-<topic>.md` with
-a `claude version:` stamp and a `Status:` (CONFIRMED / PENDING /
-REFUTED / INCONCLUSIVE).
+Claude Code's internals — the JSONL format, cold-load behavior, resume
+identity, the TUI's screen and selector behavior, the hook contracts, the
+bundled-skill gap, the plugin layouts on disk. Each is recorded in
+`notes/spikes/<NN>-<topic>.md` with a `claude version:` stamp and a
+`Status:` (CONFIRMED / PENDING / REFUTED / INCONCLUSIVE / RETIRED).
 
 When the running `claude --version` is newer than the stamp on any
 CONFIRMED spike, re-vet that spike before relying on the claim. When

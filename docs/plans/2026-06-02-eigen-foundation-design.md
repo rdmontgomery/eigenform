@@ -5,19 +5,19 @@
 
 ## Where the build stands (2026-10-23)
 
-This doc records the plan as written on 2026-06-02; the sections below are left as they were. This preface records where the build has moved past them.
+This doc records the plan as written on 2026-06-02. Hard rules 4 and 5 were amended in place on 2026-10-23 (originals kept beneath them); everything else below is left as it was. This preface records where the build has moved past it.
 
 **Names.** `eigen` became `eigenform` (binary, crates `eigenform-*`, `crates/eigenform-cli`); `web/` became `webterm/`. The crates also include `projects`, `skills`, `memory`, `inspect` and `codex`.
 
-**Build order.** Steps 2, 5, 6 and 7 are done, along with most of 3, 4 and 8. Step 3: the text and json projections shipped; html was never needed, since the app renders from the json. Step 4: `skills`/`memory tree|list` shipped plus a unified `inspect`; `audit` hasn't been built. Step 5: the forest grew a live Forest (liveness × turn state × activity) that drives the rail; `--keyword` and a persisted index haven't been built. Step 7: the browser app is a terminal host with a rail, a dock (transcript, reach map, events), an inspect overlay, an artifact pane and a plan gate. Step 8: edit-then-fork from the drawer goes browser → daemon → surgery (`fork_before`); rewind and inject are CLI-only. Step 1: spike 3 is confirmed; spikes 2 and 4 are still pending. Steps 9–12 haven't started.
+**Build order.** Steps 2, 5, 6 and 7 are done, along with most of 3, 4 and 8. Step 3: the text and json projections shipped; html was never needed, since the app renders from the json. Step 4: `skills`/`memory tree|list` shipped plus a unified `inspect`; `audit` hasn't been built. Step 5: the forest grew a live Forest (liveness × turn state × activity) that drives the rail; `--keyword` and a persisted index haven't been built. Step 7: the browser app is a terminal host with a rail, a dock (transcript, reach map, events), an inspect overlay, an artifact pane and a plan gate. Step 8: edit-then-fork from the drawer goes browser → daemon → surgery (`fork_before`); rewind and inject are CLI-only. Step 1: spike 3 is confirmed; spikes 2 and 4 were retired unrun on 2026-10-23. Steps 9–12 haven't started.
 
 **The hard rules, against the code:**
 
-1. *pty-only engine:* holds. Every claude the daemon starts is interactive in a pty, including `POST /api/pty`.
+1. *pty-only engine:* holds. Every claude the daemon starts is interactive in a pty, including `POST /api/pty`. Its billing rationale was never verified (spike 4, retired); the rule stands on its own, because the interactive pty is the product.
 2. *JSONL is the source of truth:* holds for content. Liveness and turn state also read `~/.claude/sessions/<pid>.json`, the vt100 grid (waiting on a selector), and per-spawn turn hooks (spike 18). All of those are about the live process, as the rule allows.
 3. *Copy-on-fork:* holds.
-4. *CLI is the browser's mirror:* **no longer true as written.** The shared contract is the json (`session_json`, `inspect_json`). `eigenform sessions show --render json` and `inspect --render json` print exactly what the app reads, but the app does its own presentation. Several views have no CLI counterpart: the reach map (`webterm/src/reach.ts`), the Links section, the claims modal, the artifact pane and the roster merge. Either restore the rule (port those models behind the json and give them commands) or rewrite it to say what's true.
-5. *Surgery is a thin layer over native fork:* **not built.** Nothing shells out to `--fork-session`. Every fork is written by surgery, and the tail fork waits on spike 2.
+4. *The json is the shared contract:* amended to match the code. The original rule held while the core was being built and kept the data honest; the browser outgrew it.
+5. *Surgery writes every fork:* amended. The `--fork-session` tail fork was never built, and spike 2 is retired.
 
 **Tests.** The triple-gated `live-claude` integration test, `just test-live` and `just spike-N` recipes were never built. Engine-touching checks live in the spike procedures instead, and they need explicit per-run authorization (`.claude/skills/vetting-claude-internals`). Surgery tests build their JSONL inline; there's no `fixtures/` dir. A bounded corpus test (`crates/surgery/tests/corpus.rs`) runs over real sessions on the machine by default (at most 64), and skips when there are none.
 
@@ -30,8 +30,10 @@ A control surface over Claude Code (and imported Claude Chat) that performs cont
 1. **pty-only engine.** The interactive `claude` CLI in a pty draws the team token allotment; `--print` and the SDK flip to usage-based billing. The engine must be interactive. `--print` and the SDK are reserved for off-path enrichment (embeddings, fingerprint passes) and are explicitly NOT routed through during normal operation.
 2. **JSONL is the source of truth.** Claude Code writes per-turn JSONL into `~/.claude/projects/<escaped-cwd>/<uuid>.jsonl` live as the session runs. The forest, context inspector, eigenform graph, and token economy all read from there, not from the terminal scrape. The pty layer is small and owns only what requires the live process: input, live token shimmer, permission-prompt interception.
 3. **Copy-on-fork.** Source JSONLs are never mutated in place. Forks are new files with new uuids dropped alongside the original; the derived index lives in a sibling directory under our control.
-4. **CLI is the browser's mirror.** Every renderable view has a CLI command that produces the same data. Bug reports are reproducible: the user pastes `eigen … --render text` output; the developer runs the same command and sees identical bytes. There is no browser-only code path. `crates/render/` is the single source of view logic, projected to `text|json|html`.
-5. **Surgery is a thin layer over native fork.** `claude --fork-session` exists as a CLI flag; we shell out to it for tail forks. Surgery only writes JSONL bytes for mid-tree forks, edit-then-fork, synthetic-turn injection, and rewind.
+4. **The json is the shared contract.** *(Amended 2026-10-23.)* Every view's data comes from a json projection (`crates/render`'s `session_json` and `inspect_json`) or a daemon route, and where a CLI command exists it prints the same bytes the app reads (`eigenform sessions show --render json`, `eigenform inspect --render json`). Presentation belongs to whoever draws: the CLI's text views and the browser render the same data independently, and browser-only views (reach map, Links, claims, artifact pane, roster) are fine. Bug reports stay reproducible because a view's inputs are always one `curl` away.
+   > Original (2026-06-02): **CLI is the browser's mirror.** Every renderable view has a CLI command that produces the same data. Bug reports are reproducible: the user pastes `eigen … --render text` output; the developer runs the same command and sees identical bytes. There is no browser-only code path. `crates/render/` is the single source of view logic, projected to `text|json|html`.
+5. **Surgery writes every fork.** *(Amended 2026-10-23.)* Forks, rewinds, edit-then-fork and synthetic-turn injection are all JSONL that `crates/surgery` writes; nothing shells out to `claude --fork-session`.
+   > Original (2026-06-02): **Surgery is a thin layer over native fork.** `claude --fork-session` exists as a CLI flag; we shell out to it for tail forks. Surgery only writes JSONL bytes for mid-tree forks, edit-then-fork, synthetic-turn injection, and rewind.
 
 ## Empirical anchors (verified)
 

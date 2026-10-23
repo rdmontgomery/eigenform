@@ -1,7 +1,7 @@
 # 04 — Billing flip on `--print` / SDK
 
 **Claim:** Interactive `claude` draws from the team token plan; `claude --print` (non-interactive) and SDK invocations flip to usage-based per-token billing.
-**Status:** PENDING
+**Status:** RETIRED 2026-10-23 (was PENDING, never run). The engine is interactive-only by design (foundation rule 1) and nothing routes through `--print` or the SDK, so no code depends on which way the billing goes. Out of the re-vet set.
 **claude version:** 2.1.161
 **Date:** —
 
