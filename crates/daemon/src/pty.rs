@@ -136,7 +136,11 @@ pub(crate) async fn pty_ws(
     let mut command = command;
     let hook_token = add_turn_hooks(&state, &mut command);
     ws.on_upgrade(move |socket| async move {
-        match spawn_registered(&state, command, hook_token) {
+        let spawned = match command.resumes.clone() {
+            Some(uuid) => resume_or_attach(&state, &uuid, command, hook_token),
+            None => spawn_registered(&state, command, hook_token),
+        };
+        match spawned {
             Ok(live) => attach_socket(socket, live).await,
             Err(_) => {
                 let _ = close_with_reason(socket, "failed to spawn pty").await;
@@ -250,6 +254,32 @@ fn spawn_registered(
         });
     }
 
+    Ok(live)
+}
+
+/// A `session=` resume of a session that a live pty is already running attaches to
+/// that pty instead of starting a second `claude --resume`: two processes appending to
+/// one transcript is the one outcome a resume must never have. Recorded as
+/// `resume-attached`.
+fn resume_or_attach(
+    state: &AppState,
+    uuid: &str,
+    command: PtyCommand,
+    hook_token: Option<String>,
+) -> anyhow::Result<Arc<host::LivePty>> {
+    // A fresh session's uuid can still be waiting on its watcher; backfill it first.
+    if let Some(sessions_dir) = &state.config.sessions_dir {
+        state.host.reconcile(sessions_dir);
+    }
+    let (live, attached) = state
+        .host
+        .live_or_spawn(uuid, || spawn_registered(state, command, hook_token))?;
+    if attached {
+        state.events.record(
+            "resume-attached",
+            serde_json::json!({ "ptyId": live.id.to_string(), "uuid": uuid }),
+        );
+    }
     Ok(live)
 }
 

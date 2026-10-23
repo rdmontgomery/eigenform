@@ -47,6 +47,7 @@ import type { PtyInfo, ForestItem } from "./types.ts";
 import {
   relativeRecency,
   reconcileTabs,
+  existingTab,
   reorderTabs,
   reconnectQuery,
   freshRestartQuery,
@@ -804,10 +805,20 @@ export function mountShell(appEl: HTMLElement): void {
     const tabId = desc.ptyId ?? desc.uuid ?? `ephemeral-${Date.now()}`;
     const background = opts.background === true && activeTabId !== null;
 
-    // Reuse existing tab if already open.
-    const existing = tabs.find((t) => t.id === tabId);
+    // Reuse existing tab if already open — matched by session too, since a resumed
+    // tab has re-keyed itself to its pty id.
+    const existing = existingTab(tabs, tabId, desc);
     if (existing) {
-      if (!background) activateTab(tabId);
+      // Its session exited: resume it in place rather than show the dead pty.
+      if (existing.dead && !existing.reconnecting && query.startsWith("?session=")) {
+        existing.handle.term.reset();
+        existing.ptyHandle?.dispose();
+        existing.dead = false;
+        existing.state = "idle";
+        existing.descriptor = { ...existing.descriptor, ...desc, ptyId: undefined };
+        connectEntry(existing, query);
+      }
+      if (!background) activateTab(existing.id);
       return existing;
     }
 
@@ -892,6 +903,14 @@ export function mountShell(appEl: HTMLElement): void {
         if (seedTiming) seedTiming.lastOutputAt = Date.now();
       },
       onPtyId(id) {
+        // Another tab already shows this pty (the daemon attaches a resume of a
+        // running session to its pty rather than start a second one): fold into it.
+        const twin = tabs.find((t) => t !== entry && t.id === id);
+        if (twin && entry.id !== id) {
+          closeTab(entry.id);
+          activateTab(twin.id);
+          return;
+        }
         // First frame after a (re)attach: the socket is live again.
         clearReconnect(entry);
         entry.dead = false;

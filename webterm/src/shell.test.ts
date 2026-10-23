@@ -7,6 +7,7 @@ import {
   relativeRecency,
   tabSubtitle,
   reconcileTabs,
+  existingTab,
   reorderTabs,
   reconnectQuery,
   freshRestartQuery,
@@ -223,6 +224,19 @@ test("inkFor: distinct keys spread across more than one hue", () => {
 //   {action: "resume", descriptor} — ptyId gone but uuid exists → session attach
 //   {action: "drop", descriptor}   — neither ptyId alive nor uuid known → drop
 // ---------------------------------------------------------------------------
+
+test("existingTab finds a resumed tab by its session after it re-keyed to the pty id", () => {
+  const tabs = [
+    { id: "1792777215298", descriptor: { ptyId: "1792777215298", uuid: "uuid-a", label: "a" } },
+    { id: "uuid-b", descriptor: { uuid: "uuid-b", label: "b" } },
+  ];
+  // The rail row still lacks the pty id: a second open of uuid-a must find the first tab.
+  assert.equal(existingTab(tabs, "uuid-a", { uuid: "uuid-a", label: "a" }), tabs[0]);
+  assert.equal(existingTab(tabs, "uuid-b", { uuid: "uuid-b", label: "b" }), tabs[1]);
+  assert.equal(existingTab(tabs, "uuid-c", { uuid: "uuid-c", label: "c" }), undefined);
+  // No uuid (a plain terminal): only the id identifies it.
+  assert.equal(existingTab(tabs, "9", { ptyId: "9", label: "t" }), undefined);
+});
 
 test("reconcileTabs: attach when ptyId still live", () => {
   const ptys: PtyInfo[] = [pty({ id: "10", uuid: "uuid-a" })];
