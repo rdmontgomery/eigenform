@@ -1,7 +1,9 @@
 //! eigenform-forest: discover and resolve Claude Code sessions across projects.
 //!
-//! v0.1 kills path-pasting: resolve a session by uuid (or unique prefix) machine-wide,
-//! and list recent sessions per project. See
+//! Resolve a session by uuid (or unique prefix) machine-wide, list recent sessions per
+//! project, find a session's async subagent transcripts, and build the live Forest: each
+//! session corroborated from disk as liveness × turn state × activity, the snapshot the
+//! app's rail and `eigenform forest` show. v0.1 design (resolve + list):
 //! `docs/plans/2026-06-03-forest-crate-design.md`.
 
 use std::collections::HashMap;

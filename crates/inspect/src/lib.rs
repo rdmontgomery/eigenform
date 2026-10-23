@@ -1,8 +1,8 @@
 //! eigenform-inspect: one unified config model with many faces.
 //!
-//! Skills and memory used to be independent crates, each rendered as a one-shot
-//! text dump — fragmented data, no token weights, no shared surface. This crate
-//! is the cohesive replacement: one model that walks the Claude Code resolution
+//! The skills and memory crates each scan one kind of config and render it as a
+//! one-shot text dump: fragmented data, no token weights, no shared surface. This
+//! crate builds on both: one model that walks the Claude Code resolution
 //! layers (Global → Plugin → Repo) and, for each, captures the skills and memory
 //! contributed there, every entry annotated with a byte size and a token
 //! estimate. The model is data only; projecting it to text / json / html lives in

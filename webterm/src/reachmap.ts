@@ -13,8 +13,8 @@
  * secret-read followed by an egress draws a dashed "exfil" arc between them with
  * a banner — the spider-web-reaching-out-of-the-org shape made literal.
  *
- * It is mounted as an absolute overlay on .term-host (the terminal is not
- * reflowed) and follows the active tab, mirroring the drawer's lifecycle.
+ * It fills the reach half of the inspect dock (dock.ts) and follows the active
+ * tab, mirroring the drawer's lifecycle.
  *
  * XSS safety: all labels/details are set via textContent, never innerHTML; the
  * only innerHTML is icons.ts's static path data.
@@ -168,7 +168,7 @@ export interface ReachOptions {
 }
 
 /**
- * Mount the reach-map overlay for `uuid` into `hostEl` (.term-host).
+ * Mount the reach map for `uuid` into `hostEl` (the dock's reach pane).
  * Caller must call .close() on tab-close or toggle-off.
  */
 export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOptions = {}): ReachHandle {

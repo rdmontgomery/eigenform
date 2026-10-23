@@ -3,6 +3,24 @@
 > Date: 2026-06-02. Status: validated, pre-implementation.
 > Scope: the architecture and v0.1 deliverables. Later sections of the build order are sketched but not specified in detail.
 
+## Where the build stands (2026-10-23)
+
+This doc records the plan as written on 2026-06-02; the sections below are left as they were. This preface records where the build has moved past them.
+
+**Names.** `eigen` became `eigenform` (binary, crates `eigenform-*`, `crates/eigenform-cli`); `web/` became `webterm/`. The crates also include `projects`, `skills`, `memory`, `inspect` and `codex`.
+
+**Build order.** Steps 2, 5, 6 and 7 are done, along with most of 3, 4 and 8. Step 3: the text and json projections shipped; html was never needed, since the app renders from the json. Step 4: `skills`/`memory tree|list` shipped plus a unified `inspect`; `audit` hasn't been built. Step 5: the forest grew a live Forest (liveness × turn state × activity) that drives the rail; `--keyword` and a persisted index haven't been built. Step 7: the browser app is a terminal host with a rail, a dock (transcript, reach map, events), an inspect overlay, an artifact pane and a plan gate. Step 8: edit-then-fork from the drawer goes browser → daemon → surgery (`fork_before`); rewind and inject are CLI-only. Step 1: spike 3 is confirmed; spikes 2 and 4 are still pending. Steps 9–12 haven't started.
+
+**The hard rules, against the code:**
+
+1. *pty-only engine:* holds. Every claude the daemon starts is interactive in a pty, including `POST /api/pty`.
+2. *JSONL is the source of truth:* holds for content. Liveness and turn state also read `~/.claude/sessions/<pid>.json`, the vt100 grid (waiting on a selector), and per-spawn turn hooks (spike 18). All of those are about the live process, as the rule allows.
+3. *Copy-on-fork:* holds.
+4. *CLI is the browser's mirror:* **no longer true as written.** The shared contract is the json (`session_json`, `inspect_json`). `eigenform sessions show --render json` and `inspect --render json` print exactly what the app reads, but the app does its own presentation. Several views have no CLI counterpart: the reach map (`webterm/src/reach.ts`), the Links section, the claims modal, the artifact pane and the roster merge. Either restore the rule (port those models behind the json and give them commands) or rewrite it to say what's true.
+5. *Surgery is a thin layer over native fork:* **not built.** Nothing shells out to `--fork-session`. Every fork is written by surgery, and the tail fork waits on spike 2.
+
+**Tests.** The triple-gated `live-claude` integration test, `just test-live` and `just spike-N` recipes were never built. Engine-touching checks live in the spike procedures instead, and they need explicit per-run authorization (`.claude/skills/vetting-claude-internals`). Surgery tests build their JSONL inline; there's no `fixtures/` dir. A bounded corpus test (`crates/surgery/tests/corpus.rs`) runs over real sessions on the machine by default (at most 64), and skips when there are none.
+
 ## Telos
 
 A control surface over Claude Code (and imported Claude Chat) that performs context surgery, manages a session forest, and surfaces the eigenforms across a body of work. Aufheben at two levels: per-session, fight the 70% problem by enabling resume-not-restart (fork *negates*, recent-work *preserves*); across the corpus, sublate threads into reframings via a hypergraph whose edges name shared fixed points (the *elevates*). Coarse-graining is the cure for the Aleph: every feature must serve resumption, forking, recall, or reframing.
