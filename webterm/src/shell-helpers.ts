@@ -270,6 +270,24 @@ export function reconcileTabs(
 }
 
 /**
+ * The open tab that opening `desc` (as tab `tabId`) would duplicate: one with that
+ * id, or one already showing the same session. A resume tab opens keyed by its
+ * uuid and re-keys itself to the pty id on the first frame, so after that only the
+ * uuid still finds it — and missing it means a second `claude --resume` of a
+ * session that is already running.
+ */
+export function existingTab<T extends { id: string; descriptor: TabDescriptor }>(
+  tabs: readonly T[],
+  tabId: string,
+  desc: TabDescriptor,
+): T | undefined {
+  return (
+    tabs.find((t) => t.id === tabId) ??
+    (desc.uuid ? tabs.find((t) => t.descriptor.uuid === desc.uuid) : undefined)
+  );
+}
+
+/**
  * Compute the new tab order after dragging `draggedId` next to `targetId`.
  * Pure array reorder — drives the tab strip's drag-and-drop handlers in
  * shell.ts, which resolve ids back to live TabEntry objects.

@@ -145,6 +145,64 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
+/// A query an app writes to its terminal and then waits on the reply to. An attached
+/// viewer's xterm answers these; with none attached the pump answers them itself (see
+/// [`TermModel::feed_answering`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermQuery {
+    /// DA1, `CSI c` / `CSI 0 c`. claude's querier settles every probe it queued
+    /// (XTVERSION, `CSI ? u`, colours) only when a DA1 reply arrives, and has no
+    /// timeout of its own.
+    DeviceAttributes,
+    /// DSR 5, `CSI 5 n`: "are you OK?"
+    Status,
+    /// DSR 6, `CSI 6 n` (or the DEC form `CSI ? 6 n`): where is the cursor?
+    CursorPosition { dec: bool },
+}
+
+/// Each query's exact bytes. Like [`ModeTracker`], a literal scan: apps emit these
+/// unparameterised forms, and none is a substring of ordinary output.
+const QUERIES: [(&[u8], TermQuery); 5] = [
+    (b"\x1b[c", TermQuery::DeviceAttributes),
+    (b"\x1b[0c", TermQuery::DeviceAttributes),
+    (b"\x1b[5n", TermQuery::Status),
+    (b"\x1b[6n", TermQuery::CursorPosition { dec: false }),
+    (b"\x1b[?6n", TermQuery::CursorPosition { dec: true }),
+];
+
+/// Finds [`TermQuery`]s in the pty stream, carrying a short tail across reads so a
+/// query split over a chunk boundary is still seen, and seen once.
+#[derive(Default)]
+struct QueryScanner {
+    carry: Vec<u8>,
+}
+
+impl QueryScanner {
+    /// The queries that end in `bytes`, as (offset just past the query in `bytes`,
+    /// query), in stream order.
+    fn scan(&mut self, bytes: &[u8]) -> Vec<(usize, TermQuery)> {
+        let carried = self.carry.len();
+        let mut buf = std::mem::take(&mut self.carry);
+        buf.extend_from_slice(bytes);
+        let mut found = Vec::new();
+        for (needle, query) in QUERIES {
+            for start in 0..buf.len().saturating_sub(needle.len() - 1) {
+                let end = start + needle.len();
+                // A query wholly inside the carry was reported with the last chunk.
+                if end > carried && &buf[start..end] == needle {
+                    found.push((end - carried, query));
+                }
+            }
+        }
+        found.sort_by_key(|&(end, _)| end);
+        // One byte short of the longest query: enough to complete any split one,
+        // never enough to hold a whole one twice.
+        let keep = buf.len().min(4);
+        self.carry = buf[buf.len() - keep..].to_vec();
+        found
+    }
+}
+
 /// A vt100-backed single-viewport terminal model.
 ///
 /// Feed it raw pty output; `snapshot()` returns escape-sequence bytes that
@@ -154,6 +212,7 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 pub struct TermModel {
     parser: vt100::Parser,
     modes: ModeTracker,
+    queries: QueryScanner,
 }
 
 impl TermModel {
@@ -164,6 +223,7 @@ impl TermModel {
         Self {
             parser: vt100::Parser::new(rows, cols, 0),
             modes: ModeTracker::default(),
+            queries: QueryScanner::default(),
         }
     }
 
@@ -171,6 +231,34 @@ impl TermModel {
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
         self.modes.scan(bytes);
+    }
+
+    /// Process a chunk and return what a terminal would send back for the queries in
+    /// it, in order. The model is fed up to each query before answering it, so a
+    /// cursor report gives the cursor where the app asked, not where the chunk ended.
+    pub fn feed_answering(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut replies = Vec::new();
+        let mut fed = 0;
+        for (end, query) in self.queries.scan(bytes) {
+            self.feed(&bytes[fed..end]);
+            fed = end;
+            replies.extend_from_slice(&self.answer(query));
+        }
+        self.feed(&bytes[fed..]);
+        replies
+    }
+
+    /// The reply xterm.js gives to `query` in the model's current state.
+    fn answer(&self, query: TermQuery) -> Vec<u8> {
+        match query {
+            TermQuery::DeviceAttributes => b"\x1b[?1;2c".to_vec(),
+            TermQuery::Status => b"\x1b[0n".to_vec(),
+            TermQuery::CursorPosition { dec } => {
+                let (row, col) = self.parser.screen().cursor_position();
+                let mark = if dec { "?" } else { "" };
+                format!("\x1b[{mark}{};{}R", row + 1, col + 1).into_bytes()
+            }
+        }
     }
 
     /// Resize the viewport (e.g. on client window resize).
@@ -234,6 +322,10 @@ pub struct SessionHost {
     /// Observability bus, when wired by `app()`. `None` in the registry-semantics unit
     /// tests (which never build a bus); event recording is skipped in that case.
     events: Option<Arc<crate::events::EventBus>>,
+    /// Held across [`SessionHost::live_or_spawn`]'s look-then-spawn, so two resumes of
+    /// one session racing in (a deep link and a replayed focus, two clicks) can't both
+    /// miss the other and start a second process on the same transcript.
+    resume_gate: Mutex<()>,
 }
 
 impl Default for SessionHost {
@@ -245,6 +337,7 @@ impl Default for SessionHost {
             inner: Mutex::default(),
             next_id: AtomicU64::new(now_ms),
             events: None,
+            resume_gate: Mutex::default(),
         }
     }
 }
@@ -338,11 +431,26 @@ impl SessionHost {
                     // snapshots between these two steps cannot miss (or double) this chunk.
                     // The same `chunk` is fed and fanned out, so the two are visibly equal.
                     let mut shared = live.shared.lock().unwrap_or_else(PoisonError::into_inner);
-                    shared.model.feed(chunk);
+                    let replies = shared.model.feed_answering(chunk);
                     shared
                         .subscribers
                         .retain(|tx| tx.send(Outbound::Binary(chunk.to_vec())).is_ok());
+                    // Decided in the same critical section as the fan-out: whoever got
+                    // this chunk answers its queries, so a reply is never sent twice or
+                    // not at all.
+                    let headless = shared.subscribers.is_empty();
                     drop(shared); // release before taking meta — never hold two locks here.
+
+                    // No viewer's terminal saw these queries: answer as the terminal, as
+                    // tmux does for a detached pane, or a headless claude (`POST
+                    // /api/pty`) waits on them until a browser attaches.
+                    if headless && !replies.is_empty() {
+                        let _ = live
+                            .pty
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .write_input(&replies);
+                    }
 
                     live.meta
                         .lock()
@@ -372,6 +480,32 @@ impl SessionHost {
     /// The live pty for `id`, if still registered.
     pub fn get(&self, id: PtyId) -> Option<Arc<LivePty>> {
         self.inner.lock().unwrap().get(&id).cloned()
+    }
+
+    /// The running (not exited) pty bound to session `uuid`, if any.
+    pub fn running_session(&self, uuid: &str) -> Option<Arc<LivePty>> {
+        self.list_unswept()
+            .into_iter()
+            .find(|live| live.exited_at().is_none() && live.uuid().as_deref() == Some(uuid))
+    }
+
+    /// The pty already running session `uuid` (`true`: nothing spawned), else the one
+    /// `spawn` starts (`false`). `spawn` must bind the uuid before it returns, as
+    /// `pty::spawn_registered` does for a resume, so the next caller through the gate
+    /// finds it.
+    pub fn live_or_spawn(
+        &self,
+        uuid: &str,
+        spawn: impl FnOnce() -> anyhow::Result<Arc<LivePty>>,
+    ) -> anyhow::Result<(Arc<LivePty>, bool)> {
+        let _gate = self
+            .resume_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(live) = self.running_session(uuid) {
+            return Ok((live, true));
+        }
+        spawn().map(|live| (live, false))
     }
 
     /// All currently-registered live ptys (order unspecified), after a GC sweep.
@@ -1278,6 +1412,83 @@ mod tests {
         let mut t = ModeTracker::default();
         t.scan(b"\x1b[<u stuff \x1b[>1u");
         assert!(String::from_utf8_lossy(&t.replay()).contains("\x1b[>1u"));
+    }
+
+    #[test]
+    fn queries_are_answered_with_the_cursor_where_they_were_asked() {
+        let mut m = TermModel::new(24, 80);
+        let replies =
+            m.feed_answering(b"\x1b[3;5Hab\x1b[6n\r\nmore\x1b[?6n\x1b[5n\x1b[>0q\x1b[?u\x1b[c");
+        assert_eq!(
+            String::from_utf8_lossy(&replies),
+            "\x1b[3;7R\x1b[?4;5R\x1b[0n\x1b[?1;2c",
+            "CPR at each query's own position, then status and DA1; XTVERSION and CSI ? u get no reply"
+        );
+        assert!(
+            m.rows_text()[3].starts_with("more"),
+            "the model still saw every byte"
+        );
+    }
+
+    #[test]
+    fn a_query_split_across_reads_is_answered_once() {
+        let mut m = TermModel::new(24, 80);
+        assert!(m.feed_answering(b"text\x1b[").is_empty());
+        assert_eq!(m.feed_answering(b"c"), b"\x1b[?1;2c");
+        // The carry still holds the DA1 just answered; it must not count again.
+        assert!(m.feed_answering(b"x").is_empty());
+        for b in b"\x1b[0c" {
+            let replies = m.feed_answering(&[*b]);
+            assert_eq!(replies.is_empty(), *b != b'c');
+        }
+    }
+
+    #[test]
+    fn a_detached_pty_answers_its_own_queries() {
+        // No subscriber: the pump answers DA1 itself, so the child reads a reply.
+        let host = SessionHost::default();
+        let live = host
+            .spawn(
+                "sh",
+                &[
+                    "-c",
+                    "stty raw -echo; printf '\\033[c'; dd bs=1 count=7 2>/dev/null | od -An -c",
+                ],
+                None,
+                (80, 24),
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while live.exited_at().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let screen = live.shared.lock().unwrap().model.rows_text().join("\n");
+        assert!(
+            screen.contains("033   [   ?   1   ;   2   c"),
+            "child read the reply: {screen:?}"
+        );
+    }
+
+    #[test]
+    fn live_or_spawn_attaches_to_the_running_session() {
+        let host = SessionHost::default();
+        let spawn = || {
+            let live = host.spawn("sh", &["-c", "sleep 30"], None, (80, 24))?;
+            live.set_uuid("abc-123".into());
+            Ok(live)
+        };
+        let (first, attached) = host.live_or_spawn("abc-123", spawn).unwrap();
+        assert!(!attached);
+        let (second, attached) = host
+            .live_or_spawn("abc-123", || panic!("must not spawn a second resume"))
+            .unwrap();
+        assert!(attached);
+        assert_eq!(second.id, first.id);
+        host.kill(first.id).ok();
+        // Gone: the next resume spawns again.
+        let (third, attached) = host.live_or_spawn("abc-123", spawn).unwrap();
+        assert!(!attached);
+        host.kill(third.id).ok();
     }
 
     #[tokio::test]
