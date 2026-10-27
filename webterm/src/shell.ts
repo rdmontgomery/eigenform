@@ -71,7 +71,7 @@ import { mountDock } from "./dock.ts";
 import { mountArtifactDock } from "./artifact-dock.ts";
 import type { PlanReview } from "./artifacts.ts";
 import { stagedPayload } from "./annotate.ts";
-import { dotClasses, dotTitle, inkVar } from "./status.ts";
+import { cacheClock, dotClasses, dotTitle, inkVar } from "./status.ts";
 import { icon } from "./icons.ts";
 import { openInspect } from "./inspect.ts";
 import { openClaims } from "./claims.ts";
@@ -740,7 +740,23 @@ export function mountShell(appEl: HTMLElement): void {
         termIco.append(icon("terminal", 11, 2));
         tab.append(termIco);
       }
-      tab.append(textEl, snooze, close);
+      tab.append(textEl);
+      // Prompt-cache clock: time since the session's last API response, so a tab
+      // nearing its TTL reads before the next prompt pays to re-write the context.
+      // Refreshed by the roster poll's re-render (every 3s), so it needs no timer.
+      const item = t.descriptor.uuid && !t.dead
+        ? lastForest?.find((f) => f.uuid === t.descriptor.uuid)
+        : undefined;
+      const clock = item
+        ? cacheClock(item.cacheAt, item.cacheTtl, item.state === "working", Date.now())
+        : null;
+      if (clock) {
+        const clockEl = el("span", `tab-cache tab-cache--${clock.level}`);
+        clockEl.textContent = clock.text;
+        clockEl.title = clock.title;
+        tab.append(clockEl);
+      }
+      tab.append(snooze, close);
       tab.addEventListener("click", () => activateTab(t.id));
       tabStrip.append(tab);
     }

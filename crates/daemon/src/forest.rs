@@ -54,6 +54,8 @@ fn forest_rows(cfg: &Config) -> Vec<serde_json::Value> {
                         "spark": s.spark,
                         "headless": s.headless,
                         "pid": s.pid,
+                        "cacheAt": s.cache.map(|c| c.at.to_rfc3339()),
+                        "cacheTtl": s.cache.and_then(|c| c.ttl_secs),
                     })
                 }),
         );

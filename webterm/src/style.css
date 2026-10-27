@@ -800,6 +800,19 @@ button { font: inherit; color: inherit; }
 }
 .tab--active .tab-label { font-weight: 600; }
 
+/* Prompt-cache clock: minutes since the last API response, warming to amber at
+   75% of the TTL and red at 90%; muted once the cache has gone cold. */
+.tab-cache {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tx-3);
+}
+.tab-cache--warn   { color: var(--st-running); }
+.tab-cache--urgent { color: var(--st-error); font-weight: 600; }
+.tab-cache--cold   { opacity: 0.55; }
+
 .tab-snooze,
 .tab-close {
   background: none;
