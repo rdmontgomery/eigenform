@@ -56,6 +56,12 @@ export interface ForestItem {
   pid?: number | null;
   /** Present ("codex") for an OpenAI Codex CLI thread; absent for Claude sessions. */
   engine?: "codex";
+  /** Live Claude sessions only: the last real assistant row's timestamp — when the
+   *  prompt cache was last touched. Null when there is no response yet. */
+  cacheAt?: string | null;
+  /** The TTL (seconds) Claude Code cached at, from the transcript's usage; null
+   *  when the tail didn't say. */
+  cacheTtl?: number | null;
   /** Codex only: last model the thread ran on. */
   model?: string | null;
   /** Codex only: the thread it was forked from / spawned by, when Codex recorded one. */

@@ -54,3 +54,54 @@ export function dotTitle(activity: Activity, liveness: Liveness): string {
 export function inkVar(cwd: string | undefined, fallback: string): string {
   return `var(--ink-${inkFor(cwd ?? fallback)})`;
 }
+
+/** A tab's prompt-cache clock, ready to render. */
+export interface CacheClock {
+  /** Minutes since the last API response ("<1m", "47m"), or "cold" past the TTL. */
+  text: string;
+  /** warm < 75% of the TTL ≤ warn < 90% ≤ urgent < 100% ≤ cold. */
+  level: "warm" | "warn" | "urgent" | "cold";
+  title: string;
+}
+
+const DEFAULT_TTL_SECS = 3600;
+
+function ttlLabel(secs: number): string {
+  return secs % 3600 === 0 ? `${secs / 3600}h` : `${Math.round(secs / 60)}m`;
+}
+
+/**
+ * The prompt-cache clock for a live session: time since its last API response
+ * (`cacheAt`, the last real assistant row), graded against the TTL Claude Code
+ * cached at (`ttlSecs`; 1h assumed when the transcript didn't say). Every API
+ * call refreshes the cache, so the clock only runs between turns: null while a
+ * turn is in flight, or when there is no response yet.
+ */
+export function cacheClock(
+  cacheAt: string | null | undefined,
+  ttlSecs: number | null | undefined,
+  working: boolean,
+  now: number,
+): CacheClock | null {
+  if (working || !cacheAt) return null;
+  const at = Date.parse(cacheAt);
+  if (Number.isNaN(at)) return null;
+  const ttl = ttlSecs ?? DEFAULT_TTL_SECS;
+  const ttlText = ttlLabel(ttl) + (ttlSecs ? "" : " (assumed)");
+  const elapsed = Math.max(0, (now - at) / 1000);
+  const frac = elapsed / ttl;
+  const mins = Math.floor(elapsed / 60);
+  if (frac >= 1) {
+    return {
+      text: "cold",
+      level: "cold",
+      title: `Prompt cache expired (${ttlText} TTL): the next prompt re-writes the whole context`,
+    };
+  }
+  const left = Math.ceil((ttl - elapsed) / 60);
+  return {
+    text: mins < 1 ? "<1m" : `${mins}m`,
+    level: frac >= 0.9 ? "urgent" : frac >= 0.75 ? "warn" : "warm",
+    title: `Prompt cache: last API call ${mins < 1 ? "under a minute" : `${mins}m`} ago · ${ttlText} TTL · expires in ${left}m`,
+  };
+}
