@@ -288,6 +288,19 @@ pub struct LiveSession {
     pub headless: bool,
     /// The live process's pid, from its session claim. None for dead sessions.
     pub pid: Option<u32>,
+    /// When the prompt cache was last touched, for live sessions only — see [`CacheMark`].
+    pub cache: Option<CacheMark>,
+}
+
+/// The session's prompt-cache clock. The last real assistant row is the last API
+/// response, so `at` is when the cache was last read or written (within the length of
+/// that response's generation); `ttl_secs` is the TTL Claude Code wrote at, from the
+/// latest `usage.cache_creation` split (3600 for `ephemeral_1h`, 300 for `ephemeral_5m`),
+/// None when no row in the tail window created cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheMark {
+    pub at: DateTime<Utc>,
+    pub ttl_secs: Option<u32>,
 }
 
 /// Is a process alive? `/proc/<pid>` on Linux/WSL (this project's target).
@@ -575,14 +588,13 @@ pub fn live_forest_with(
         seen.insert(r.uuid.clone());
         let claim = live.get(&r.uuid);
         let is_live = claim.is_some();
-        let state = if is_live {
-            if session_complete(&r.path) {
-                SessionState::Ready
-            } else {
-                SessionState::Working
-            }
-        } else {
-            SessionState::Recent
+        // One tail read serves both the turn state and the cache clock; dead sessions
+        // need neither.
+        let tail = is_live.then(|| peek_tail(&r.path));
+        let state = match &tail {
+            Some(t) if t.complete => SessionState::Ready,
+            Some(_) => SessionState::Working,
+            None => SessionState::Recent,
         };
         out.push(LiveSession {
             uuid: r.uuid.clone(),
@@ -595,6 +607,7 @@ pub fn live_forest_with(
             headless: claim_headless(claim)
                 || session_entrypoint(&r.path).is_some_and(|e| is_headless(&e)),
             pid: claim.map(|c| c.pid),
+            cache: tail.as_ref().and_then(Tail::cache_mark),
         });
     }
     // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
@@ -612,6 +625,7 @@ pub fn live_forest_with(
             spark: Vec::new(),
             headless: claim_headless(Some(c)),
             pid: Some(c.pid),
+            cache: None,
         });
     }
 
@@ -637,17 +651,37 @@ struct Tail {
     /// no close means a turn is in flight (working). No user row in the window → assume
     /// idle/ready. Trailing bridge/title/mode metadata rows are ignored.
     complete: bool,
+    /// Timestamp of the last real (non-synthetic) assistant row.
+    last_assistant: Option<String>,
+    /// Cache TTL of the latest assistant row that created cache.
+    cache_ttl: Option<u32>,
+}
+
+impl Tail {
+    fn empty() -> Tail {
+        Tail {
+            last_timestamp: None,
+            title: None,
+            complete: true,
+            last_assistant: None,
+            cache_ttl: None,
+        }
+    }
+
+    fn cache_mark(&self) -> Option<CacheMark> {
+        let at = self.last_assistant.as_deref().and_then(parse_ts)?;
+        Some(CacheMark {
+            at,
+            ttl_secs: self.cache_ttl,
+        })
+    }
 }
 
 /// Read the tail of a session file (byte-stream, escalating) for the last timestamped
 /// row and a title. Returns empties if the file is unreadable.
 fn peek_tail(path: &Path) -> Tail {
     let Ok(mut file) = fs::File::open(path) else {
-        return Tail {
-            last_timestamp: None,
-            title: None,
-            complete: true,
-        };
+        return Tail::empty();
     };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
 
@@ -656,11 +690,7 @@ fn peek_tail(path: &Path) -> Tail {
         let start = len.saturating_sub(window);
         let mut buf = Vec::new();
         if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut buf).is_err() {
-            return Tail {
-                last_timestamp: None,
-                title: None,
-                complete: true,
-            };
+            return Tail::empty();
         }
         let text = String::from_utf8_lossy(&buf);
         let mut lines: Vec<&str> = text.split('\n').filter(|l| !l.is_empty()).collect();
@@ -686,6 +716,8 @@ fn scan_tail(lines: &[&str]) -> Tail {
     let mut last_prompt = None;
     let mut last_user = None;
     let mut last_close = None;
+    let mut last_assistant = None;
+    let mut cache_ttl = None;
     for (i, line) in lines.iter().enumerate() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -705,6 +737,27 @@ fn scan_tail(lines: &[&str]) -> Tail {
                 }
             }
             Some("user") => last_user = Some(i),
+            // A `<synthetic>` row (an API error Claude Code wrote locally) never reached
+            // the cache, so it doesn't move the clock.
+            Some("assistant")
+                if value.pointer("/message/model").and_then(|m| m.as_str())
+                    != Some("<synthetic>") =>
+            {
+                if let Some(ts) = value.get("timestamp").and_then(|t| t.as_str()) {
+                    last_assistant = Some(ts.to_string());
+                }
+                let created = |k: &str| {
+                    value
+                        .pointer(&format!("/message/usage/cache_creation/{k}"))
+                        .and_then(|n| n.as_u64())
+                        .unwrap_or(0)
+                };
+                if created("ephemeral_1h_input_tokens") > 0 {
+                    cache_ttl = Some(3600);
+                } else if created("ephemeral_5m_input_tokens") > 0 {
+                    cache_ttl = Some(300);
+                }
+            }
             Some("system")
                 if value.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") =>
             {
@@ -722,6 +775,8 @@ fn scan_tail(lines: &[&str]) -> Tail {
         last_timestamp,
         title: ai_title.or(last_prompt),
         complete,
+        last_assistant,
+        cache_ttl,
     }
 }
 

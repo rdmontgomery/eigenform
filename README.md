@@ -12,7 +12,7 @@ The binary is `eigenform`; alias it to taste (`alias ef=eigenform`). Dual-licens
 
 One local daemon, one browser tab, every Claude Code session you have.
 
-- **A real terminal, tabbed.** Full-fidelity xterm sessions hosted by the daemon — they survive a closed browser, a reload, a dropped socket. Tabs drag, restore by session uuid, and reconnect on their own.
+- **A real terminal, tabbed.** Full-fidelity xterm sessions hosted by the daemon — they survive a closed browser, a reload, a dropped socket. Tabs drag, restore by session uuid, and reconnect on their own. Each tab carries a prompt-cache clock: minutes since the session's last API response, amber at 75% of the TTL Claude Code cached at (read from the transcript, 1h assumed when it doesn't say), red at 90%, `cold` once expired. It stops while a turn is running, since every API call refreshes the cache.
 - **The rail.** Every session on disk, live or not, ranked by state and recency, with shape-coded status dots (working / ready / external / headless), search, inline rename, a fuzzy launcher for new sessions, and a Links section that collects the URLs mentioned in chat.
 - **Transcript + reach map.** A docked drawer renders the session semantically — turns, tool calls, mini-diffs — alongside a reach map of how far the agent's hands stretched — subdirs, sibling repos, web hosts, MCP servers, subagents — with a secret-read-then-egress pair flagged.
 - **Context surgery.** Edit any past prompt and fork: a copy-on-write branch is written beside the original (never touched), resumed in a new tab, with your edited prompt staged in the input — **never sent**.

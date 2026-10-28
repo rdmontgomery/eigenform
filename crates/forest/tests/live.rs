@@ -166,3 +166,34 @@ fn headless_sessions_are_flagged_from_the_transcript_entrypoint() {
     assert!(!by("eee").headless);
     assert!(!by("aaa").headless, "no entrypoint recorded → interactive");
 }
+
+#[test]
+fn cache_clock_is_the_last_real_assistant_row_with_its_ttl() {
+    let (proj, sess, state) = fixture();
+    let pdir = proj.path().join("-home-me-p");
+    // ddd: a 1h-TTL response, then a later pure cache read (no creation: the TTL stays),
+    // then a synthetic API-error row that never reached the cache.
+    let rows = [
+        r#"{"type":"user","timestamp":"2026-06-06T09:00:00Z","sessionId":"ddd","cwd":"/home/me/p","message":{"role":"user"}}"#,
+        r#"{"type":"assistant","timestamp":"2026-06-06T09:00:05Z","message":{"model":"claude-x","usage":{"output_tokens":1,"cache_creation":{"ephemeral_1h_input_tokens":900,"ephemeral_5m_input_tokens":0}}}}"#,
+        r#"{"type":"assistant","timestamp":"2026-06-06T09:00:09Z","message":{"model":"claude-x","usage":{"output_tokens":1,"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0}}}}"#,
+        r#"{"type":"assistant","timestamp":"2026-06-06T09:30:00Z","message":{"model":"<synthetic>","usage":{"output_tokens":0}}}"#,
+        r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-06-06T09:30:01Z"}"#,
+    ];
+    std::fs::write(pdir.join("ddd.jsonl"), rows.join("\n") + "\n").unwrap();
+    std::fs::write(sess.path().join("44.json"), sfile(44, "ddd")).unwrap();
+
+    let alive = |pid: u32| pid == 42 || pid == 44;
+    let got = live_forest_with(proj.path(), sess.path(), state.path(), now(), alive);
+    let by = |u: &str| got.iter().find(|s| s.uuid == u).unwrap();
+
+    let ddd = by("ddd")
+        .cache
+        .expect("live session with assistant rows has a clock");
+    assert_eq!(ddd.at.to_rfc3339(), "2026-06-06T09:00:09+00:00");
+    assert_eq!(ddd.ttl_secs, Some(3600));
+    // aaa's assistant row reports no cache_creation: a clock, but no known TTL.
+    let aaa = by("aaa").cache.expect("aaa is live");
+    assert_eq!(aaa.ttl_secs, None);
+    assert_eq!(by("ccc").cache, None, "dead sessions carry no clock");
+}
