@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  adoptPtyOverrides,
   buildRoster,
   deriveLabel,
   ptyActivity,
@@ -422,4 +423,35 @@ test("buildRoster: a Codex forest row carries its engine tag", () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.engine, "codex");
   assert.equal(rows[0]!.headless, true);
+});
+
+// ---------------------------------------------------------------------------
+// adoptPtyOverrides — a ptyId rename follows the session onto its uuid
+// ---------------------------------------------------------------------------
+
+test("adoptPtyOverrides moves a ptyId name onto the uuid once it is known", () => {
+  const overrides: Record<string, string> = { "99": "Early Name" };
+  // Renamed before the uuid landed...
+  assert.equal(adoptPtyOverrides(buildRoster([pty({ id: "99" })], [], overrides), overrides), false);
+  assert.deepEqual(overrides, { "99": "Early Name" });
+  // ...then the watcher adopts it.
+  const rows = buildRoster([pty({ id: "99", uuid: "u1" })], [forest({ uuid: "u1", title: "AI" })], overrides);
+  assert.equal(rows[0]!.label, "Early Name");
+  assert.equal(adoptPtyOverrides(rows, overrides), true);
+  assert.deepEqual(overrides, { u1: "Early Name" });
+  // The pty exits and the session is a plain forest row: the name survives.
+  assert.equal(buildRoster([], [forest({ uuid: "u1", title: "AI" })], overrides)[0]!.label, "Early Name");
+});
+
+test("adoptPtyOverrides keeps an existing uuid name and drops the stale ptyId one", () => {
+  const overrides: Record<string, string> = { u1: "Newer", "99": "Older" };
+  const rows = buildRoster([pty({ id: "99", uuid: "u1" })], [], overrides);
+  assert.equal(adoptPtyOverrides(rows, overrides), true);
+  assert.deepEqual(overrides, { u1: "Newer" });
+});
+
+test("adoptPtyOverrides leaves uuid-less ptys (terminal tabs) alone", () => {
+  const overrides: Record<string, string> = { "7": "shell" };
+  assert.equal(adoptPtyOverrides(buildRoster([pty({ id: "7" })], [], overrides), overrides), false);
+  assert.deepEqual(overrides, { "7": "shell" });
 });

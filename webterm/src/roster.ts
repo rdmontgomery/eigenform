@@ -25,8 +25,8 @@
  *   callers that only know the pty fd number before the uuid is resolved.
  * - When both keys are present in `overrides`, uuid wins.
  * - Rows without uuid (pty spawned but not yet reconciled) can accept a ptyId
- *   override, but this override is NOT durable — if the daemon restarts and
- *   reassigns ids, the override key will be stale. Document this to callers.
+ *   override. It only lives as long as the pty, so once the row learns its
+ *   uuid, `adoptPtyOverrides` moves the name onto the uuid key.
  *
  * DUPLICATE UUID (fork weirdness / --resume twice):
  * - If two registry ptys claim the same uuid, the one with the higher
@@ -407,4 +407,30 @@ export function buildRoster(
   );
 
   return [...liveRows, ...diskRows];
+}
+
+/**
+ * Move ptyId-keyed overrides onto the session uuid once a row knows both.
+ *
+ * A fresh session renamed before its transcript exists has no uuid yet, so the
+ * rail keys the name by ptyId. That key dies with the pty: after it exits (or
+ * the daemon restarts) the session is a forest row, looked up by uuid only, and
+ * the name would revert to the AI title. Mutates `overrides`; returns true when
+ * anything changed so the caller can persist.
+ *
+ * An existing uuid override wins and the ptyId entry is just dropped: a ptyId
+ * rename can only predate the uuid, so the uuid one is the newer name.
+ */
+export function adoptPtyOverrides(
+  rows: readonly RosterRow[],
+  overrides: Record<string, string>,
+): boolean {
+  let changed = false;
+  for (const row of rows) {
+    if (!row.uuid || !row.ptyId || !(row.ptyId in overrides)) continue;
+    if (!(row.uuid in overrides)) overrides[row.uuid] = overrides[row.ptyId]!;
+    delete overrides[row.ptyId];
+    changed = true;
+  }
+  return changed;
 }
