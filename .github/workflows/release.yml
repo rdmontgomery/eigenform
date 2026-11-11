@@ -54,11 +54,15 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
+        # Both macOS targets build on the arm64 runner (x86_64 cross-compiles). Not
+        # pinned to a version: a pinned image gets retired out from under us (macos-14
+        # was, Nov 2026: jobs cancelled at start, no release cut). The toolchain is
+        # installed fresh each run, so image drift doesn't change what we build.
         include:
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-latest
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-latest
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
