@@ -7,7 +7,7 @@ import { el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
-import type { RosterRow } from "./roster.ts";
+import { adoptPtyOverrides, type RosterRow } from "./roster.ts";
 import { ageGroup, relativeRecency, type AgeGroup } from "./shell-helpers.ts";
 import { dotClasses, dotTitle, inkVar, livenessTag } from "./status.ts";
 
@@ -73,9 +73,58 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     overrides = {};
   }
 
-  function saveOverride(key: string, value: string) {
-    overrides[key] = value;
+  function saveOverride(key: string, value: string | null) {
+    if (value === null) delete overrides[key];
+    else overrides[key] = value;
     localStorage.setItem(LS_OVERRIDES, JSON.stringify(overrides));
+  }
+
+  /** Swap a row's label for an inline editor. Enter or blur commits; Esc
+   *  cancels. An empty name drops the override (back to the automatic title);
+   *  an unchanged one stores nothing, so a later AI title can still land. */
+  function startRename(row: RosterRow, labelEl: HTMLElement) {
+    const input = document.createElement("input");
+    input.className = "rail-rename-input";
+    input.value = row.label;
+    input.spellcheck = false;
+    labelEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = (save: boolean) => {
+      if (done) return;
+      done = true;
+      const key = row.uuid ?? row.ptyId;
+      const next = input.value.trim();
+      if (save && key && next !== row.label) saveOverride(key, next || null);
+      if (document.activeElement === input) input.blur();
+      // Back to the plain label now; the refresh then re-renders from the
+      // roster (the renderRail guard only holds off while the input has focus).
+      input.replaceWith(labelEl);
+      deps.onRefresh();
+    };
+
+    input.addEventListener("blur", () => {
+      // The window losing focus (alt-tab, devtools) blurs the input too; that
+      // isn't the user leaving the field, and focus comes back to it.
+      if (!document.hasFocus()) return;
+      finish(true);
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === "Escape") {
+        // Keep these off the rail's keydown: Enter there launches the row.
+        ev.preventDefault();
+        ev.stopPropagation();
+        finish(ev.key === "Enter");
+      }
+    });
+    // Pointer events inside the editor are the editor's: a click would
+    // reselect the row (pulling focus off the input and committing mid-edit),
+    // a double-click to select a word would launch the session.
+    for (const type of ["pointerdown", "mousedown", "click", "dblclick"] as const) {
+      input.addEventListener(type, (ev) => ev.stopPropagation());
+    }
   }
 
   /** Folded rail groups (true = collapsed). Persisted across reloads; a group
@@ -168,6 +217,15 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
         e.preventDefault();
         deps.onLaunch(row);
         preview.hide();
+      }
+    } else if (e.key === " ") {
+      // What Space did when rows were <button>s: select the focused row.
+      const t = e.target as HTMLElement | null;
+      const key = t && [...rowEls].find(([, elm]) => elm === t)?.[0];
+      const row = key ? visibleRows.find((r) => r.key === key) : undefined;
+      if (row) {
+        e.preventDefault();
+        selectRow(row);
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -285,7 +343,12 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
   }
 
   function renderRailRow(row: RosterRow, now: number): HTMLElement {
-    const item = el("button", "rail-row");
+    // Not a <button>: the rename editor nests an <input> inside the row, and a
+    // button's activation behavior turns a Space typed in that input into a
+    // click on the row (stealing focus, committing the rename mid-word).
+    const item = el("div", "rail-row");
+    item.tabIndex = 0;
+    item.setAttribute("role", "button");
     item.style.setProperty("--row-ink", inkVar(row.cwd, row.cwdChip));
     if (deps.isActive(row)) item.classList.add("rail-row--active");
 
@@ -348,31 +411,7 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     // Double-click label → inline rename → localStorage override.
     labelEl.addEventListener("dblclick", (e) => {
       e.stopPropagation();
-      const input = document.createElement("input");
-      input.className = "rail-rename-input";
-      input.value = row.label;
-      labelEl.replaceWith(input);
-      input.focus();
-      input.select();
-
-      const commit = () => {
-        const newLabel = input.value.trim();
-        if (newLabel) {
-          const overrideKey = row.uuid ?? row.ptyId;
-          if (overrideKey) saveOverride(overrideKey, newLabel);
-        }
-        deps.onRefresh();
-      };
-
-      input.addEventListener("blur", commit, { once: true });
-      input.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") {
-          input.blur();
-        } else if (ev.key === "Escape") {
-          input.removeEventListener("blur", commit);
-          deps.onRefresh();
-        }
-      });
+      startRename(row, labelEl);
     });
 
     return item;
@@ -395,6 +434,9 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
 
   return {
     setRows(rows) {
+      if (adoptPtyOverrides(rows, overrides)) {
+        localStorage.setItem(LS_OVERRIDES, JSON.stringify(overrides));
+      }
       lastRows = rows;
       renderRail();
     },
