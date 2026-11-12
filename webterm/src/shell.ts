@@ -82,6 +82,7 @@ import { openInspect } from "./inspect.ts";
 import { openClaims } from "./claims.ts";
 import { el } from "./dom.ts";
 import { mountTabSearch } from "./tab-search.ts";
+import { FACET_HELP } from "./facets.ts";
 import { dueSnoozes, snoozableTab, type Snooze } from "./snooze.ts";
 import { openSnoozeMenu, openSnoozeShelf } from "./snooze-ui.ts";
 import { openTabOrderMenu, type TabOrder } from "./tab-order-ui.ts";
@@ -185,7 +186,8 @@ export function mountShell(appEl: HTMLElement): void {
   const searchBox = el("div", "rail-search-box");
   searchBox.append(icon("search", 13));
   const searchInput = el("input", "rail-search-input");
-  searchInput.placeholder = "Search sessions";
+  searchInput.placeholder = "Search sessions · pr: repo: ~";
+  searchInput.title = FACET_HELP;
   const searchClear = el("button", "rail-search-clear");
   searchClear.title = "Clear search";
   searchClear.append(icon("x", 12));
@@ -247,6 +249,9 @@ export function mountShell(appEl: HTMLElement): void {
         cwd: t.descriptor.cwd,
         uuid: t.descriptor.uuid,
         ptyId: t.descriptor.ptyId,
+        facets: t.descriptor.uuid
+          ? lastForest?.find((f) => f.uuid === t.descriptor.uuid)?.facets
+          : undefined,
       })),
     activate: (id) => activateTab(id),
     onChange: () => renderOverstory(),
