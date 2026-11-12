@@ -706,6 +706,11 @@ fn daemon(
         log_file,
         plan_review_hold_secs: 0,
         hook_port: port,
+        feeds_file: Some(
+            home_dir()
+                .context("could not determine home directory")?
+                .join(".eigenform/feeds.json"),
+        ),
     };
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let url = format!("http://{addr}");
