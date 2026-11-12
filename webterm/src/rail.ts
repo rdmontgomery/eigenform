@@ -7,7 +7,7 @@ import { el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
-import { adoptPtyOverrides, type RosterRow } from "./roster.ts";
+import { adoptPtyOverrides, filterRows, type RosterRow } from "./roster.ts";
 import { ageGroup, relativeRecency, type AgeGroup } from "./shell-helpers.ts";
 import { dotClasses, dotTitle, inkVar, livenessTag } from "./status.ts";
 
@@ -273,11 +273,7 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     rowEls.clear();
     visibleRows = [];
 
-    const rows = searchQuery
-      ? lastRows.filter((r) =>
-          r.label.toLowerCase().includes(searchQuery) ||
-          r.cwdChip.toLowerCase().includes(searchQuery))
-      : lastRows;
+    const rows = searchQuery ? filterRows(lastRows, searchQuery) : lastRows;
 
     if (rows.length === 0) {
       const empty = el("div", "rail-empty");

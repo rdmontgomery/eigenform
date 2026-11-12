@@ -1,6 +1,8 @@
 // Wire types for the eigenform-daemon HTTP/WS API.
 // Each type mirrors serde's actual output field-for-field — do not diverge.
 
+import type { Facets } from "./facets.ts";
+
 /**
  * One row from GET /api/candidates.
  * - `path`: absolute directory path.
@@ -62,6 +64,9 @@ export interface ForestItem {
   /** The TTL (seconds) Claude Code cached at, from the transcript's usage; null
    *  when the tail didn't say. */
   cacheTtl?: number | null;
+  /** Claude only: repos/PRs/issues/branches the session worked on or mentioned,
+   *  from the daemon's session digest. See facets.ts for the search grammar. */
+  facets?: Facets;
   /** Codex only: last model the thread ran on. */
   model?: string | null;
   /** Codex only: the thread it was forked from / spawned by, when Codex recorded one. */

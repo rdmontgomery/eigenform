@@ -3,7 +3,8 @@
  *
  * ⌘/Ctrl+Shift+F (or the magnifier at the strip's left edge) opens a filter box.
  * Every tab whose title, launch dir, session uuid or pty id contains all the
- * query's whitespace-separated terms is highlighted; the rest dim. The selected
+ * query's plain words, and whose session satisfies its facet terms (`pr:56`,
+ * `repo:app`, `~#56`… — see facets.ts), is highlighted; the rest dim. The selected
  * match carries a stronger ring and is scrolled into view. ↓/↑ (or Tab/⇧Tab)
  * cycle the selection, Enter jumps to it and closes the box, Esc closes.
  *
@@ -14,6 +15,7 @@
 
 import { el } from "./dom.ts";
 import { icon } from "./icons.ts";
+import { FACET_HELP, matchesFacets, parseQuery, type Facets } from "./facets.ts";
 
 /** What search reads from a tab. */
 export interface TabSearchItem {
@@ -22,23 +24,27 @@ export interface TabSearchItem {
   cwd?: string;
   uuid?: string;
   ptyId?: string;
+  /** The tab's session facets, from the forest snapshot. */
+  facets?: Facets;
 }
 
 /**
- * Ids of the items matching `query`, best first. Case-insensitive; every term
- * must be a substring of the item's label, cwd, uuid or ptyId. Items with more
- * terms found in the label rank first (the title is what you're scanning for);
- * ties keep strip order. A blank query matches nothing — "not searching".
+ * Ids of the items matching `query`, best first. Case-insensitive; every plain
+ * word must be a substring of the item's label, cwd, uuid or ptyId, and every
+ * facet term must hold for its session (facets.ts). Items with more words found
+ * in the label rank first (the title is what you're scanning for); ties keep
+ * strip order. A blank query matches nothing — "not searching".
  */
 export function matchTabs(query: string, items: readonly TabSearchItem[]): string[] {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return [];
+  const { words, facets } = parseQuery(query);
+  if (words.length === 0 && facets.length === 0) return [];
   const hits: Array<{ id: string; labelHits: number; idx: number }> = [];
   items.forEach((it, idx) => {
     const label = it.label.toLowerCase();
     const hay = [label, it.cwd, it.uuid, it.ptyId].filter(Boolean).join("\n").toLowerCase();
-    if (!terms.every((t) => hay.includes(t))) return;
-    hits.push({ id: it.id, labelHits: terms.filter((t) => label.includes(t)).length, idx });
+    if (!words.every((t) => hay.includes(t))) return;
+    if (!matchesFacets(facets, it.facets)) return;
+    hits.push({ id: it.id, labelHits: words.filter((t) => label.includes(t)).length, idx });
   });
   hits.sort((a, b) => b.labelHits - a.labelHits || a.idx - b.idx);
   return hits.map((h) => h.id);
@@ -76,6 +82,7 @@ export function mountTabSearch(opts: {
   const box = el("div", "tab-search-box");
   const input = el("input", "tab-search-input");
   input.placeholder = "Find tab";
+  input.title = FACET_HELP;
   input.spellcheck = false;
   const count = el("span", "tab-search-count");
   box.append(input, count);

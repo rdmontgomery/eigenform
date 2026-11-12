@@ -36,6 +36,7 @@
  *   own lastActivity.
  */
 
+import { matchesFacets, parseQuery, type Facets } from "./facets.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,8 @@ export interface RosterRow {
   headless?: true;
   /** Present ("codex") for a Codex CLI thread; absent for Claude sessions. */
   engine?: "codex";
+  /** What the session worked on / mentioned (forest digest), for search. */
+  facets?: Facets;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +306,7 @@ export function buildRoster(
     let sparkCount: number | null = null;
     let headless = false;
     let engine: "codex" | undefined;
+    let facets: Facets | undefined;
     if (resolvedUuid !== null) {
       const fi = forestByUuid.get(resolvedUuid);
       if (fi) {
@@ -311,6 +315,7 @@ export function buildRoster(
         sparkCount = fi.spark.length;
         headless = fi.headless === true;
         engine = fi.engine;
+        facets = fi.facets;
         mergedForestUuids.add(resolvedUuid);
       }
     }
@@ -358,6 +363,9 @@ export function buildRoster(
     if (engine) {
       row.engine = engine;
     }
+    if (facets) {
+      row.facets = facets;
+    }
 
     liveRows.push(row);
   }
@@ -398,6 +406,7 @@ export function buildRoster(
     };
     if (fi.headless) row.headless = true;
     if (fi.engine) row.engine = fi.engine;
+    if (fi.facets) row.facets = fi.facets;
     diskRows.push(row);
   }
 
@@ -433,4 +442,17 @@ export function adoptPtyOverrides(
     changed = true;
   }
   return changed;
+}
+
+/**
+ * The rail's search: rows whose label or cwd chip contains every plain word of
+ * `query` and whose session satisfies every facet term (`pr:56`, `~repo:app`…,
+ * see facets.ts). Case-insensitive; order is kept.
+ */
+export function filterRows(rows: readonly RosterRow[], query: string): RosterRow[] {
+  const { words, facets } = parseQuery(query);
+  return rows.filter((r) => {
+    const hay = `${r.label}\n${r.cwdChip}`.toLowerCase();
+    return words.every((w) => hay.includes(w)) && matchesFacets(facets, r.facets);
+  });
 }
