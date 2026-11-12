@@ -13,6 +13,9 @@ use std::time::UNIX_EPOCH;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+pub mod digest;
+pub use digest::{cached_digest, session_digest, Digest, Facets};
+
 /// First tail window read; doubles on escalation up to the whole file.
 const TAIL_WINDOW: u64 = 64 * 1024;
 /// How far back a live session's tail read widens to find the person's last prompt,
@@ -299,6 +302,8 @@ pub struct LiveSession {
     /// When a person last sent this session a prompt, for live sessions only. None when
     /// none was found within [`PROMPT_WINDOW`] of the end.
     pub last_prompt: Option<DateTime<Utc>>,
+    /// Repos, PRs, issues and branches the session worked on or mentioned.
+    pub facets: Facets,
 }
 
 /// The session's prompt-cache clock. The last real assistant row is the last API
@@ -537,38 +542,7 @@ pub fn session_complete(path: &Path) -> bool {
 /// accumulate; a `turn_duration` system row closes a turn and pushes its total). Requires
 /// a full read — use [`cached_spark`] for the persisted, parse-on-change form.
 pub fn session_spark(jsonl_path: &Path) -> Vec<u32> {
-    let Ok(text) = fs::read_to_string(jsonl_path) else {
-        return Vec::new();
-    };
-    let mut spark = Vec::new();
-    let mut acc: u32 = 0;
-    for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        match v.get("type").and_then(|t| t.as_str()) {
-            Some("assistant") => {
-                let usage = v
-                    .get("message")
-                    .and_then(|m| m.get("usage"))
-                    .or_else(|| v.get("usage"));
-                if let Some(out) = usage
-                    .and_then(|u| u.get("output_tokens"))
-                    .and_then(|x| x.as_u64())
-                {
-                    acc = acc.saturating_add(out as u32);
-                }
-            }
-            Some("system")
-                if v.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") =>
-            {
-                spark.push(acc);
-                acc = 0;
-            }
-            _ => {}
-        }
-    }
-    spark
+    session_digest(jsonl_path).spark
 }
 
 fn mtime_millis(path: &Path) -> Option<(i64, u64)> {
@@ -582,43 +556,10 @@ fn mtime_millis(path: &Path) -> Option<(i64, u64)> {
     Some((millis, m.len()))
 }
 
-/// [`session_spark`] cached to `state_dir/<session_id>.json`, keyed by the JSONL's
-/// (mtime, len). A static transcript is parsed once; the cache (eigenform's `~/.eigenform/state`)
-/// survives restarts and is shared with the CLI.
+/// [`session_spark`] from the persisted session digest (see [`cached_digest`]): a static
+/// transcript is parsed once, a growing one only past what was already read.
 pub fn cached_spark(state_dir: &Path, session_id: &str, jsonl_path: &Path) -> Vec<u32> {
-    let stamp = mtime_millis(jsonl_path);
-    let state_path = state_dir.join(format!("{session_id}.json"));
-
-    if let Some((mtime, len)) = stamp {
-        if let Ok(text) = fs::read_to_string(&state_path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                let same = v.get("source_mtime").and_then(|x| x.as_i64()) == Some(mtime)
-                    && v.get("source_len").and_then(|x| x.as_u64()) == Some(len);
-                if same {
-                    if let Some(arr) = v.get("spark").and_then(|x| x.as_array()) {
-                        return arr
-                            .iter()
-                            .filter_map(|x| x.as_u64().map(|n| n as u32))
-                            .collect();
-                    }
-                }
-            }
-        }
-    }
-
-    let spark = session_spark(jsonl_path);
-    if let Some((mtime, len)) = stamp {
-        let _ = fs::create_dir_all(state_dir);
-        let total: u64 = spark.iter().map(|&x| x as u64).sum();
-        let doc = serde_json::json!({
-            "source_mtime": mtime,
-            "source_len": len,
-            "spark": spark,
-            "total": total,
-        });
-        let _ = fs::write(&state_path, doc.to_string());
-    }
-    spark
+    cached_digest(state_dir, session_id, jsonl_path).spark
 }
 
 /// The live Forest: corroborate `~/.claude/sessions/<pid>.json` (process liveness) with
@@ -666,6 +607,7 @@ pub fn live_forest_with(
             Some(_) => SessionState::Working,
             None => SessionState::Recent,
         };
+        let digest = cached_digest(state_dir, &r.uuid, &r.path);
         out.push(LiveSession {
             uuid: r.uuid.clone(),
             title: r.title.clone(),
@@ -673,7 +615,7 @@ pub fn live_forest_with(
             recency: r.recency,
             live: is_live,
             state,
-            spark: cached_spark(state_dir, &r.uuid, &r.path),
+            spark: digest.spark,
             headless: claim_headless(claim)
                 || session_entrypoint(&r.path).is_some_and(|e| is_headless(&e)),
             pid: claim.map(|c| c.pid),
@@ -683,6 +625,7 @@ pub fn live_forest_with(
                 .as_ref()
                 .and_then(|t| t.last_prompt.as_deref())
                 .and_then(parse_ts),
+            facets: digest.facets,
         });
     }
     // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
@@ -703,6 +646,7 @@ pub fn live_forest_with(
             peer: c.name.clone(),
             cache: None,
             last_prompt: None,
+            facets: Facets::default(),
         });
     }
 
