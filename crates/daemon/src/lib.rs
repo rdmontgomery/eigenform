@@ -19,6 +19,7 @@
 //! - `snooze` — `/api/snoozes`, tabs closed until a wake time (persisted)
 //! - [`events`] — the observability bus and `/api/events` (+ `/stream`)
 //! - [`focus`] — `POST /api/focus`, deep-linking a session to the front of the app
+//! - [`feeds`] — `/api/feeds` and `/api/feeds/act`, the rail's "Needs you" section
 //! - [`host`] — the [`host::SessionHost`] pty registry; `paths` — tilde/normalize helpers
 
 use std::path::PathBuf;
@@ -39,6 +40,7 @@ pub const VERSION: &str = match option_env!("EIGENFORM_VERSION") {
 pub mod artifacts;
 mod claims;
 pub mod events;
+pub mod feeds;
 pub mod focus;
 mod forest;
 pub mod host;
@@ -127,6 +129,9 @@ pub struct Config {
     /// back to (`turns`). 0 = spawn claude without them, so no pty is ever provably
     /// safe to kill and a close always detaches.
     pub hook_port: u16,
+    /// `~/.eigenform/feeds.json`: the local providers behind the rail's "Needs you"
+    /// section. None = no feeds.
+    pub feeds_file: Option<PathBuf>,
 }
 
 /// Shared router state: pure [`Config`] plus the runtime [`host::SessionHost`]. `Config`
@@ -146,6 +151,8 @@ pub struct AppState {
     pub turns: Arc<turns::SessionTurns>,
     /// Connected app windows + the focus request held while none was (`/api/focus`).
     pub focus: Arc<focus::FocusHub>,
+    /// What each feed last advertised; `/api/feeds/act` only sends from here.
+    pub feeds: Arc<feeds::FeedHub>,
 }
 
 /// Build the eigenform HTTP/WS router. `GET /pty` upgrades to a websocket bridged to a
@@ -208,6 +215,8 @@ pub fn app(config: Config) -> Router {
         .route("/api/events", get(events::events_route))
         .route("/api/events/stream", get(events::events_stream_route))
         .route("/api/focus", post(focus::focus_route))
+        .route("/api/feeds", get(feeds::feeds_route))
+        .route("/api/feeds/act", post(feeds::feeds_act_route))
         .route("/api/watch/{uuid}", get(watch::watch_route));
 
     // eigenform (the terminal app) is the front door at `/`.
@@ -242,6 +251,7 @@ pub fn app(config: Config) -> Router {
         plan_gate: Arc::new(plan_gate::PlanGate::default()),
         turns: Arc::new(turns::SessionTurns::default()),
         focus: Arc::new(focus::FocusHub::default()),
+        feeds: Arc::new(feeds::FeedHub::default()),
     };
     router.with_state(state)
 }
