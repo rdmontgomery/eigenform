@@ -15,6 +15,9 @@ use thiserror::Error;
 
 /// First tail window read; doubles on escalation up to the whole file.
 const TAIL_WINDOW: u64 = 64 * 1024;
+/// How far back a live session's tail read widens to find the person's last prompt,
+/// which a long run of tool output can push past [`TAIL_WINDOW`].
+const PROMPT_WINDOW: u64 = 8 * 1024 * 1024;
 /// Max chars kept from a last-prompt fallback title.
 const TITLE_SNIPPET: usize = 60;
 
@@ -293,6 +296,9 @@ pub struct LiveSession {
     pub peer: Option<String>,
     /// When the prompt cache was last touched, for live sessions only — see [`CacheMark`].
     pub cache: Option<CacheMark>,
+    /// When a person last sent this session a prompt, for live sessions only. None when
+    /// none was found within [`PROMPT_WINDOW`] of the end.
+    pub last_prompt: Option<DateTime<Utc>>,
 }
 
 /// The session's prompt-cache clock. The last real assistant row is the last API
@@ -654,7 +660,7 @@ pub fn live_forest_with(
         let is_live = claim.is_some();
         // One tail read serves both the turn state and the cache clock; dead sessions
         // need neither.
-        let tail = is_live.then(|| peek_tail(&r.path));
+        let tail = is_live.then(|| peek_tail_with(&r.path, true));
         let state = match &tail {
             Some(t) if t.complete => SessionState::Ready,
             Some(_) => SessionState::Working,
@@ -673,6 +679,10 @@ pub fn live_forest_with(
             pid: claim.map(|c| c.pid),
             peer: claim.and_then(|c| c.name.clone()),
             cache: tail.as_ref().and_then(Tail::cache_mark),
+            last_prompt: tail
+                .as_ref()
+                .and_then(|t| t.last_prompt.as_deref())
+                .and_then(parse_ts),
         });
     }
     // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
@@ -692,6 +702,7 @@ pub fn live_forest_with(
             pid: Some(c.pid),
             peer: c.name.clone(),
             cache: None,
+            last_prompt: None,
         });
     }
 
@@ -721,6 +732,8 @@ struct Tail {
     last_assistant: Option<String>,
     /// Cache TTL of the latest assistant row that created cache.
     cache_ttl: Option<u32>,
+    /// Timestamp of the last prompt a person sent — see [`is_person_prompt`].
+    last_prompt: Option<String>,
 }
 
 impl Tail {
@@ -731,6 +744,7 @@ impl Tail {
             complete: true,
             last_assistant: None,
             cache_ttl: None,
+            last_prompt: None,
         }
     }
 
@@ -746,6 +760,12 @@ impl Tail {
 /// Read the tail of a session file (byte-stream, escalating) for the last timestamped
 /// row and a title. Returns empties if the file is unreadable.
 fn peek_tail(path: &Path) -> Tail {
+    peek_tail_with(path, false)
+}
+
+/// [`peek_tail`], widening up to [`PROMPT_WINDOW`] when `want_prompt` and the window
+/// holds no prompt from a person.
+fn peek_tail_with(path: &Path, want_prompt: bool) -> Tail {
     let Ok(mut file) = fs::File::open(path) else {
         return Tail::empty();
     };
@@ -766,8 +786,9 @@ fn peek_tail(path: &Path) -> Tail {
         }
 
         let tail = scan_tail(&lines);
-        // Found a timestamp, or we've already read the whole file — done either way.
-        if tail.last_timestamp.is_some() || start == 0 {
+        let need_prompt = want_prompt && tail.last_prompt.is_none() && window < PROMPT_WINDOW;
+        // Found what we came for, or we've already read the whole file — done either way.
+        if (tail.last_timestamp.is_some() && !need_prompt) || start == 0 {
             return tail;
         }
         window = window.saturating_mul(2);
@@ -784,6 +805,7 @@ fn scan_tail(lines: &[&str]) -> Tail {
     let mut last_close = None;
     let mut last_assistant = None;
     let mut cache_ttl = None;
+    let mut person_prompt = None;
     for (i, line) in lines.iter().enumerate() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -802,7 +824,14 @@ fn scan_tail(lines: &[&str]) -> Tail {
                     last_prompt = Some(snippet(p));
                 }
             }
-            Some("user") => last_user = Some(i),
+            Some("user") => {
+                last_user = Some(i);
+                if is_person_prompt(&value) {
+                    if let Some(ts) = value.get("timestamp").and_then(|t| t.as_str()) {
+                        person_prompt = Some(ts.to_string());
+                    }
+                }
+            }
             // A `<synthetic>` row (an API error Claude Code wrote locally) never reached
             // the cache, so it doesn't move the clock.
             Some("assistant")
@@ -843,6 +872,23 @@ fn scan_tail(lines: &[&str]) -> Tail {
         complete,
         last_assistant,
         cache_ttl,
+        last_prompt: person_prompt,
+    }
+}
+
+/// A `user` row a person typed: not a tool result, and not one Claude Code injected
+/// (`isMeta`: skill bodies, messages from peer sessions) or a subagent's.
+fn is_person_prompt(row: &serde_json::Value) -> bool {
+    let flag = |k: &str| row.get(k).and_then(|v| v.as_bool()) == Some(true);
+    if flag("isMeta") || flag("isSidechain") || flag("isCompactSummary") {
+        return false;
+    }
+    match row.pointer("/message/content") {
+        Some(serde_json::Value::String(_)) => true,
+        Some(serde_json::Value::Array(parts)) => parts
+            .iter()
+            .all(|p| p.get("type").and_then(|t| t.as_str()) != Some("tool_result")),
+        _ => false,
     }
 }
 

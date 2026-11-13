@@ -55,6 +55,8 @@ import {
   freshRestartQuery,
   reconnectDelay,
   tabSubtitle,
+  groupByDirectory,
+  orderByLastPrompt,
   railFromPointer,
   RAIL_DEFAULT,
   seedDue,
@@ -82,6 +84,7 @@ import { el } from "./dom.ts";
 import { mountTabSearch } from "./tab-search.ts";
 import { dueSnoozes, snoozableTab, type Snooze } from "./snooze.ts";
 import { openSnoozeMenu, openSnoozeShelf } from "./snooze-ui.ts";
+import { openTabOrderMenu, type TabOrder } from "./tab-order-ui.ts";
 
 // Re-export so callers can reach pure helpers via either module.
 export { relativeRecency, reconcileTabs };
@@ -249,7 +252,11 @@ export function mountShell(appEl: HTMLElement): void {
     onChange: () => renderOverstory(),
     onClose: () => activeTab()?.handle.term.focus(),
   });
-  topbar.append(railBtn, tabSearch.el, overstory, controls);
+  const sortBtn = el("button", "icon-btn topbar-sort-btn");
+  sortBtn.title = "Sort tabs — by last message sent, or grouped by directory";
+  sortBtn.append(icon("sort", 15));
+  sortBtn.addEventListener("click", () => openTabOrderMenu(sortBtn, reorderTabsOnce));
+  topbar.append(railBtn, tabSearch.el, sortBtn, overstory, controls);
 
   const termArea = el("div", "term-area");
   const termHeader = el("div", "term-header");
@@ -410,6 +417,24 @@ export function mountShell(appEl: HTMLElement): void {
       const t = byId.get(id);
       if (t) tabs.push(t);
     }
+  }
+
+  function forestItemFor(t: TabEntry): ForestItem | undefined {
+    return t.descriptor.uuid ? lastForest?.find((f) => f.uuid === t.descriptor.uuid) : undefined;
+  }
+
+  function reorderTabsOnce(order: TabOrder) {
+    applyTabOrder(
+      order === "directory"
+        ? groupByDirectory(tabs.map((t) => ({ id: t.id, cwd: t.descriptor.cwd })))
+        : orderByLastPrompt(
+            tabs.map((t) => ({ id: t.id, lastPromptAt: forestItemFor(t)?.lastPromptAt })),
+            order,
+          ),
+    );
+    saveTabs();
+    renderOverstory();
+    overstory.querySelector(".tab--active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   function activateTab(id: string) {
@@ -675,11 +700,11 @@ export function mountShell(appEl: HTMLElement): void {
     for (const t of tabs) {
       const tab = el("div", "tab");
       tab.dataset.tabId = t.id;
-      const item = t.descriptor.uuid && !t.dead
-        ? lastForest?.find((f) => f.uuid === t.descriptor.uuid)
-        : undefined;
+      const item = t.dead ? undefined : forestItemFor(t);
       const peer = item?.peer ?? null;
-      tab.title = [t.descriptor.label, peer, t.descriptor.cwd].filter(Boolean).join("\n");
+      const ago = item?.lastPromptAt ? relativeRecency(item.lastPromptAt, Date.now()) : "";
+      const sent = ago ? `last message ${ago === "just now" ? ago : `${ago} ago`}` : null;
+      tab.title = [t.descriptor.label, peer, t.descriptor.cwd, sent].filter(Boolean).join("\n");
       tab.classList.add(...tabSearch.classFor(t.id));
       // Every tab carries its project ink (the subtitle uses it); only the
       // active tab turns it into the top border.

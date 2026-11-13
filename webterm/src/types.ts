@@ -58,6 +58,9 @@ export interface ForestItem {
   peer?: string | null;
   /** Present ("codex") for an OpenAI Codex CLI thread; absent for Claude sessions. */
   engine?: "codex";
+  /** Live Claude sessions only: when a person last sent it a prompt. Null when none
+   *  was found near the end of the transcript. */
+  lastPromptAt?: string | null;
   /** Live Claude sessions only: the last real assistant row's timestamp — when the
    *  prompt cache was last touched. Null when there is no response yet. */
   cacheAt?: string | null;
