@@ -224,6 +224,16 @@ export function mountShell(appEl: HTMLElement): void {
     saveTabs();
     renderOverstory();
   });
+  // The overstory scrolls sideways with no visible bar; let a plain wheel move it.
+  overstory.addEventListener(
+    "wheel",
+    (e) => {
+      if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      overstory.scrollLeft += e.deltaY;
+      e.preventDefault();
+    },
+    { passive: false },
+  );
   const controls = el("div", "topbar-controls");
   // Find-a-tab filter (see tab-search.ts): highlights matches, dims the rest.
   const tabSearch = mountTabSearch({
@@ -416,6 +426,7 @@ export function mountShell(appEl: HTMLElement): void {
       }
     }
     renderOverstory();
+    overstory.querySelector(".tab--active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
     renderTermHeader();
     syncDock();
     railView.render();
@@ -664,6 +675,7 @@ export function mountShell(appEl: HTMLElement): void {
     for (const t of tabs) {
       const tab = el("div", "tab");
       tab.dataset.tabId = t.id;
+      tab.title = t.descriptor.cwd ? `${t.descriptor.label}\n${t.descriptor.cwd}` : t.descriptor.label;
       tab.classList.add(...tabSearch.classFor(t.id));
       // Every tab carries its project ink (the subtitle uses it); only the
       // active tab turns it into the top border.
