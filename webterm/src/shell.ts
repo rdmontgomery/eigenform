@@ -224,6 +224,16 @@ export function mountShell(appEl: HTMLElement): void {
     saveTabs();
     renderOverstory();
   });
+  // The overstory scrolls sideways with no visible bar; let a plain wheel move it.
+  overstory.addEventListener(
+    "wheel",
+    (e) => {
+      if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      overstory.scrollLeft += e.deltaY;
+      e.preventDefault();
+    },
+    { passive: false },
+  );
   const controls = el("div", "topbar-controls");
   // Find-a-tab filter (see tab-search.ts): highlights matches, dims the rest.
   const tabSearch = mountTabSearch({
@@ -416,6 +426,7 @@ export function mountShell(appEl: HTMLElement): void {
       }
     }
     renderOverstory();
+    overstory.querySelector(".tab--active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
     renderTermHeader();
     syncDock();
     railView.render();
@@ -664,6 +675,11 @@ export function mountShell(appEl: HTMLElement): void {
     for (const t of tabs) {
       const tab = el("div", "tab");
       tab.dataset.tabId = t.id;
+      const item = t.descriptor.uuid && !t.dead
+        ? lastForest?.find((f) => f.uuid === t.descriptor.uuid)
+        : undefined;
+      const peer = item?.peer ?? null;
+      tab.title = [t.descriptor.label, peer, t.descriptor.cwd].filter(Boolean).join("\n");
       tab.classList.add(...tabSearch.classFor(t.id));
       // Every tab carries its project ink (the subtitle uses it); only the
       // active tab turns it into the top border.
@@ -723,16 +739,16 @@ export function mountShell(appEl: HTMLElement): void {
       const badge = el("span", dotClasses(tabActivity, tabLiveness));
       badge.title = dotTitle(tabActivity, tabLiveness);
 
-      // Two-line text stack: title, then the launch dir (like the rail's chip).
+      // Two-line text stack: title, then the peer name other sessions message it
+      // by, or the launch dir (like the rail's chip) when it has none.
       const textEl = el("span", "tab-text");
       const labelEl = el("span", "tab-label");
       labelEl.textContent = t.descriptor.label;
       textEl.append(labelEl);
-      const sub = tabSubtitle(t.descriptor.cwd, t.descriptor.label);
+      const sub = peer ?? tabSubtitle(t.descriptor.cwd, t.descriptor.label);
       if (sub) {
         const subEl = el("span", "tab-sub");
         subEl.textContent = sub;
-        subEl.title = t.descriptor.cwd ?? "";
         textEl.append(subEl);
       }
 
@@ -765,9 +781,6 @@ export function mountShell(appEl: HTMLElement): void {
       // Prompt-cache clock: time since the session's last API response, so a tab
       // nearing its TTL reads before the next prompt pays to re-write the context.
       // Refreshed by the roster poll's re-render (every 3s), so it needs no timer.
-      const item = t.descriptor.uuid && !t.dead
-        ? lastForest?.find((f) => f.uuid === t.descriptor.uuid)
-        : undefined;
       const clock = item
         ? cacheClock(item.cacheAt, item.cacheTtl, item.state === "working", Date.now())
         : null;

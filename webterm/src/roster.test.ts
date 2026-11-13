@@ -425,6 +425,17 @@ test("buildRoster: a Codex forest row carries its engine tag", () => {
   assert.equal(rows[0]!.headless, true);
 });
 
+test("buildRoster: a live session carries the name its peers message it by", () => {
+  const rows = buildRoster(
+    [],
+    [forest({ uuid: "running", live: true, peer: "app-dd" }), forest({ uuid: "ended" })],
+    {},
+  );
+  const byUuid = new Map(rows.map((r) => [r.uuid, r]));
+  assert.equal(byUuid.get("running")!.peer, "app-dd");
+  assert.equal("peer" in byUuid.get("ended")!, false);
+});
+
 // ---------------------------------------------------------------------------
 // adoptPtyOverrides — a ptyId rename follows the session onto its uuid
 // ---------------------------------------------------------------------------
