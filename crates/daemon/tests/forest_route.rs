@@ -17,7 +17,7 @@ fn fixture() -> (
     let pdir = proj.path().join("-home-me-p");
     std::fs::create_dir_all(&pdir).unwrap();
     let lines = format!(
-        "{{\"type\":\"user\",\"timestamp\":\"2026-06-06T10:00:00Z\",\"sessionId\":\"{UUID}\",\"cwd\":\"/home/me/p\",\"message\":{{\"role\":\"user\"}}}}\n\
+        "{{\"type\":\"user\",\"timestamp\":\"2026-06-06T10:00:00Z\",\"sessionId\":\"{UUID}\",\"cwd\":\"/home/me/p\",\"gitBranch\":\"feat/x\",\"message\":{{\"role\":\"user\",\"content\":\"see https://github.com/o/r/pull/3\"}}}}\n\
          {{\"type\":\"assistant\",\"timestamp\":\"2026-06-06T10:00:01Z\",\"message\":{{\"role\":\"assistant\",\"usage\":{{\"output_tokens\":77}}}}}}\n\
          {{\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-06-06T10:00:02Z\"}}\n"
     );
@@ -83,6 +83,11 @@ async fn forest_route_reports_a_live_ready_session_with_spark() {
         entry["spark"],
         serde_json::json!([77]),
         "output_tokens per turn"
+    );
+    assert_eq!(
+        entry["facets"],
+        serde_json::json!({"work": ["branch:feat/x"], "mention": ["repo:o/r", "pr:o/r#3"]}),
+        "what the session worked on vs mentioned"
     );
 }
 

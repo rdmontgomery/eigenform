@@ -32,3 +32,14 @@ test("label hits rank before cwd-only hits; ties keep overstory order", () => {
   assert.deepEqual(matchTabs("status", [TABS[2]!, TABS[0]!]), ["a", "c"]);
   assert.deepEqual(matchTabs("eigenform", TABS), ["a", "b"]);
 });
+
+test("facet terms filter by the tab's session facets", () => {
+  const tabs: TabSearchItem[] = [
+    { id: "a", label: "login fix", facets: { work: ["repo:me/app", "pr:me/app#57"], mention: [] } },
+    { id: "b", label: "login notes", facets: { work: ["repo:me/notes"], mention: ["pr:me/app#57"] } },
+    { id: "c", label: "zsh" },
+  ];
+  assert.deepEqual(matchTabs("pr:57", tabs), ["a"]);
+  assert.deepEqual(matchTabs("~pr:57", tabs), ["a", "b"]);
+  assert.deepEqual(matchTabs("notes ~#57", tabs), ["b"], "words and facets AND");
+});

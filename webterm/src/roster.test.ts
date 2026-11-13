@@ -466,3 +466,22 @@ test("adoptPtyOverrides leaves uuid-less ptys (terminal tabs) alone", () => {
   assert.equal(adoptPtyOverrides(buildRoster([pty({ id: "7" })], [], overrides), overrides), false);
   assert.deepEqual(overrides, { "7": "shell" });
 });
+
+test("filterRows: plain words match label/chip, facet terms match the session", async () => {
+  const { filterRows } = await import("./roster.ts");
+  const row = (key: string, label: string, facets?: { work: string[]; mention: string[] }) =>
+    ({ key, label, cwdChip: "app", state: "recent", live: false, liveness: "none",
+       activity: "idle", recency: "2026-01-01T00:00:00+00:00", ...(facets ? { facets } : {}) }) as const;
+  const rows = [
+    row("a", "Rail rename", { work: ["repo:me/app", "pr:me/app#55"], mention: [] }),
+    row("b", "Cache clock", { work: ["repo:me/app"], mention: ["pr:me/app#55"] }),
+    row("c", "Codex thread"),
+  ];
+  const keys = (q: string) => filterRows(rows, q).map((r) => r.key);
+  assert.deepEqual(keys("rename"), ["a"]);
+  assert.deepEqual(keys("rail rename"), ["a"], "words needn't be adjacent");
+  assert.deepEqual(keys("pr:55"), ["a"]);
+  assert.deepEqual(keys("~pr:55"), ["a", "b"]);
+  assert.deepEqual(keys("app"), ["a", "b", "c"], "the chip still matches");
+  assert.deepEqual(keys("repo:app"), ["a", "b"], "no facets, no facet match");
+});
