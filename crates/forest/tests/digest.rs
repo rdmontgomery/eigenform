@@ -275,3 +275,68 @@ fn a_rewritten_shorter_file_and_an_old_spark_only_cache_are_rebuilt() {
         .mention
         .is_empty());
 }
+
+#[test]
+fn jira_keys_split_into_worked_on_and_mentioned() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("app");
+    repo(&cwd, "https://github.com/me/app.git");
+    let on_branch = |v: serde_json::Value| {
+        let mut v = v;
+        v["gitBranch"] = json!("feat/ABC-12-tabs");
+        line(v)
+    };
+    let lines = [
+        on_branch(json!({"type":"user","cwd":cwd,"message":{"role":"user",
+            "content":"ABC-12 again; OPS-9 is related, UTF-8 is not, see https://x.atlassian.net/browse/OPS-10"}})),
+        tool_use(
+            &cwd,
+            "t1",
+            "Bash",
+            json!({"command":"git commit -m 'fix: [ABC-34] the thing' && gh pr create --title 'ABC-35 too'"}),
+        ),
+        tool_result(&cwd, "t1", "https://github.com/me/app/pull/3\n"),
+        tool_use(&cwd, "t2", "Bash", json!({"command":"echo ZZ-99"})),
+        tool_use(
+            &cwd,
+            "t3",
+            "mcp__claude_ai_Atlassian__getJiraIssue",
+            json!({"cloudId":"c","issueIdOrKey":"ABC-56"}),
+        ),
+        tool_use(
+            &cwd,
+            "t4",
+            "mcp__claude_ai_Atlassian__createJiraIssue",
+            json!({"projectKey":"ABC","summary":"new"}),
+        ),
+        tool_result(
+            &cwd,
+            "t4",
+            r#"{"key":"ABC-78","id":"10001","self":"https://x.atlassian.net/rest/api/3/issue/10001"}"#,
+        ),
+    ];
+    let path = dir.path().join("s.jsonl");
+    std::fs::write(&path, lines.concat()).unwrap();
+    let f = session_digest(&path).facets;
+    let tickets = |side: &[String]| -> Vec<String> {
+        side.iter()
+            .filter(|x| x.starts_with("ticket:"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        tickets(&f.work),
+        [
+            "ticket:ABC-12",
+            "ticket:ABC-34",
+            "ticket:ABC-35",
+            "ticket:ABC-56",
+            "ticket:ABC-78"
+        ]
+    );
+    assert_eq!(
+        tickets(&f.mention),
+        ["ticket:OPS-9", "ticket:OPS-10"],
+        "ABC-12 is worked on, ZZ-99 was only echoed, UTF-8 is not a key"
+    );
+}

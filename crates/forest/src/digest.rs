@@ -12,8 +12,15 @@
 //!   and `owner/repo#N` refs in user/assistant prose, and bare `#N` resolved against the
 //!   session's own repo. A ref that is also `work` is not repeated under `mention`.
 //!
+//! Jira-style issue keys (`ABC-123`) are facets too. `work`: a key in the branch the
+//! session ran on, in a `git commit`/`checkout`/`switch`/`worktree`/`push` or
+//! `gh pr create`/`edit` command, the issue a Jira tool was called on (an
+//! `issueIdOrKey`-style input), or the key a create tool returned. `mention`: a key in
+//! prose, URLs included.
+//!
 //! Facets are strings `kind:value` with kind one of `repo` (`owner/repo`), `pr` / `issue`
-//! (`owner/repo#N`), `ref` (`owner/repo#N` of unknown kind: a bare `#N`) and `branch`.
+//! (`owner/repo#N`), `ref` (`owner/repo#N` of unknown kind: a bare `#N`), `branch` and
+//! `ticket` (`ABC-123`, as written: keys are upper case).
 //! Repo keys are lowercased: GitHub is case-insensitive, and so is the search.
 //!
 //! JSONL transcripts are append-only, so the persisted state carries the byte offset it
@@ -28,7 +35,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 /// Bump when the persisted shape or the extraction rules change: older state is rebuilt.
-const VERSION: u64 = 2;
+const VERSION: u64 = 3;
 /// Most facets kept in state per side; bounds a pathological transcript.
 const STATE_CAP: usize = 256;
 /// Most facets reported per side (what travels in every forest push).
@@ -58,6 +65,8 @@ enum Harvest {
     Lines,
     /// A structured result (a GitHub MCP create): the first PR/issue URL in it.
     First,
+    /// A Jira create's result: the first issue key in it.
+    Ticket,
 }
 
 impl Harvest {
@@ -65,12 +74,14 @@ impl Harvest {
         match self {
             Harvest::Lines => "lines",
             Harvest::First => "first",
+            Harvest::Ticket => "ticket",
         }
     }
     fn parse(s: &str) -> Option<Self> {
         match s {
             "lines" => Some(Harvest::Lines),
             "first" => Some(Harvest::First),
+            "ticket" => Some(Harvest::Ticket),
             _ => None,
         }
     }
@@ -141,6 +152,9 @@ impl State {
         if let Some(b) = v.get("gitBranch").and_then(Value::as_str) {
             if !b.is_empty() && b != "HEAD" {
                 self.work(format!("branch:{b}"));
+                for k in jira_keys(b) {
+                    self.work(format!("ticket:{k}"));
+                }
             }
         }
         match v.get("type").and_then(Value::as_str) {
@@ -197,6 +211,9 @@ impl State {
 
     /// Chat prose: everything it names is a mention.
     fn prose(&mut self, text: &str) {
+        for k in jira_keys(text) {
+            self.mention(format!("ticket:{k}"));
+        }
         for r in github_refs(text) {
             self.gh(&r, false);
         }
@@ -217,6 +234,7 @@ impl State {
         let id = block.get("id").and_then(Value::as_str).unwrap_or("");
         let input = block.get("input");
         let lname = name.to_ascii_lowercase();
+        let jira = lname.contains("jira") || lname.contains("atlassian");
 
         // A tool addressed at a GitHub repo (the GitHub MCP server, PR subscriptions…).
         let owner = input.and_then(|i| i.get("owner")).and_then(Value::as_str);
@@ -243,8 +261,20 @@ impl State {
         }
         let creates =
             lname.contains("create") && (lname.contains("pull") || lname.contains("issue"));
-        if (creates || lname.contains("issue_write")) && !id.is_empty() {
+        if (creates || lname.contains("issue_write")) && !jira && !id.is_empty() {
             self.await_result(id, Harvest::First);
+        }
+
+        // A Jira tool: the issue it acted on, or (a create) the one it returns.
+        for k in ["issueIdOrKey", "issueKey", "issue_key", "issueIdOrKeyOrUrl"] {
+            if let Some(v) = input.and_then(|i| i.get(k)).and_then(Value::as_str) {
+                for key in jira_keys(v) {
+                    self.work(format!("ticket:{key}"));
+                }
+            }
+        }
+        if jira && lname.contains("create") && !id.is_empty() {
+            self.await_result(id, Harvest::Ticket);
         }
 
         // A fetched URL is talked about, not acted on.
@@ -264,6 +294,11 @@ impl State {
     fn bash(&mut self, cmd: &str, id: &str) {
         let mut harvest = false;
         for seg in shell_segments(cmd) {
+            if names_work(&seg) {
+                for k in jira_keys(&seg.join(" ")) {
+                    self.work(format!("ticket:{k}"));
+                }
+            }
             if let Some(call) = gh_call(&seg) {
                 let repo = call.repo.clone().or_else(|| self.cur_repo.clone());
                 if let Some(repo) = &repo {
@@ -328,6 +363,11 @@ impl State {
                     self.gh(&r, true);
                 }
             }
+            Harvest::Ticket => {
+                if let Some(k) = jira_keys(&text).into_iter().next() {
+                    self.work(format!("ticket:{k}"));
+                }
+            }
         }
     }
 
@@ -349,7 +389,7 @@ impl State {
             .iter()
             .filter(|f| !self.work.contains(f))
             .filter(|f| match key(f) {
-                Some(k) => !worked.contains(&k) && !(f.starts_with("ref:") && typed.contains(&k)),
+                Some(k) => !(worked.contains(&k) || f.starts_with("ref:") && typed.contains(&k)),
                 None => true,
             })
             .take(FACET_CAP)
@@ -698,6 +738,65 @@ fn text_refs(text: &str) -> Vec<(Option<String>, u64)> {
     out
 }
 
+/// Upper-case prefixes of `ABC-123` shapes that are standards and encodings, not issues.
+const NOT_PROJECTS: &[&str] = &[
+    "AES", "ANSI", "CUDA", "CVE", "ECMA", "GPT", "HTTP", "IEEE", "IPV", "ISO", "PEP", "RFC", "RSA",
+    "SHA", "SSL", "TLS", "UTF", "WCAG",
+];
+
+/// Jira-style keys (`ABC-123`: an upper-case project of 2–10 letters or digits starting
+/// with a letter, a dash, a number) standing as their own token, deduplicated in order.
+fn jira_keys(text: &str) -> Vec<String> {
+    let b = text.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let starts = b[i].is_ascii_uppercase() && (i == 0 || !b[i - 1].is_ascii_alphanumeric());
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < b.len() && (b[j].is_ascii_uppercase() || b[j].is_ascii_digit()) {
+            j += 1;
+        }
+        let project = &text[i..j];
+        let mut k = j + 1;
+        while k < b.len() && b[k].is_ascii_digit() {
+            k += 1;
+        }
+        let ok = (2..=10).contains(&project.len())
+            && b.get(j) == Some(&b'-')
+            && (2..=8).contains(&(k - j))
+            && (k == b.len() || !b[k].is_ascii_alphanumeric())
+            && !NOT_PROJECTS.contains(&project);
+        if ok {
+            let key = text[i..k].to_string();
+            if !out.contains(&key) {
+                out.push(key);
+            }
+            i = k;
+        } else {
+            i = j.max(i + 1);
+        }
+    }
+    out
+}
+
+/// A command whose arguments name the work it is for: a commit message, a branch
+/// being made or pushed, a PR's title or body.
+fn names_work(words: &[String]) -> bool {
+    let w = |n: usize| words.get(n).map(String::as_str);
+    match w(0) {
+        Some("git") => matches!(
+            w(1),
+            Some("commit" | "checkout" | "switch" | "worktree" | "push" | "branch")
+        ),
+        Some("gh") => w(1) == Some("pr") && matches!(w(2), Some("create" | "edit")),
+        _ => false,
+    }
+}
+
 /// Blank out fenced blocks and inline code: `#333` in a stylesheet is not issue 333.
 fn strip_code(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -974,6 +1073,25 @@ mod tests {
                 (None, 3)
             ]
         );
+    }
+
+    #[test]
+    fn jira_key_shapes() {
+        assert_eq!(
+            jira_keys(
+                "feat/ABC-1234-thing, see (ABC-9) and https://x.atlassian.net/browse/OPS-77."
+            ),
+            ["ABC-1234", "ABC-9", "OPS-77"]
+        );
+        assert!(
+            jira_keys("UTF-8 SHA-256 ISO-8601 RFC-3339 abc-12 X-1 ABCDEFGHIJK-1 AB-1x A1-22")
+                .contains(&"A1-22".to_string())
+        );
+        assert_eq!(
+            jira_keys("UTF-8 SHA-256 ISO-8601 RFC-3339 abc-12 X-1 ABCDEFGHIJK-1 AB-1x"),
+            Vec::<String>::new()
+        );
+        assert_eq!(jira_keys("ABC-1 ABC-1"), ["ABC-1"]);
     }
 
     #[test]

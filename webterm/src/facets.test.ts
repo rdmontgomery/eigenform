@@ -2,7 +2,7 @@
 // Run: `node --test` (native TS via --experimental-strip-types in Node 22+).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { matchesFacets, parseQuery, type Facets } from "./facets.ts";
+import { matchesFacets, parseQuery, wordMatches, type Facets } from "./facets.ts";
 
 const APP: Facets = {
   work: ["repo:me/app", "branch:feat/Login", "pr:me/app#57", "issue:me/app#3"],
@@ -68,4 +68,31 @@ test("anything that isn't a facet stays a plain word", () => {
     [{ kind: "pr", repo: "app56", loose: false }],
     "pr:<repo> without # is any PR in that repo, not PR 56",
   );
+});
+
+test("Jira keys: ticket:, jira:, a whole project, and ~ for mentions", () => {
+  const f: Facets = {
+    work: ["branch:feat/ABC-12-tabs", "ticket:ABC-12", "ticket:ABC-34"],
+    mention: ["ticket:OPS-9"],
+  };
+  for (const q of ["ticket:ABC-12", "jira:abc-34", "ticket:abc", "~OPS-9", "~ticket:ops"]) {
+    assert.equal(hit(q, f), true, q);
+  }
+  for (const q of ["ticket:abc-1", "ticket:ops", "ticket:ab", "~XYZ-12"]) {
+    assert.equal(hit(q, f), false, q);
+  }
+});
+
+test("a bare key is a word: in the text, or a ticket the session worked on", () => {
+  const f: Facets = { work: ["ticket:ABC-12"], mention: ["ticket:OPS-9"] };
+  assert.deepEqual(parseQuery("ABC-12").words, ["abc-12"]);
+  assert.equal(wordMatches("abc-12", "some title", f), true);
+  assert.equal(wordMatches("ops-9", "some title", f), false, "a mention needs ~");
+  assert.equal(wordMatches("pty-7", "title\npty-7", undefined), true, "text still matches");
+  assert.equal(wordMatches("utf-8", "title", { work: ["ticket:UTF-8"], mention: [] }), false);
+});
+
+test("standards and encodings shaped like keys stay plain words", () => {
+  assert.deepEqual(parseQuery("utf-8 sha-256 iso-8601 x-1").words, ["utf-8", "sha-256", "iso-8601", "x-1"]);
+  assert.deepEqual(parseQuery("ticket:x-y").words, ["ticket:x-y"]);
 });

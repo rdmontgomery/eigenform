@@ -15,7 +15,7 @@
 
 import { el } from "./dom.ts";
 import { icon } from "./icons.ts";
-import { FACET_HELP, matchesFacets, parseQuery, type Facets } from "./facets.ts";
+import { FACET_HELP, matchesFacets, parseQuery, wordMatches, type Facets } from "./facets.ts";
 
 /** What search reads from a tab. */
 export interface TabSearchItem {
@@ -42,7 +42,7 @@ export function matchTabs(query: string, items: readonly TabSearchItem[]): strin
   items.forEach((it, idx) => {
     const label = it.label.toLowerCase();
     const hay = [label, it.cwd, it.uuid, it.ptyId].filter(Boolean).join("\n").toLowerCase();
-    if (!words.every((t) => hay.includes(t))) return;
+    if (!words.every((t) => wordMatches(t, hay, it.facets))) return;
     if (!matchesFacets(facets, it.facets)) return;
     hits.push({ id: it.id, labelHits: words.filter((t) => label.includes(t)).length, idx });
   });

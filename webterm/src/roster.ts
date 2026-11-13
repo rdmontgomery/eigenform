@@ -36,7 +36,7 @@
  *   own lastActivity.
  */
 
-import { matchesFacets, parseQuery, type Facets } from "./facets.ts";
+import { matchesFacets, parseQuery, wordMatches, type Facets } from "./facets.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -461,6 +461,6 @@ export function filterRows(rows: readonly RosterRow[], query: string): RosterRow
   const { words, facets } = parseQuery(query);
   return rows.filter((r) => {
     const hay = `${r.label}\n${r.cwdChip}`.toLowerCase();
-    return words.every((w) => hay.includes(w)) && matchesFacets(facets, r.facets);
+    return words.every((w) => wordMatches(w, hay, r.facets)) && matchesFacets(facets, r.facets);
   });
 }
