@@ -50,6 +50,7 @@ import {
   reconcileTabs,
   existingTab,
   reorderTabs,
+  cycleTabId,
   reconnectQuery,
   freshRestartQuery,
   reconnectDelay,
@@ -420,6 +421,22 @@ export function mountShell(appEl: HTMLElement): void {
     railView.render();
     syncWakeTitle();
   }
+
+  // Ctrl+Tab / Ctrl+Shift+Tab cycle the tab strip. Capture phase, so the focused
+  // terminal never sees the keystroke; ⌘ shortcuts are left to the browser.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Tab" || !e.ctrlKey || e.metaKey || e.altKey) return;
+      const next = cycleTabId(tabs.map((t) => t.id), activeTabId, e.shiftKey ? -1 : 1);
+      if (next === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (next !== activeTabId) activateTab(next);
+      activeTab()?.handle.term.focus();
+    },
+    true,
+  );
 
   function closeTab(id: string) {
     const idx = tabs.findIndex((t) => t.id === id);
