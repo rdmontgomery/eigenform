@@ -57,6 +57,7 @@ fn forest_rows(cfg: &Config) -> Vec<serde_json::Value> {
                         "peer": s.peer,
                         "cacheAt": s.cache.map(|c| c.at.to_rfc3339()),
                         "cacheTtl": s.cache.and_then(|c| c.ttl_secs),
+                        "lastPromptAt": s.last_prompt.map(|t| t.to_rfc3339()),
                     })
                 }),
         );
