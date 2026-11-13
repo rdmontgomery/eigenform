@@ -591,6 +591,16 @@ a.rail-feed-title:hover { text-decoration: underline; }
   padding: 0 3px;
   white-space: nowrap;
 }
+/* The name peers message this session by (`app-dd`), while it runs. */
+.rail-row-peer {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--tx-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 
 .rail-row-count {
   font-family: var(--font-mono);
