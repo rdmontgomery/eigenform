@@ -119,7 +119,14 @@ pub fn scan_dir(dir: &Path) -> Result<Vec<Skill>> {
             path: skill_path.clone(),
             source: e,
         })?;
-        let fm = parse_frontmatter(&body, &skill_path)?;
+        // One unreadable skill mustn't empty the whole inventory; Claude Code skips it too.
+        let fm = match parse_frontmatter(&body, &skill_path) {
+            Ok(fm) => fm,
+            Err(e) => {
+                eprintln!("eigenform: skipping skill: {e}");
+                continue;
+            }
+        };
         out.push(Skill {
             name: fm.name,
             description: fm.description,
@@ -446,6 +453,7 @@ fn layer_tag(l: &Layer) -> String {
 }
 
 fn parse_frontmatter(body: &str, path: &Path) -> Result<Frontmatter> {
+    let body = body.replace("\r\n", "\n");
     let rest = body
         .strip_prefix("---\n")
         .ok_or_else(|| Error::MissingFrontmatter {
@@ -456,8 +464,30 @@ fn parse_frontmatter(body: &str, path: &Path) -> Result<Frontmatter> {
         .ok_or_else(|| Error::MissingFrontmatter {
             path: path.to_path_buf(),
         })?;
-    serde_yaml::from_str(yaml).map_err(|e| Error::InvalidFrontmatter {
-        path: path.to_path_buf(),
-        source: e,
+    serde_yaml::from_str(yaml).or_else(|e| {
+        lenient_frontmatter(yaml).ok_or_else(|| Error::InvalidFrontmatter {
+            path: path.to_path_buf(),
+            source: e,
+        })
+    })
+}
+
+/// Claude Code accepts frontmatter that strict YAML rejects, most often a plain
+/// `description:` whose text contains `: `. Read the two top-level keys line by line.
+fn lenient_frontmatter(yaml: &str) -> Option<Frontmatter> {
+    let field = |key: &str| {
+        yaml.lines().find_map(|line| {
+            let value = line.strip_prefix(key)?.strip_prefix(':')?.trim();
+            let unquoted = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(value);
+            (!unquoted.is_empty()).then(|| unquoted.to_string())
+        })
+    };
+    Some(Frontmatter {
+        name: field("name")?,
+        description: field("description")?,
     })
 }

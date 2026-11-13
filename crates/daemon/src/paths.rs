@@ -2,9 +2,18 @@
 
 use std::path::{Path, PathBuf};
 
-/// Claude Code's project dir name for a cwd: `/` → `-` (e.g. `/home/me/p` → `-home-me-p`).
+/// Claude Code's project dir name for a cwd: every character outside `[A-Za-z0-9-]`
+/// becomes `-` (e.g. `/Users/a.b/my_repo` → `-Users-a-b-my-repo`).
 pub(crate) fn escaped_cwd(cwd: &str) -> String {
-    cwd.replace('/', "-")
+    cwd.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 /// Expand a leading `~` or `~/…` to `$HOME` — the launcher input comes from a browser,
@@ -52,6 +61,15 @@ pub(crate) fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escaped_cwd_matches_claude_codes_project_dir_names() {
+        assert_eq!(escaped_cwd("/home/me/p"), "-home-me-p");
+        assert_eq!(
+            escaped_cwd("/Users/rick.montgomery/src/dbt_snowflake/.bare"),
+            "-Users-rick-montgomery-src-dbt-snowflake--bare"
+        );
+    }
 
     #[test]
     fn normalize_path_resolves_dotdot() {
