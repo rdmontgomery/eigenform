@@ -288,6 +288,9 @@ pub struct LiveSession {
     pub headless: bool,
     /// The live process's pid, from its session claim. None for dead sessions.
     pub pid: Option<u32>,
+    /// The name Claude Code gives a live session for messaging its peers
+    /// (`app-dd`), from its session claim.
+    pub peer: Option<String>,
     /// When the prompt cache was last touched, for live sessions only — see [`CacheMark`].
     pub cache: Option<CacheMark>,
 }
@@ -668,6 +671,7 @@ pub fn live_forest_with(
             headless: claim_headless(claim)
                 || session_entrypoint(&r.path).is_some_and(|e| is_headless(&e)),
             pid: claim.map(|c| c.pid),
+            peer: claim.and_then(|c| c.name.clone()),
             cache: tail.as_ref().and_then(Tail::cache_mark),
         });
     }
@@ -686,6 +690,7 @@ pub fn live_forest_with(
             spark: Vec::new(),
             headless: claim_headless(Some(c)),
             pid: Some(c.pid),
+            peer: c.name.clone(),
             cache: None,
         });
     }
