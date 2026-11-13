@@ -10,7 +10,8 @@
  *
  * Follow vs pin: by default the pane follows the newest write. Picking an artifact
  * from the menu pins it; picking "follow newest" (or a session switch) unpins.
- * A pinned artifact that disappears from the list falls back to following.
+ * A pinned artifact that is deleted or leaves the list falls back to following.
+ * Deleted files stay in the menu, greyed out, so a vanished scratch file explains itself.
  *
  * Live: subscribes to the session's watch; when the shown file's mtime changes the
  * iframe reloads (cache-busted on mtime), so an agent iterating on a page is visible
@@ -60,12 +61,12 @@ export interface Selection {
 }
 
 /**
- * Which artifact to show. Rows arrive newest-write first. Pinned and still present →
+ * Which artifact to show. Rows arrive newest-write first. Pinned and still on disk →
  * keep it; otherwise follow the newest row that still exists on disk (falling back
  * to the newest row at all, so a deleted file still explains itself).
  */
 export function pickArtifact(rows: ArtifactRow[], sel: Selection): Selection {
-  if (sel.pinned && sel.path !== null && rows.some((r) => r.path === sel.path)) return sel;
+  if (sel.pinned && sel.path !== null && rows.some((r) => r.path === sel.path && r.mtime !== null)) return sel;
   const live = rows.find((r) => r.mtime !== null) ?? rows[0];
   return { path: live ? live.path : null, pinned: false };
 }
@@ -76,10 +77,21 @@ export function artifactSrc(row: ArtifactRow): string {
   return `${row.url}${row.url.includes("?") ? "&" : "?"}v=${v}`;
 }
 
-/** Short menu label: file name, plus who wrote it when it wasn't the session. */
+/** Short menu label: file name, plus who wrote it when it wasn't the session, and whether it's gone. */
 export function artifactLabel(row: ArtifactRow): string {
   const name = row.name ?? row.path.split("/").pop() ?? row.path;
-  return row.by === "session" ? name : `${name} · ${row.by}`;
+  const label = row.by === "session" ? name : `${name} · ${row.by}`;
+  return row.mtime === null ? `${label} · deleted` : label;
+}
+
+/**
+ * What the menu's options depend on. The pane re-renders on every transcript write,
+ * several times a second while an agent works; rebuilding the <select> each time
+ * closes it under the cursor and drops the pick, so options are rebuilt only when this
+ * changes.
+ */
+export function pickerSignature(rows: ArtifactRow[]): string {
+  return JSON.stringify(rows.map((r) => [r.path, artifactLabel(r)]));
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +146,7 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
   let rows: ArtifactRow[] = [];
   let sel: Selection = { path: null, pinned: false };
   let shownSrc: string | null = null;
+  let shownOptions: string | null = null;
   let unsubscribe: (() => void) | null = null;
   let seq = 0;
   let annotating = false;
@@ -203,19 +216,25 @@ export function mountArtifactPane(host: HTMLElement, opts: ArtifactPaneOpts): Ar
     sel = pickArtifact(rows, sel);
     const row = rows.find((r) => r.path === sel.path) ?? null;
 
-    picker.innerHTML = "";
-    const follow = el("option");
-    follow.value = FOLLOW;
-    follow.textContent = "follow newest";
-    picker.append(follow);
-    for (const r of rows) {
-      const o = el("option");
-      o.value = r.path;
-      o.textContent = artifactLabel(r);
-      o.title = r.path;
-      picker.append(o);
+    const signature = pickerSignature(rows);
+    if (signature !== shownOptions) {
+      shownOptions = signature;
+      picker.innerHTML = "";
+      const follow = el("option");
+      follow.value = FOLLOW;
+      follow.textContent = "follow newest";
+      picker.append(follow);
+      for (const r of rows) {
+        const o = el("option");
+        o.value = r.path;
+        o.textContent = artifactLabel(r);
+        o.title = r.path;
+        o.disabled = r.mtime === null;
+        picker.append(o);
+      }
     }
-    picker.value = sel.pinned && row ? row.path : FOLLOW;
+    const value = sel.pinned && row ? row.path : FOLLOW;
+    if (picker.value !== value) picker.value = value;
     picker.disabled = rows.length === 0;
 
     head.style.display = rows.length === 0 ? "none" : "";

@@ -117,3 +117,35 @@ fn scan_ignores_random_non_skill_files_and_dirs() {
 
     assert_eq!(names, vec!["real"]);
 }
+
+/// Claude Code loads a plain description containing `: `, which strict YAML rejects.
+#[test]
+fn scan_reads_a_description_strict_yaml_rejects() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("review.md"),
+        "---\nname: review\ndescription: A second look, by a reviewer who never saw it written: a doc or a plan.\n---\n",
+    )
+    .unwrap();
+    let found = eigenform_skills::scan_dir(dir.path()).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found[0].description,
+        "A second look, by a reviewer who never saw it written: a doc or a plan."
+    );
+}
+
+/// One unreadable skill is skipped; the rest of the inventory still loads.
+#[test]
+fn scan_skips_a_skill_without_frontmatter() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("broken.md"), "no frontmatter here\n").unwrap();
+    fs::write(
+        dir.path().join("fine.md"),
+        "---\r\nname: fine\r\ndescription: ok\r\n---\r\n",
+    )
+    .unwrap();
+    let found = eigenform_skills::scan_dir(dir.path()).unwrap();
+    let names: Vec<_> = found.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["fine"]);
+}

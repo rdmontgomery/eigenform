@@ -193,7 +193,9 @@ mod tests {
             .open(&path)
             .unwrap();
         f.write_all(b"more\n").unwrap();
-        f.flush().unwrap();
+        // Close it, as Claude Code does after each append: FSEvents (macOS) reports a
+        // write to a file that stays open only once it's closed.
+        drop(f);
 
         assert!(
             recv_within(&mut rx, Duration::from_secs(2)),

@@ -115,7 +115,18 @@ async fn spawns_claude_headless_with_the_prompt_and_lists_it() {
 
     // The fresh-session watcher still adopts the uuid. Keep writing new transcripts in
     // case the first lands before the watcher took its baseline.
-    let pdir: PathBuf = projects.path().join(cwd.replace('/', "-"));
+    // Claude Code's project dir name: every character outside [A-Za-z0-9-] becomes `-`.
+    let escaped: String = cwd
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let pdir: PathBuf = projects.path().join(escaped);
     std::fs::create_dir_all(&pdir).unwrap();
     let mut written = Vec::new();
     let mut adopted = None;
