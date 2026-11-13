@@ -323,6 +323,17 @@ export function reorderTabs(
 }
 
 /**
+ * The tab Ctrl+Tab (step 1) or Ctrl+Shift+Tab (step -1) moves to: the neighbour in strip
+ * order, wrapping at either end. No active tab starts from the first; null with no tabs.
+ */
+export function cycleTabId(ids: string[], activeId: string | null, step: 1 | -1): string | null {
+  if (ids.length === 0) return null;
+  const at = activeId === null ? -1 : ids.indexOf(activeId);
+  if (at < 0) return ids[0]!;
+  return ids[(at + step + ids.length) % ids.length]!;
+}
+
+/**
  * Pick the `/pty` query that re-opens a single dropped socket, or null if the
  * tab is unrecoverable. This is the single-tab analogue of {@link reconcileTabs}:
  * the reconnect loop reconciles ONE descriptor against the freshly-fetched live
