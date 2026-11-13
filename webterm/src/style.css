@@ -762,11 +762,12 @@ a.rail-feed-title:hover { text-decoration: underline; }
   user-select: none;
   /* Uniform, self-distributing tabs. flex-basis 0 makes every tab claim an
      equal share of the overstory, so widths stay even instead of tracking each
-     label's length; min-width keeps a tab readable before the overstory scrolls,
-     max-width stops a lone tab from sprawling. The active tab gets more room
-     below so the label you're actually working in stays legible. */
+     label's length; min-width keeps about eight characters of the label beside
+     the dot and cache clock before the overstory scrolls, max-width stops a
+     lone tab from sprawling. The active tab gets more room below, since its
+     snooze and close buttons are showing. */
   flex: 1 1 0;
-  min-width: 108px;
+  min-width: 132px;
   max-width: 200px;
   background: transparent;
   border-right: 1px solid var(--line);
@@ -782,6 +783,7 @@ a.rail-feed-title:hover { text-decoration: underline; }
   background: var(--term-bg);
   border-top-color: var(--tab-ink, var(--accent));
   color: oklch(0.91 0.018 75);   /* cream — the tab joins the dark page in both themes */
+  min-width: 196px;
   max-width: 260px;              /* give the tab in focus room to show its full label */
 }
 .tab--dead { opacity: 0.55; }
@@ -891,19 +893,18 @@ a.rail-feed-title:hover { text-decoration: underline; }
   cursor: pointer;
   color: var(--tx-3);
   width: 18px; height: 18px;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 5px;
   flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.12s;
+  /* Hidden, not transparent: an invisible button still takes the label's room. */
+  display: none;
   font-size: 11px;
   line-height: 1;
   padding: 0;
 }
 .tab:hover .tab-snooze, .tab:hover .tab-close,
-.tab--active .tab-snooze, .tab--active .tab-close { opacity: 1; }
+.tab--active .tab-snooze, .tab--active .tab-close { display: inline-flex; }
 .tab-snooze:hover { color: var(--accent); background: var(--raised-2); }
 
 /* A snoozed tab that just woke: pulses its ink until it is looked at. */
