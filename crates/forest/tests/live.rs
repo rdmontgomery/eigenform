@@ -198,6 +198,50 @@ fn cache_clock_is_the_last_real_assistant_row_with_its_ttl() {
     assert_eq!(by("ccc").cache, None, "dead sessions carry no clock");
 }
 
+#[test]
+fn last_prompt_is_the_persons_even_past_the_tail_window() {
+    let (proj, sess, state) = fixture();
+    let pdir = proj.path().join("-home-me-p");
+    let mut rows = vec![
+        r#"{"type":"user","timestamp":"2026-06-06T08:00:00Z","sessionId":"ddd","cwd":"/home/me/p","message":{"role":"user","content":"an earlier prompt"}}"#.to_string(),
+        r#"{"type":"user","timestamp":"2026-06-06T09:00:00Z","message":{"role":"user","content":[{"type":"text","text":"the prompt"}]}}"#.to_string(),
+        r#"{"type":"user","timestamp":"2026-06-06T09:00:30Z","isMeta":true,"message":{"role":"user","content":"Another Claude session sent a message"}}"#.to_string(),
+    ];
+    // Over 64 KiB of tool rounds after it, each a tool result the person never typed.
+    let output = "x".repeat(4096);
+    for n in 0..40 {
+        rows.push(format!(
+            r#"{{"type":"assistant","timestamp":"2026-06-06T09:{:02}:00Z","message":{{"model":"claude-x","usage":{{"output_tokens":1}}}}}}"#,
+            n + 1
+        ));
+        rows.push(format!(
+            r#"{{"type":"user","timestamp":"2026-06-06T09:{:02}:01Z","message":{{"role":"user","content":[{{"type":"tool_result","content":"{output}"}}]}}}}"#,
+            n + 1
+        ));
+    }
+    std::fs::write(pdir.join("ddd.jsonl"), rows.join("\n") + "\n").unwrap();
+    std::fs::write(sess.path().join("44.json"), sfile(44, "ddd")).unwrap();
+
+    let alive = |pid: u32| pid == 42 || pid == 44;
+    let got = live_forest_with(proj.path(), sess.path(), state.path(), now(), alive);
+    let by = |u: &str| got.iter().find(|s| s.uuid == u).unwrap();
+
+    let ddd = by("ddd")
+        .last_prompt
+        .expect("the prompt sits before the tool rounds");
+    assert_eq!(ddd.to_rfc3339(), "2026-06-06T09:00:00+00:00");
+    assert_eq!(
+        by("aaa").last_prompt,
+        None,
+        "a user row with no content is not a prompt"
+    );
+    assert_eq!(
+        by("ccc").last_prompt,
+        None,
+        "dead sessions carry no prompt time"
+    );
+}
+
 /// Claude Code on macOS records `procStart` as `ps -o lstart` in UTC; ours must read the same.
 #[cfg(target_os = "macos")]
 #[test]
