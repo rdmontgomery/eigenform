@@ -10,5 +10,8 @@ thiserror      = { workspace = true }
 chrono         = { workspace = true }
 eigenform-projects = { path = "../projects" }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = { workspace = true }
