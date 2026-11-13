@@ -1,13 +1,13 @@
 /**
- * tab-search.ts — find a tab in the horizontal strip by typing.
+ * tab-search.ts — find a tab in the overstory (the session tabs along the top) by typing.
  *
- * ⌘/Ctrl+Shift+F (or the magnifier at the strip's left edge) opens a filter box.
+ * ⌘/Ctrl+Shift+F (or the magnifier at the overstory's left edge) opens a filter box.
  * Every tab whose title, launch dir, session uuid or pty id contains all the
  * query's whitespace-separated terms is highlighted; the rest dim. The selected
  * match carries a stronger ring and is scrolled into view. ↓/↑ (or Tab/⇧Tab)
  * cycle the selection, Enter jumps to it and closes the box, Esc closes.
  *
- * The strip itself still belongs to shell.ts: it rebuilds tabs from the model
+ * The overstory itself still belongs to shell.ts: it rebuilds tabs from the model
  * and asks `classFor(id)` for each one, so search state survives rebuilds.
  * `matchTabs` is pure and tested in tab-search.test.ts.
  */
@@ -28,7 +28,7 @@ export interface TabSearchItem {
  * Ids of the items matching `query`, best first. Case-insensitive; every term
  * must be a substring of the item's label, cwd, uuid or ptyId. Items with more
  * terms found in the label rank first (the title is what you're scanning for);
- * ties keep strip order. A blank query matches nothing — "not searching".
+ * ties keep overstory order. A blank query matches nothing — "not searching".
  */
 export function matchTabs(query: string, items: readonly TabSearchItem[]): string[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -45,14 +45,14 @@ export function matchTabs(query: string, items: readonly TabSearchItem[]): strin
 }
 
 export interface TabSearch {
-  /** Toggle button + filter box; mount at the strip's left edge. */
+  /** Toggle button + filter box; mount at the overstory's left edge. */
   el: HTMLElement;
   open(): void;
   close(): void;
   isOpen(): boolean;
   /** Extra classes for a tab while searching, or [] when idle. */
   classFor(id: string): string[];
-  /** Recompute matches against the current tabs (call before rebuilding the strip). */
+  /** Recompute matches against the current tabs (call before rebuilding the overstory). */
   sync(): void;
 }
 
@@ -60,7 +60,7 @@ export function mountTabSearch(opts: {
   items: () => TabSearchItem[];
   /** Jump to a tab. */
   activate: (id: string) => void;
-  /** Search state changed — rebuild the strip. */
+  /** Search state changed — rebuild the overstory. */
   onChange: () => void;
   /** Box closed — hand focus back (the terminal). */
   onClose: () => void;

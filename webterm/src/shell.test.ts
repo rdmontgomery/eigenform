@@ -9,6 +9,7 @@ import {
   reconcileTabs,
   existingTab,
   reorderTabs,
+  cycleTabId,
   reconnectQuery,
   freshRestartQuery,
   reconnectDelay,
@@ -420,7 +421,7 @@ test("reconcileTabs: tab with uuid only and matching pty exists → attach using
 });
 
 // ---------------------------------------------------------------------------
-// reorderTabs — drag-to-reorder the tab strip
+// reorderTabs — drag-to-reorder the overstory
 // ---------------------------------------------------------------------------
 
 test("reorderTabs: drop before target moves dragged id ahead of it", () => {
@@ -458,7 +459,7 @@ test("reorderTabs: unknown targetId is a no-op (same reference)", () => {
   assert.equal(reorderTabs(ids, "a", "ghost", true), ids);
 });
 
-test("reorderTabs: single-tab strip is unchanged", () => {
+test("reorderTabs: single-tab overstory is unchanged", () => {
   const ids = ["a"];
   assert.deepEqual(reorderTabs(ids, "a", null, false), ["a"]);
 });
@@ -520,4 +521,18 @@ test("freshRestartQuery: an unresolvable claude session restarts empty in its cw
   // A terminal never resumes, and without a cwd there's nowhere to restart.
   assert.equal(freshRestartQuery({ ...desc, kind: "terminal" }, "session could not be resolved"), null);
   assert.equal(freshRestartQuery({ uuid: "u1", label: "x" }, "session could not be resolved"), null);
+});
+
+test("cycleTabId: steps through the overstory and wraps at both ends", () => {
+  const ids = ["a", "b", "c"];
+  assert.equal(cycleTabId(ids, "a", 1), "b");
+  assert.equal(cycleTabId(ids, "c", 1), "a");
+  assert.equal(cycleTabId(ids, "a", -1), "c");
+  assert.equal(cycleTabId(ids, "b", -1), "a");
+});
+
+test("cycleTabId: starts from the first tab without an active one, and is null with no tabs", () => {
+  assert.equal(cycleTabId(["a", "b"], null, 1), "a");
+  assert.equal(cycleTabId(["a", "b"], "gone", -1), "a");
+  assert.equal(cycleTabId([], "a", 1), null);
 });

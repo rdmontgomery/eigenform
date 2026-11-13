@@ -741,7 +741,7 @@ a.rail-feed-title:hover { text-decoration: underline; }
   border-bottom: 1px solid var(--line);
 }
 
-.tab-strip {
+.overstory {
   display: flex;
   align-items: stretch;
   overflow-x: auto;
@@ -750,7 +750,7 @@ a.rail-feed-title:hover { text-decoration: underline; }
   min-width: 0;
   scrollbar-width: none;          /* tabs scroll, but no visible bar in 40px */
 }
-.tab-strip::-webkit-scrollbar { display: none; }
+.overstory::-webkit-scrollbar { display: none; }
 
 .tab {
   position: relative;
@@ -761,8 +761,8 @@ a.rail-feed-title:hover { text-decoration: underline; }
   cursor: pointer;
   user-select: none;
   /* Uniform, self-distributing tabs. flex-basis 0 makes every tab claim an
-     equal share of the strip, so widths stay even instead of tracking each
-     label's length; min-width keeps a tab readable before the strip scrolls,
+     equal share of the overstory, so widths stay even instead of tracking each
+     label's length; min-width keeps a tab readable before the overstory scrolls,
      max-width stops a lone tab from sprawling. The active tab gets more room
      below so the label you're actually working in stays legible. */
   flex: 1 1 0;

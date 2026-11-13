@@ -85,7 +85,7 @@ after(async () => {
 });
 
 /** Each tab's label with its search state: "+" match, "*" selected match, "-" dimmed, " " idle. */
-function strip(): Promise<string[]> {
+function overstory(): Promise<string[]> {
   return page.$$eval(".tab", (tabs) =>
     tabs.map((t) => {
       const mark = t.classList.contains("tab--match-sel")
@@ -105,26 +105,26 @@ const activeLabel = () => page.$eval(".tab--active .tab-label", (e) => e.textCon
 test("shortcut opens the filter; typing highlights matches and dims the rest", async () => {
   await page.keyboard.press("Control+Shift+F");
   await page.waitForSelector(".tab-search--open .tab-search-input:focus");
-  assert.deepEqual(await strip(), [" status line", " journal", " forest recency"]);
+  assert.deepEqual(await overstory(), [" status line", " journal", " forest recency"]);
 
   await page.keyboard.type("eigenform");
-  assert.deepEqual(await strip(), ["*status line", "-journal", "+forest recency"]);
+  assert.deepEqual(await overstory(), ["*status line", "-journal", "+forest recency"]);
   assert.equal(await page.textContent(".tab-search-count"), "1/2");
 });
 
 test("arrow moves the selection, Enter jumps to it and closes the filter", async () => {
   await page.keyboard.press("ArrowDown");
-  assert.deepEqual(await strip(), ["+status line", "-journal", "*forest recency"]);
+  assert.deepEqual(await overstory(), ["+status line", "-journal", "*forest recency"]);
   await page.keyboard.press("Enter");
   assert.equal(await activeLabel(), "forest recency");
   assert.equal(await page.$(".tab-search--open"), null);
-  assert.deepEqual(await strip(), [" status line", " journal", " forest recency"]);
+  assert.deepEqual(await overstory(), [" status line", " journal", " forest recency"]);
 });
 
 test("no match flags the box; Esc closes without switching tabs", async () => {
   await page.click(".tab-search-btn");
   await page.keyboard.type("zzz");
-  assert.deepEqual(await strip(), ["-status line", "-journal", "-forest recency"]);
+  assert.deepEqual(await overstory(), ["-status line", "-journal", "-forest recency"]);
   assert.ok(await page.$(".tab-search--miss"));
   await page.keyboard.press("Escape");
   assert.equal(await page.$(".tab-search--open"), null);
