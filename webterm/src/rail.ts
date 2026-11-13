@@ -376,6 +376,12 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
       engine.title = "OpenAI Codex CLI thread — opens with `codex resume`";
       meta.append(engine);
     }
+    if (row.peer) {
+      const peer = el("span", "rail-row-peer");
+      peer.textContent = row.peer;
+      peer.title = "The name other Claude sessions use to message this one";
+      meta.append(peer);
+    }
     if (row.msgCount !== undefined) {
       const count = el("span", "rail-row-count");
       count.textContent = `~${row.msgCount}`;

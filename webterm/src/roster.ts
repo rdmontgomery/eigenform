@@ -113,6 +113,8 @@ export interface RosterRow {
   headless?: true;
   /** Present ("codex") for a Codex CLI thread; absent for Claude sessions. */
   engine?: "codex";
+  /** The name other Claude sessions message this one by, while it runs. */
+  peer?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +305,7 @@ export function buildRoster(
     let sparkCount: number | null = null;
     let headless = false;
     let engine: "codex" | undefined;
+    let peer: string | null | undefined;
     if (resolvedUuid !== null) {
       const fi = forestByUuid.get(resolvedUuid);
       if (fi) {
@@ -311,6 +314,7 @@ export function buildRoster(
         sparkCount = fi.spark.length;
         headless = fi.headless === true;
         engine = fi.engine;
+        peer = fi.peer;
         mergedForestUuids.add(resolvedUuid);
       }
     }
@@ -358,6 +362,9 @@ export function buildRoster(
     if (engine) {
       row.engine = engine;
     }
+    if (peer) {
+      row.peer = peer;
+    }
 
     liveRows.push(row);
   }
@@ -398,6 +405,7 @@ export function buildRoster(
     };
     if (fi.headless) row.headless = true;
     if (fi.engine) row.engine = fi.engine;
+    if (fi.peer) row.peer = fi.peer;
     diskRows.push(row);
   }
 

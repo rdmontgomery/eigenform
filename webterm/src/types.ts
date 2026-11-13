@@ -54,6 +54,8 @@ export interface ForestItem {
   /** The live process's pid; null for dead sessions. For a Codex thread, the pid
    *  holding its writer lock. */
   pid?: number | null;
+  /** Live Claude sessions: the name peers message it by (`app-dd`). */
+  peer?: string | null;
   /** Present ("codex") for an OpenAI Codex CLI thread; absent for Claude sessions. */
   engine?: "codex";
   /** Live Claude sessions only: the last real assistant row's timestamp — when the

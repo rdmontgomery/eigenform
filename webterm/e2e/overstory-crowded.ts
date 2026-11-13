@@ -45,6 +45,7 @@ const FOREST = PTYS.map((p, n) => ({
   spark: [],
   cacheAt: new Date(now - 55 * 60_000).toISOString(),
   cacheTtl: 3600,
+  peer: `repo-${n}-ab`,
 }));
 
 let dir: string;
@@ -106,9 +107,17 @@ test("every tab in a crowded overstory still shows part of its name", async () =
   assert.deepEqual(narrow, [], `label widths: ${widths.map((w) => Math.round(w)).join(", ")}`);
 });
 
-test("each tab names its session on hover", async () => {
+test("each tab names its session and its peer name on hover", async () => {
   const titles = await page.$$eval(".tab", (tabs) => tabs.map((t) => (t as HTMLElement).title));
-  assert.ok(titles.every((t, n) => t.includes(`session number ${n}`)), titles.join(" | "));
+  assert.ok(
+    titles.every((t, n) => t.includes(`session number ${n}`) && t.includes(`repo-${n}-ab`)),
+    titles.join(" | "),
+  );
+});
+
+test("a live session's tab shows the name its peers message it by", async () => {
+  const subs = await page.$$eval(".tab .tab-sub", (s) => s.map((e) => e.textContent));
+  assert.deepEqual(subs, Array.from({ length: COUNT }, (_, n) => `repo-${n}-ab`));
 });
 
 test("the active tab is scrolled into view", async () => {
