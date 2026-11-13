@@ -1,6 +1,6 @@
 /**
  * shell.ts — the composition root: skeleton DOM, the tab registry, pty
- * connect/reconnect, the tab strip + terminal header, and boot. Each surface
+ * connect/reconnect, the overstory (the session tabs) + terminal header, and boot. Each surface
  * with its own state lives in its own module and talks back through callbacks:
  *
  *   rail.ts        session roster: search, age groups, selection + preview, rename
@@ -8,7 +8,7 @@
  *   rail-feeds.ts  the rail's Needs you section (local feeds)
  *   dock.ts        inspect dock: reach map + transcript + events, splitters
  *   appearance.ts  color scheme + terminal font, their popovers, ⌘ zoom keys
- *   status.ts      status-dot / ink presentation shared by rail + tab strip
+ *   status.ts      status-dot / ink presentation shared by rail + overstory
  *   snooze-ui.ts   tab snooze menu + snoozed-tabs shelf (snooze.ts: pure helpers)
  *
  * Layout (eigenform warm-ink design, Claude Design handoff 2026-06-12):
@@ -50,6 +50,7 @@ import {
   reconcileTabs,
   existingTab,
   reorderTabs,
+  cycleTabId,
   reconnectQuery,
   freshRestartQuery,
   reconnectDelay,
@@ -204,24 +205,24 @@ export function mountShell(appEl: HTMLElement): void {
   const railBtnIcon = icon("panel", 16);
   railBtnIcon.style.transform = "scaleX(-1)"; // left-panel reading of the icon
   railBtn.append(railBtnIcon);
-  const tabStrip = el("div", "tab-strip");
-  // Drop on the strip's empty background (past the last tab) — append the
-  // dragged tab at the end. Per-tab drop handlers (in renderTabStrip) target
-  // e.target === a .tab element, so this only fires on the bare strip.
-  tabStrip.addEventListener("dragover", (e) => {
-    if (!dragTabId || e.target !== tabStrip) return;
+  const overstory = el("div", "overstory");
+  // Drop on the overstory's empty background (past the last tab) — append the
+  // dragged tab at the end. Per-tab drop handlers (in renderOverstory) target
+  // e.target === a .tab element, so this only fires on the bare overstory.
+  overstory.addEventListener("dragover", (e) => {
+    if (!dragTabId || e.target !== overstory) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
   });
-  tabStrip.addEventListener("drop", (e) => {
-    if (e.target !== tabStrip) return;
+  overstory.addEventListener("drop", (e) => {
+    if (e.target !== overstory) return;
     e.preventDefault();
     const draggedId = dragTabId;
     dragTabId = null;
     if (!draggedId) return;
     applyTabOrder(reorderTabs(tabs.map((x) => x.id), draggedId, null, false));
     saveTabs();
-    renderTabStrip();
+    renderOverstory();
   });
   const controls = el("div", "topbar-controls");
   // Find-a-tab filter (see tab-search.ts): highlights matches, dims the rest.
@@ -235,10 +236,10 @@ export function mountShell(appEl: HTMLElement): void {
         ptyId: t.descriptor.ptyId,
       })),
     activate: (id) => activateTab(id),
-    onChange: () => renderTabStrip(),
+    onChange: () => renderOverstory(),
     onClose: () => activeTab()?.handle.term.focus(),
   });
-  topbar.append(railBtn, tabSearch.el, tabStrip, controls);
+  topbar.append(railBtn, tabSearch.el, overstory, controls);
 
   const termArea = el("div", "term-area");
   const termHeader = el("div", "term-header");
@@ -414,12 +415,28 @@ export function mountShell(appEl: HTMLElement): void {
         });
       }
     }
-    renderTabStrip();
+    renderOverstory();
     renderTermHeader();
     syncDock();
     railView.render();
     syncWakeTitle();
   }
+
+  // Ctrl+Tab / Ctrl+Shift+Tab cycle the overstory. Capture phase, so the focused
+  // terminal never sees the keystroke; ⌘ shortcuts are left to the browser.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Tab" || !e.ctrlKey || e.metaKey || e.altKey) return;
+      const next = cycleTabId(tabs.map((t) => t.id), activeTabId, e.shiftKey ? -1 : 1);
+      if (next === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (next !== activeTabId) activateTab(next);
+      activeTab()?.handle.term.focus();
+    },
+    true,
+  );
 
   function closeTab(id: string) {
     const idx = tabs.findIndex((t) => t.id === id);
@@ -449,7 +466,7 @@ export function mountShell(appEl: HTMLElement): void {
         return;
       }
     }
-    renderTabStrip();
+    renderOverstory();
     renderTermHeader();
     syncDock();
     railView.render();
@@ -636,13 +653,13 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
-  // Tab strip
+  // Overstory: the session tabs along the top, above the forest in the rail
   // ------------------------------------------------------------------
 
-  // The tab strip is fully rebuilt on every renderTabStrip call; appearance is
+  // The overstory is fully rebuilt on every renderOverstory call; appearance is
   // derived from the model (TabEntry), so rebuilds carry no stale-DOM risk.
-  function renderTabStrip() {
-    tabStrip.innerHTML = "";
+  function renderOverstory() {
+    overstory.innerHTML = "";
     tabSearch.sync();
     for (const t of tabs) {
       const tab = el("div", "tab");
@@ -671,7 +688,7 @@ export function mountShell(appEl: HTMLElement): void {
       tab.addEventListener("dragend", () => {
         dragTabId = null;
         tab.classList.remove("tab--dragging");
-        for (const el of tabStrip.querySelectorAll(".tab--drag-before, .tab--drag-after")) {
+        for (const el of overstory.querySelectorAll(".tab--drag-before, .tab--drag-after")) {
           el.classList.remove("tab--drag-before", "tab--drag-after");
         }
       });
@@ -696,7 +713,7 @@ export function mountShell(appEl: HTMLElement): void {
         if (!draggedId) return;
         applyTabOrder(reorderTabs(tabs.map((x) => x.id), draggedId, t.id, before));
         saveTabs();
-        renderTabStrip();
+        renderOverstory();
       });
 
       // Tabs are always eigenform-spawned (you can only open a tab on an
@@ -762,14 +779,14 @@ export function mountShell(appEl: HTMLElement): void {
       }
       tab.append(snooze, close);
       tab.addEventListener("click", () => activateTab(t.id));
-      tabStrip.append(tab);
+      overstory.append(tab);
     }
 
     const plusBtn = el("button", "tab-new");
     plusBtn.title = "Open new session (fuzzy launcher)";
     plusBtn.append(icon("plus", 16));
     plusBtn.addEventListener("click", () => openPicker(plusBtn));
-    tabStrip.append(plusBtn);
+    overstory.append(plusBtn);
   }
 
   // ------------------------------------------------------------------
@@ -872,7 +889,7 @@ export function mountShell(appEl: HTMLElement): void {
     saveTabs();
     if (background) {
       termEl.style.display = "none";
-      renderTabStrip();
+      renderOverstory();
       return entry;
     }
     activateTab(entry.id);
@@ -943,13 +960,13 @@ export function mountShell(appEl: HTMLElement): void {
           entry.id = id;
         }
         saveTabs();
-        renderTabStrip();
+        renderOverstory();
         if (entry.id === activeTabId) renderTermHeader();
       },
       onSessionUuid(uuid) {
         entry.descriptor = { ...entry.descriptor, uuid };
         saveTabs();
-        renderTabStrip();
+        renderOverstory();
         // The active tab just gained a transcript — swap the placeholder out.
         if (entry.id === activeTabId) {
           syncDock();
@@ -961,7 +978,7 @@ export function mountShell(appEl: HTMLElement): void {
         clearReconnect(entry);
         entry.state = "exited";
         entry.dead = true;
-        renderTabStrip();
+        renderOverstory();
         if (entry.id === activeTabId) renderTermHeader();
       },
       onClose(reason) {
@@ -997,7 +1014,7 @@ export function mountShell(appEl: HTMLElement): void {
           clearReconnect(entry);
           entry.dead = true;
           entry.descriptor = { ...entry.descriptor, label: `✗ ${reason}` };
-          renderTabStrip();
+          renderOverstory();
           if (entry.id === activeTabId) renderTermHeader();
         }
       },
@@ -1029,7 +1046,7 @@ export function mountShell(appEl: HTMLElement): void {
     entry.reconnecting = true;
     entry.dead = false;
     entry.state = "reconnecting";
-    renderTabStrip();
+    renderOverstory();
     if (entry.id === activeTabId) renderTermHeader();
 
     const delay = reconnectDelay(entry.reconnectAttempt);
@@ -1044,7 +1061,7 @@ export function mountShell(appEl: HTMLElement): void {
     entry.reconnectAttempt = 0;
     entry.dead = true;
     entry.state = "exited";
-    renderTabStrip();
+    renderOverstory();
     if (entry.id === activeTabId) renderTermHeader();
   }
 
@@ -1085,7 +1102,7 @@ export function mountShell(appEl: HTMLElement): void {
   }
 
   // ------------------------------------------------------------------
-  // Picker — overlay triggered by the "+" buttons (rail brand + tab strip)
+  // Picker — overlay triggered by the "+" buttons (rail brand + overstory)
   // ------------------------------------------------------------------
 
   /** Currently-mounted picker teardown handle (null when picker is closed). */
@@ -1263,7 +1280,7 @@ export function mountShell(appEl: HTMLElement): void {
         }
         if (changed) saveTabs();
       }
-      renderTabStrip();
+      renderOverstory();
       renderTermHeader();
       // A newly-adopted uuid on the active tab means the dock can now mount.
       syncDock();
@@ -1370,7 +1387,7 @@ export function mountShell(appEl: HTMLElement): void {
     }
     if (!focus && entry.id !== activeTabId) {
       entry.woke = true;
-      renderTabStrip();
+      renderOverstory();
     }
     syncWakeTitle();
   }
@@ -1397,7 +1414,7 @@ export function mountShell(appEl: HTMLElement): void {
 
   async function boot() {
     railView.render();
-    renderTabStrip();
+    renderOverstory();
     renderControls();
     renderTermHeader();
 
@@ -1426,11 +1443,11 @@ export function mountShell(appEl: HTMLElement): void {
       localStorage.removeItem(LS_KEY);
     }
 
-    renderTabStrip();
+    renderOverstory();
     renderTermHeader();
     syncDock();
     // After restore, so a snooze that came due while the page was closed wakes
-    // into the restored strip (and finds its tab if it was reopened by hand).
+    // into the restored overstory (and finds its tab if it was reopened by hand).
     void refreshSnoozes();
   }
 
