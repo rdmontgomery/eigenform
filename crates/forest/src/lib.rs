@@ -303,20 +303,79 @@ pub struct CacheMark {
     pub ttl_secs: Option<u32>,
 }
 
-/// Is a process alive? `/proc/<pid>` on Linux/WSL (this project's target).
+/// Is a process alive? `/proc/<pid>` on Linux; `kill(pid, 0)` elsewhere on Unix, where
+/// EPERM still means the process exists (it belongs to another user).
+#[cfg(target_os = "linux")]
 pub fn is_pid_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
 
-/// A process's start time (clock ticks since boot, `/proc/<pid>/stat` field 22) — the
-/// value Claude Code records as `procStart` in its session claim. None off-Linux or when
-/// the process is gone.
+#[cfg(all(unix, not(target_os = "linux")))]
+pub fn is_pid_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 performs only the existence and permission checks.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+pub fn is_pid_alive(_pid: u32) -> bool {
+    false
+}
+
+/// A process's start time in the form Claude Code records as `procStart` in its session
+/// claim. None when the process is gone or the platform isn't supported.
+///
+/// Linux: clock ticks since boot, `/proc/<pid>/stat` field 22.
+#[cfg(target_os = "linux")]
 pub fn proc_start_of(pid: u32) -> Option<String> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // `comm` (field 2) is parenthesised and may contain spaces; fields resume after the
     // last ')' at field 3, so starttime (22) is the 20th token of the remainder.
     let rest = &stat[stat.rfind(')')? + 1..];
     rest.split_whitespace().nth(19).map(str::to_string)
+}
+
+/// macOS: `ps -o lstart` in UTC (`Wed Nov 11 16:24:43 2026`), read from the kernel's
+/// process info instead of spawning `ps`.
+#[cfg(target_os = "macos")]
+pub fn proc_start_of(pid: u32) -> Option<String> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: `info` is a properly sized, writable proc_bsdinfo for PROC_PIDTBSDINFO.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    if n != size {
+        return None;
+    }
+    let secs = i64::try_from(info.pbi_start_tvsec).ok()?;
+    let start = DateTime::<Utc>::from_timestamp(secs, 0)?;
+    Some(start.format("%a %b %e %H:%M:%S %Y").to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn proc_start_of(_pid: u32) -> Option<String> {
+    None
+}
+
+/// `ps` pads a one-digit day with a second space; compare start times word by word.
+fn same_start(a: &str, b: &str) -> bool {
+    a.split_whitespace().eq(b.split_whitespace())
 }
 
 /// Is this entrypoint a non-interactive launch? `claude -p` writes `sdk-cli`; the Agent
@@ -404,7 +463,9 @@ pub fn read_claims_with(
             ClaimHealth::Dead
         } else {
             match (str_of(&v, "procStart"), start_of(pid)) {
-                (Some(claimed), Some(actual)) if claimed != actual => ClaimHealth::Reused,
+                (Some(claimed), Some(actual)) if !same_start(&claimed, &actual) => {
+                    ClaimHealth::Reused
+                }
                 _ => ClaimHealth::Alive,
             }
         };

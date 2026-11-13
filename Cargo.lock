@@ -511,6 +511,7 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "eigenform-projects",
+ "libc",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
