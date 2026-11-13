@@ -20,7 +20,7 @@ let current: { close: () => void; anchor: HTMLElement } | null = null;
  * on Escape, on a pointer down outside it and its anchor, or when another opens.
  * Clicking the same anchor again toggles it shut. Returns the popover element.
  */
-function openPopover(anchor: HTMLElement, cls: string): HTMLElement | null {
+export function openPopover(anchor: HTMLElement, cls: string): HTMLElement | null {
   if (current) {
     const same = current.anchor === anchor;
     current.close();

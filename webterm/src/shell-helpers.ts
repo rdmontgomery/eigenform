@@ -453,3 +453,57 @@ export function tabSubtitle(cwd: string | undefined, label: string): string | nu
   const parent = parts[parts.length - 2];
   return parent ? `${parent}/${base}` : `/${base}`;
 }
+
+// ---------------------------------------------------------------------------
+// One-off overstory orderings (the sort menu)
+// ---------------------------------------------------------------------------
+
+/**
+ * The directory a tab groups under: its cwd, except that anything under a `src`
+ * directory folds into `src/<repo>`, so `~/src/app` and its worktree
+ * `~/src/app/feat-x` group together. The first `src` segment wins, so a repo's
+ * own `src/` doesn't split it. "" when the cwd is unknown.
+ */
+export function tabGroupKey(cwd: string | undefined): string {
+  if (!cwd) return "";
+  const parts = cwd.split("/").filter(Boolean);
+  const src = parts.indexOf("src");
+  const kept = src >= 0 && src + 1 < parts.length ? parts.slice(0, src + 2) : parts;
+  return `/${kept.join("/")}`;
+}
+
+/**
+ * Ids ordered by when a person last sent the session a prompt: most recent first
+ * (`"recent"`) or longest ago first (`"stale"`). Tabs with no known time keep their
+ * relative order after the rest.
+ */
+export function orderByLastPrompt(
+  items: readonly { id: string; lastPromptAt?: string | null }[],
+  direction: "recent" | "stale",
+): string[] {
+  const known: { id: string; at: number }[] = [];
+  const unknown: string[] = [];
+  for (const it of items) {
+    const at = it.lastPromptAt ? Date.parse(it.lastPromptAt) : NaN;
+    if (Number.isNaN(at)) unknown.push(it.id);
+    else known.push({ id: it.id, at });
+  }
+  known.sort((a, b) => (direction === "recent" ? b.at - a.at : a.at - b.at));
+  return [...known.map((k) => k.id), ...unknown];
+}
+
+/**
+ * Ids with each directory's tabs pulled together (see {@link tabGroupKey}). Stable:
+ * groups appear in the order of their first tab and keep their tabs' relative
+ * order, so sorting first and grouping after orders the groups by their best tab.
+ */
+export function groupByDirectory(items: readonly { id: string; cwd?: string }[]): string[] {
+  const groups = new Map<string, string[]>();
+  for (const it of items) {
+    const key = tabGroupKey(it.cwd);
+    const ids = groups.get(key);
+    if (ids) ids.push(it.id);
+    else groups.set(key, [it.id]);
+  }
+  return [...groups.values()].flat();
+}
