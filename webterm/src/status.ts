@@ -1,4 +1,4 @@
-// Status presentation shared by the rail and the tab strip: the two-channel
+// Status presentation shared by the rail and the overstory: the two-channel
 // status dot (activity × liveness), its hover text, the live-row tag, and the
 // per-project ink hue. Pure string builders — no DOM.
 
@@ -48,7 +48,7 @@ export function dotTitle(activity: Activity, liveness: Liveness): string {
 
 /** The session's ink hue CSS value, from its most durable key. */
 // Color = project: hash on the full cwd path so every session in the same
-// directory shares one hue (in both the rail and the tab strip). Falls back to
+// directory shares one hue (in both the rail and the overstory). Falls back to
 // a label/chip when the cwd is unknown. Hashing the full path (not the basename)
 // keeps unrelated `…/src` dirs from colliding.
 export function inkVar(cwd: string | undefined, fallback: string): string {

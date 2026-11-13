@@ -421,7 +421,7 @@ test("reconcileTabs: tab with uuid only and matching pty exists → attach using
 });
 
 // ---------------------------------------------------------------------------
-// reorderTabs — drag-to-reorder the tab strip
+// reorderTabs — drag-to-reorder the overstory
 // ---------------------------------------------------------------------------
 
 test("reorderTabs: drop before target moves dragged id ahead of it", () => {
@@ -459,7 +459,7 @@ test("reorderTabs: unknown targetId is a no-op (same reference)", () => {
   assert.equal(reorderTabs(ids, "a", "ghost", true), ids);
 });
 
-test("reorderTabs: single-tab strip is unchanged", () => {
+test("reorderTabs: single-tab overstory is unchanged", () => {
   const ids = ["a"];
   assert.deepEqual(reorderTabs(ids, "a", null, false), ["a"]);
 });
@@ -523,7 +523,7 @@ test("freshRestartQuery: an unresolvable claude session restarts empty in its cw
   assert.equal(freshRestartQuery({ uuid: "u1", label: "x" }, "session could not be resolved"), null);
 });
 
-test("cycleTabId: steps through the strip and wraps at both ends", () => {
+test("cycleTabId: steps through the overstory and wraps at both ends", () => {
   const ids = ["a", "b", "c"];
   assert.equal(cycleTabId(ids, "a", 1), "b");
   assert.equal(cycleTabId(ids, "c", 1), "a");
