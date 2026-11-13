@@ -725,7 +725,7 @@ pub(crate) fn origin_is_local(headers: &HeaderMap) -> bool {
 }
 
 /// The host portion of an `authority` (`host`, `host:port`, or `[ipv6]:port`).
-fn host_of(authority: &str) -> &str {
+pub(crate) fn host_of(authority: &str) -> &str {
     if let Some(rest) = authority.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest);
     }

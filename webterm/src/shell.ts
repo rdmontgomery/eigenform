@@ -5,6 +5,7 @@
  *
  *   rail.ts        session roster: search, age groups, selection + preview, rename
  *   rail-links.ts  the rail's Links section (URLs in the active tab's chat)
+ *   rail-feeds.ts  the rail's Needs you section (local feeds)
  *   dock.ts        inspect dock: reach map + transcript + events, splitters
  *   appearance.ts  color scheme + terminal font, their popovers, ⌘ zoom keys
  *   status.ts      status-dot / ink presentation shared by rail + tab strip
@@ -62,6 +63,7 @@ import {
 } from "./shell-helpers.ts";
 import { mountPicker } from "./picker.ts";
 import { createAppearance } from "./appearance.ts";
+import { mountRailFeeds } from "./rail-feeds.ts";
 import { mountRailLinks } from "./rail-links.ts";
 import { mountRail } from "./rail.ts";
 import { eventStream } from "./event-stream.ts";
@@ -187,11 +189,13 @@ export function mountShell(appEl: HTMLElement): void {
   searchBox.append(searchInput, searchClear);
   railSearch.append(searchBox);
 
+  const railFeeds = el("div", "rail-feeds rail-feeds--empty");
+  mountRailFeeds(railFeeds);
   const railScroll = el("div", "rail-scroll scroll");
   const railLinks = el("div", "rail-links");
   const railFoot = el("button", "rail-foot");
   railFoot.addEventListener("click", () => showClaims());
-  rail.append(railBrand, railSearch, railScroll, railLinks, railFoot);
+  rail.append(railBrand, railSearch, railFeeds, railScroll, railLinks, railFoot);
 
   // main column
   const main = el("div", "main");

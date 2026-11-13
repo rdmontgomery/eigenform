@@ -27,6 +27,7 @@ chrono       = { workspace = true }
 notify       = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 tokio-stream = { workspace = true }
+ureq         = { workspace = true }
 eigenform-forest   = { path = "../forest" }
 eigenform-codex    = { path = "../codex" }
 eigenform-surgery  = { path = "../surgery" }
