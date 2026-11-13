@@ -135,7 +135,7 @@ fn reused_pid_claims_are_not_live() {
 fn matching_proc_start_is_alive() {
     let sess = tempfile::tempdir().unwrap();
     let pid = std::process::id();
-    let start = eigenform_forest::proc_start_of(pid).expect("linux /proc");
+    let start = eigenform_forest::proc_start_of(pid).expect("this process's start time");
     std::fs::write(
         sess.path().join(format!("{pid}.json")),
         format!("{{\"pid\":{pid},\"sessionId\":\"x\",\"procStart\":\"{start}\"}}"),
@@ -196,4 +196,29 @@ fn cache_clock_is_the_last_real_assistant_row_with_its_ttl() {
     let aaa = by("aaa").cache.expect("aaa is live");
     assert_eq!(aaa.ttl_secs, None);
     assert_eq!(by("ccc").cache, None, "dead sessions carry no clock");
+}
+
+/// Claude Code on macOS records `procStart` as `ps -o lstart` in UTC; ours must read the same.
+#[cfg(target_os = "macos")]
+#[test]
+fn proc_start_matches_ps_lstart_in_utc() {
+    let pid = std::process::id();
+    let out = std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("TZ", "UTC")
+        .env("LC_ALL", "C")
+        .output()
+        .unwrap();
+    let ps = String::from_utf8(out.stdout).unwrap();
+    let ours = eigenform_forest::proc_start_of(pid).expect("this process's start time");
+    assert!(
+        ps.split_whitespace().eq(ours.split_whitespace()),
+        "ps said {ps:?}, we said {ours:?}"
+    );
+}
+
+#[test]
+fn a_pid_that_cannot_exist_is_not_alive() {
+    assert!(!is_pid_alive(0));
+    assert!(!is_pid_alive(u32::MAX));
 }
