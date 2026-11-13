@@ -658,6 +658,9 @@ fn watch_new_session(
         })
         .collect();
 
+    // FSEvents reports resolved paths (macOS `/var` is `/private/var`), so match events
+    // against the resolved root.
+    let projects = std::fs::canonicalize(&projects).unwrap_or(projects);
     let (raw_tx, raw_rx) = std::sync::mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |res| {
         let _ = raw_tx.send(res);
