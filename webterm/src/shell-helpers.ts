@@ -156,7 +156,7 @@ export type InkKey = (typeof INK_KEYS)[number];
 /**
  * Deterministic ink hue: a stable key (the full cwd path, else a label/chip)
  * hashes to one of INK_KEYS, so every session in the same project shares a
- * color across the rail and tab strip. FNV-1a keeps nearby keys from clumping
+ * color across the rail and overstory. FNV-1a keeps nearby keys from clumping
  * the way a char-code sum would.
  */
 export function inkFor(key: string): InkKey {
@@ -289,7 +289,7 @@ export function existingTab<T extends { id: string; descriptor: TabDescriptor }>
 
 /**
  * Compute the new tab order after dragging `draggedId` next to `targetId`.
- * Pure array reorder — drives the tab strip's drag-and-drop handlers in
+ * Pure array reorder — drives the overstory's drag-and-drop handlers in
  * shell.ts, which resolve ids back to live TabEntry objects.
  *
  *   - targetId === null: drop past the last tab → move to the end.
@@ -323,7 +323,7 @@ export function reorderTabs(
 }
 
 /**
- * The tab Ctrl+Tab (step 1) or Ctrl+Shift+Tab (step -1) moves to: the neighbour in strip
+ * The tab Ctrl+Tab (step 1) or Ctrl+Shift+Tab (step -1) moves to: the neighbour in overstory
  * order, wrapping at either end. No active tab starts from the first; null with no tabs.
  */
 export function cycleTabId(ids: string[], activeId: string | null, step: 1 | -1): string | null {

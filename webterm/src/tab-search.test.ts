@@ -27,7 +27,7 @@ test("every term must match somewhere", () => {
   assert.deepEqual(matchTabs("eigenform nope", TABS), []);
 });
 
-test("label hits rank before cwd-only hits; ties keep strip order", () => {
+test("label hits rank before cwd-only hits; ties keep overstory order", () => {
   // "status" is in a's label but only in c's cwd.
   assert.deepEqual(matchTabs("status", [TABS[2]!, TABS[0]!]), ["a", "c"]);
   assert.deepEqual(matchTabs("eigenform", TABS), ["a", "b"]);
