@@ -1,5 +1,6 @@
-// The forest preview's "Copy name" and "Copy id" buttons copy the previewed
-// session's title and uuid, and say so. The test origin is not a
+// The forest preview's "Copy peer" and "Copy id" buttons copy the previewed
+// session's peer name and uuid, and say so. A session with no peer name (not
+// running) gets no peer button. The test origin is not a
 // secure context, so this exercises the execCommand fallback a webview needs.
 //
 // Run: `npm run test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
@@ -16,16 +17,19 @@ const ORIGIN = "http://eigenform.test";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const UUID = "11111111-1111-4111-8111-111111111111";
+const session = (uuid: string, title: string, peer: string | null) => ({
+  uuid,
+  title,
+  peer,
+  cwd: "/srv/eigenform",
+  recency: new Date().toISOString(),
+  live: false,
+  state: "idle",
+  spark: [],
+});
 const FOREST = [
-  {
-    uuid: UUID,
-    title: "copy me",
-    cwd: "/srv/eigenform",
-    recency: new Date().toISOString(),
-    live: false,
-    state: "idle",
-    spark: [],
-  },
+  session(UUID, "copy me", "eigenform-7"),
+  session("22222222-2222-4222-8222-222222222222", "asleep", null),
 ];
 
 let dir: string;
@@ -82,21 +86,27 @@ after(async () => {
 
 const copied = () => page.evaluate(() => (window as unknown as { copied: string }).copied);
 
-test("Copy name and Copy id copy the previewed session's title and uuid", async () => {
+test("Copy peer and Copy id copy the previewed session's peer name and uuid", async () => {
   await page.click(".rail-row-label:text-is('copy me')");
-  const name = page.locator(".forest-preview-copy:text-is('Copy name')");
+  const name = page.locator(".forest-preview-copy:text-is('Copy peer')");
   const id = page.locator(".forest-preview-copy:text-is('Copy id')");
   await id.waitFor({ state: "visible" });
   assert.equal(await id.getAttribute("title"), UUID);
 
   await name.click();
   await page.waitForSelector(".forest-preview-copy:text-is('Copied')");
-  assert.equal(await copied(), "copy me");
+  assert.equal(await copied(), "eigenform-7");
 
   await id.click();
   assert.equal(await copied(), UUID);
   assert.ok(await page.isVisible(".forest-preview"), "copying leaves the preview open");
   if (process.env.SCREENSHOT) await page.screenshot({ path: process.env.SCREENSHOT });
-  await page.waitForSelector(".forest-preview-copy:text-is('Copy name')", { timeout: 3000 });
+  await page.waitForSelector(".forest-preview-copy:text-is('Copy peer')", { timeout: 3000 });
   await page.waitForSelector(".forest-preview-copy:text-is('Copy id')", { timeout: 3000 });
+});
+
+test("a session with no peer name shows only Copy id", async () => {
+  await page.click(".rail-row-label:text-is('asleep')");
+  await page.locator(".forest-preview-copy:text-is('Copy id')").waitFor({ state: "visible" });
+  assert.equal(await page.isVisible(".forest-preview-copy:text-is('Copy peer')"), false);
 });

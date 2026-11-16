@@ -129,7 +129,7 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
     return { btn, reset, stop: () => clearTimeout(timer) };
   }
 
-  const copyName = copyButton("Copy name", (row) => row.label);
+  const copyName = copyButton("Copy peer", (row) => row.peer);
   const copyId = copyButton("Copy id", (row) => row.uuid);
   const copies = el("div", "forest-preview-copies");
   copies.append(copyName.btn, copyId.btn);
