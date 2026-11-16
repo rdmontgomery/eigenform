@@ -103,17 +103,38 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
   launchBtn.type = "button";
   launchBtn.textContent = "Launch ⏎";
 
-  const copyBtn = el("button", "forest-preview-copy");
-  copyBtn.type = "button";
-  let copyReset: ReturnType<typeof setTimeout> | undefined;
-  function resetCopy(uuid?: string) {
-    clearTimeout(copyReset);
-    copyBtn.textContent = "Copy id";
-    copyBtn.hidden = !uuid;
-    copyBtn.title = uuid ?? "";
+  /** A button that copies `pick(row)` from the previewed row, hidden when that is empty. */
+  function copyButton(label: string, pick: (row: RosterRow) => string | undefined) {
+    const btn = el("button", "forest-preview-copy");
+    btn.type = "button";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reset = () => {
+      clearTimeout(timer);
+      const value = currentRow ? pick(currentRow) : undefined;
+      btn.textContent = label;
+      btn.hidden = !value;
+      btn.title = value ?? "";
+    };
+    btn.addEventListener("click", () => {
+      const value = currentRow ? pick(currentRow) : undefined;
+      if (!value) return;
+      const key = currentRow?.key;
+      void copyText(value).then((ok) => {
+        if (currentRow?.key !== key) return;
+        btn.textContent = ok ? "Copied" : "Copy failed";
+        clearTimeout(timer);
+        timer = setTimeout(reset, 1200);
+      });
+    });
+    return { btn, reset, stop: () => clearTimeout(timer) };
   }
 
-  head.append(cwdEl, metaEl, copyBtn, launchBtn);
+  const copyName = copyButton("Copy name", (row) => row.label);
+  const copyId = copyButton("Copy id", (row) => row.uuid);
+  const copies = el("div", "forest-preview-copies");
+  copies.append(copyName.btn, copyId.btn);
+
+  head.append(cwdEl, metaEl, copies, launchBtn);
 
   const bodyHost = el("div", "forest-preview-body");
   float.append(head, bodyHost);
@@ -137,7 +158,8 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
     countEl.textContent = row.msgCount !== undefined ? `~${row.msgCount} turns` : "";
     modelEl.textContent = "";
     liveEl.textContent = row.live ? "live" : "";
-    resetCopy(row.uuid);
+    copyName.reset();
+    copyId.reset();
   }
 
   function show(row: RosterRow, anchor: HTMLElement) {
@@ -203,17 +225,6 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
   }
 
   // ── Wiring ────────────────────────────────────────────────────────────────
-  copyBtn.addEventListener("click", () => {
-    const uuid = currentRow?.uuid;
-    if (!uuid) return;
-    void copyText(uuid).then((ok) => {
-      if (currentRow?.uuid !== uuid) return;
-      copyBtn.textContent = ok ? "Copied" : "Copy failed";
-      clearTimeout(copyReset);
-      copyReset = setTimeout(() => resetCopy(currentRow?.uuid), 1200);
-    });
-  });
-
   launchBtn.addEventListener("click", () => {
     if (currentRow) opts.onLaunch(currentRow);
   });
@@ -224,7 +235,8 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
     isOpen: () => open,
     currentKey: () => currentRow?.key ?? null,
     destroy() {
-      clearTimeout(copyReset);
+      copyName.stop();
+      copyId.stop();
       clearDrawer();
       float.remove();
     },
