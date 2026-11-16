@@ -638,8 +638,8 @@ a.rail-feed-title:hover { text-decoration: underline; }
 }
 .forest-preview-head {
   display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas: "cwd launch" "meta launch";
+  grid-template-columns: 1fr auto auto;
+  grid-template-areas: "cwd copy launch" "meta copy launch";
   align-items: center;
   column-gap: 10px;
   row-gap: 2px;
@@ -682,6 +682,22 @@ a.rail-feed-title:hover { text-decoration: underline; }
 .forest-preview-launch:hover {
   background: color-mix(in oklch, var(--accent) 26%, transparent);
   border-color: var(--accent);
+}
+.forest-preview-copy {
+  grid-area: copy;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tx-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.forest-preview-copy:hover {
+  color: var(--tx);
+  border-color: var(--tx-faint);
 }
 .forest-preview-body {
   flex: 1;

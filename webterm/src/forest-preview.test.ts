@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { prettyModel } from "./forest-preview.ts";
+import { copyText, prettyModel } from "./forest-preview.ts";
 
 test("prettyModel: opus id → family + dotted version", () => {
   assert.equal(prettyModel("claude-opus-4-8"), "Opus 4.8");
@@ -20,4 +20,11 @@ test("prettyModel: null/empty → empty string", () => {
 
 test("prettyModel: unknown id strips the claude- prefix", () => {
   assert.equal(prettyModel("claude-experimental-x"), "experimental-x");
+});
+
+test("copyText: writes the text through the clipboard API", async () => {
+  let written = "";
+  const ok = await copyText("3f2a-uuid", { writeText: async (t: string) => void (written = t) });
+  assert.equal(ok, true);
+  assert.equal(written, "3f2a-uuid");
 });

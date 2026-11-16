@@ -66,6 +66,25 @@ export function prettyModel(id: string | null): string {
   return id.replace(/^claude-/, "");
 }
 
+/** Clipboard API first; the textarea fallback covers a webview that denies it. */
+export async function copyText(text: string, clipboard: Pick<Clipboard, "writeText"> | undefined = navigator.clipboard): Promise<boolean> {
+  try {
+    if (!clipboard) throw new Error("no clipboard");
+    await clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = el("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+}
+
 export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHandle {
   // ── DOM (built once) ──────────────────────────────────────────────────────
   const float = el("div", "forest-preview");
@@ -84,7 +103,17 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
   launchBtn.type = "button";
   launchBtn.textContent = "Launch ⏎";
 
-  head.append(cwdEl, metaEl, launchBtn);
+  const copyBtn = el("button", "forest-preview-copy");
+  copyBtn.type = "button";
+  let copyReset: ReturnType<typeof setTimeout> | undefined;
+  function resetCopy(uuid?: string) {
+    clearTimeout(copyReset);
+    copyBtn.textContent = "Copy id";
+    copyBtn.hidden = !uuid;
+    copyBtn.title = uuid ?? "";
+  }
+
+  head.append(cwdEl, metaEl, copyBtn, launchBtn);
 
   const bodyHost = el("div", "forest-preview-body");
   float.append(head, bodyHost);
@@ -108,6 +137,7 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
     countEl.textContent = row.msgCount !== undefined ? `~${row.msgCount} turns` : "";
     modelEl.textContent = "";
     liveEl.textContent = row.live ? "live" : "";
+    resetCopy(row.uuid);
   }
 
   function show(row: RosterRow, anchor: HTMLElement) {
@@ -173,6 +203,17 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
   }
 
   // ── Wiring ────────────────────────────────────────────────────────────────
+  copyBtn.addEventListener("click", () => {
+    const uuid = currentRow?.uuid;
+    if (!uuid) return;
+    void copyText(uuid).then((ok) => {
+      if (currentRow?.uuid !== uuid) return;
+      copyBtn.textContent = ok ? "Copied" : "Copy failed";
+      clearTimeout(copyReset);
+      copyReset = setTimeout(() => resetCopy(currentRow?.uuid), 1200);
+    });
+  });
+
   launchBtn.addEventListener("click", () => {
     if (currentRow) opts.onLaunch(currentRow);
   });
@@ -183,6 +224,7 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
     isOpen: () => open,
     currentKey: () => currentRow?.key ?? null,
     destroy() {
+      clearTimeout(copyReset);
       clearDrawer();
       float.remove();
     },
