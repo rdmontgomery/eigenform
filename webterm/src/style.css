@@ -683,8 +683,12 @@ a.rail-feed-title:hover { text-decoration: underline; }
   background: color-mix(in oklch, var(--accent) 26%, transparent);
   border-color: var(--accent);
 }
-.forest-preview-copy {
+.forest-preview-copies {
   grid-area: copy;
+  display: flex;
+  gap: 6px;
+}
+.forest-preview-copy {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--tx-2);
