@@ -10,6 +10,9 @@
  *   branch:feat                                  a branch it ran on (substring)
  *   ABC-123   ticket:abc-123   ticket:abc        a Jira issue it worked on, or any in a project
  *
+ * A plain word also finds a session by its peer name (a substring of it) or its uuid
+ * (a prefix of at least 4 characters, so `cafe` can't match every sixteenth session).
+ *
  * A bare `ABC-123` is still a plain word (a pty id like `pty-7` has the same shape):
  * it matches the title and dir as before, or a Jira issue the session worked on.
  *   ~pr:56   ~#56   ~repo:app                    …or merely mentioned in chat
@@ -105,6 +108,16 @@ export function wordMatches(word: string, hay: string, facets: Facets | undefine
   return isTicket(word) && (facets?.work.some((f) => f.toLowerCase() === `ticket:${word}`) ?? false);
 }
 
+/** Shortest plain word that is tried as a uuid prefix. */
+export const MIN_ID_PREFIX = 4;
+
+/** Does a plain word (lowercased) name this session: a substring of its peer name, or
+ *  a prefix of its uuid at least {@link MIN_ID_PREFIX} long? */
+export function idMatches(word: string, uuid: string | undefined, peer: string | undefined): boolean {
+  if (peer && peer.toLowerCase().includes(word)) return true;
+  return !!uuid && word.length >= MIN_ID_PREFIX && uuid.toLowerCase().startsWith(word);
+}
+
 /** Does one extracted facet (`kind:value`) satisfy one term? */
 function facetMatches(term: FacetTerm, facet: string): boolean {
   const i = facet.indexOf(":");
@@ -146,6 +159,6 @@ export function matchesFacets(terms: readonly FacetTerm[], facets: Facets | unde
 
 /** Tooltip for both search boxes. */
 export const FACET_HELP =
-  "Words match the title and dir.\n" +
+  "Words match the title and dir, the peer name, or the start of the session id.\n" +
   "pr:56 · pr:app#56 · issue:12 · #56 · repo:app · branch:feat · ABC-123 · ticket:abc — sessions that worked on it\n" +
   "~pr:56 · ~repo:app · ~ABC-123 — …or only mentioned it";

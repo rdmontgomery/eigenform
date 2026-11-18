@@ -12,7 +12,9 @@
  *   by the daemon while no window was connected, handed to the first one to
  *   connect) is acted on by whoever gets it, since nobody else will.
  * - `?session=<uuid>` on the app URL, once at startup, then stripped from the
- *   address bar so a reload doesn't re-trigger it.
+ *   address bar so a reload doesn't re-trigger it. The daemon's `/s/<ref>` session
+ *   links redirect here when no window is open.
+ * - a `/s/<ref>` link clicked inside the app (see `sessionLinkRef`).
  *
  * "Most recently focused" is shared across windows through localStorage: each
  * window stamps its entry on focus and heartbeats while open, and drops it on
@@ -56,6 +58,27 @@ export function sessionFromSearch(search: string): { uuid: string | null; rest: 
   params.delete("session");
   const q = params.toString();
   return { uuid: isSessionUuid(v) ? v.toLowerCase() : null, rest: q ? `?${q}` : "" };
+}
+
+/**
+ * The reference in a session link (`<origin>/s/<uuid, prefix or peer name>`), or null
+ * when `href` is not one on this daemon.
+ */
+export function sessionLinkRef(href: string, origin: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(href, origin);
+  } catch {
+    return null;
+  }
+  if (u.origin !== origin) return null;
+  const m = /^\/s\/([^/]+)\/?$/.exec(u.pathname);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]!);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -485,3 +485,21 @@ test("filterRows: plain words match label/chip, facet terms match the session", 
   assert.deepEqual(keys("app"), ["a", "b", "c"], "the chip still matches");
   assert.deepEqual(keys("repo:app"), ["a", "b"], "no facets, no facet match");
 });
+
+test("filterRows: a plain word finds a session by peer name or uuid prefix", async () => {
+  const { filterRows } = await import("./roster.ts");
+  const row = (key: string, uuid: string, peer?: string) =>
+    ({ key, label: "zsh", cwdChip: "app", state: "recent", live: false, liveness: "none",
+       activity: "idle", recency: "2026-01-01T00:00:00+00:00", uuid,
+       ...(peer ? { peer } : {}) }) as const;
+  const rows = [
+    row("a", "0000aaaa-1111-4000-8000-000000000001", "commander"),
+    row("b", "0000bbbb-2222-4000-8000-000000000002"),
+  ];
+  const keys = (q: string) => filterRows(rows, q).map((r) => r.key);
+  assert.deepEqual(keys("Commander"), ["a"]);
+  assert.deepEqual(keys("0000b"), ["b"]);
+  assert.deepEqual(keys("0000"), ["a", "b"]);
+  assert.deepEqual(keys("1111"), [], "the middle of a uuid is not a match");
+  assert.deepEqual(keys("000"), [], "too short for an id prefix");
+});

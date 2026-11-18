@@ -36,7 +36,7 @@
  *   own lastActivity.
  */
 
-import { matchesFacets, parseQuery, wordMatches, type Facets } from "./facets.ts";
+import { idMatches, matchesFacets, parseQuery, wordMatches, type Facets } from "./facets.ts";
 import type { PtyInfo, ForestItem } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -453,14 +453,17 @@ export function adoptPtyOverrides(
 }
 
 /**
- * The rail's search: rows whose label or cwd chip contains every plain word of
- * `query` and whose session satisfies every facet term (`pr:56`, `~repo:app`…,
+ * The rail's search: rows where every plain word of `query` is in the label or cwd
+ * chip, the peer name, or starts the session uuid, and whose session satisfies every facet term (`pr:56`, `~repo:app`…,
  * see facets.ts). Case-insensitive; order is kept.
  */
 export function filterRows(rows: readonly RosterRow[], query: string): RosterRow[] {
   const { words, facets } = parseQuery(query);
   return rows.filter((r) => {
     const hay = `${r.label}\n${r.cwdChip}`.toLowerCase();
-    return words.every((w) => wordMatches(w, hay, r.facets)) && matchesFacets(facets, r.facets);
+    return (
+      words.every((w) => wordMatches(w, hay, r.facets) || idMatches(w, r.uuid, r.peer)) &&
+      matchesFacets(facets, r.facets)
+    );
   });
 }

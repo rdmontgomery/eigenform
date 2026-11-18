@@ -23,6 +23,9 @@ export interface ForestPreviewOptions {
   /** Open a fork of the previewed session (newUuid) as a tab, staging the edited
    *  prompt text into its input (never sent). Optional. */
   onFork?: (newUuid: string, text: string) => void;
+  /** Pin or unpin the previewed session. Without it there is no Pin button. */
+  onTogglePin?: (row: RosterRow) => void;
+  isPinned?: (row: RosterRow) => boolean;
 }
 
 export interface ForestPreviewHandle {
@@ -33,6 +36,8 @@ export interface ForestPreviewHandle {
   isOpen(): boolean;
   /** The key of the row currently previewed, or null. */
   currentKey(): string | null;
+  /** Redraw the Pin button (the pins changed). */
+  refresh(): void;
   destroy(): void;
 }
 
@@ -131,8 +136,27 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
 
   const copyName = copyButton("Copy peer", (row) => row.peer);
   const copyId = copyButton("Copy id", (row) => row.uuid);
+  // The uuid, not the peer name: the link should outlive the running session.
+  const copyLink = copyButton("Copy link", (row) =>
+    row.uuid ? `${location.origin}/s/${row.uuid}` : undefined,
+  );
+  const pinBtn = el("button", "forest-preview-copy forest-preview-pin");
+  pinBtn.type = "button";
+  pinBtn.addEventListener("click", () => {
+    if (currentRow?.uuid) opts.onTogglePin?.(currentRow);
+  });
+  function renderPin() {
+    const row = currentRow;
+    pinBtn.hidden = !opts.onTogglePin || !row?.uuid;
+    const on = !!row && !!opts.isPinned?.(row);
+    pinBtn.textContent = on ? "Unpin" : "Pin";
+    pinBtn.title = on
+      ? "Take this session off the top of the rail"
+      : "Keep this session at the top of the rail";
+    pinBtn.classList.toggle("forest-preview-pin--on", on);
+  }
   const copies = el("div", "forest-preview-copies");
-  copies.append(copyName.btn, copyId.btn);
+  copies.append(pinBtn, copyName.btn, copyId.btn, copyLink.btn);
 
   head.append(cwdEl, metaEl, copies, launchBtn);
 
@@ -160,6 +184,8 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
     liveEl.textContent = row.live ? "live" : "";
     copyName.reset();
     copyId.reset();
+    copyLink.reset();
+    renderPin();
   }
 
   function show(row: RosterRow, anchor: HTMLElement) {
@@ -234,9 +260,11 @@ export function createForestPreview(opts: ForestPreviewOptions): ForestPreviewHa
     hide,
     isOpen: () => open,
     currentKey: () => currentRow?.key ?? null,
+    refresh: renderPin,
     destroy() {
       copyName.stop();
       copyId.stop();
+      copyLink.stop();
       clearDrawer();
       float.remove();
     },

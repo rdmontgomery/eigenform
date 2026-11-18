@@ -99,6 +99,9 @@ test("Copy peer and Copy id copy the previewed session's peer name and uuid", as
 
   await id.click();
   assert.equal(await copied(), UUID);
+
+  await page.locator(".forest-preview-copy:text-is('Copy link')").click();
+  assert.equal(await copied(), `${ORIGIN}/s/${UUID}`);
   assert.ok(await page.isVisible(".forest-preview"), "copying leaves the preview open");
   if (process.env.SCREENSHOT) await page.screenshot({ path: process.env.SCREENSHOT });
   await page.waitForSelector(".forest-preview-copy:text-is('Copy peer')", { timeout: 3000 });

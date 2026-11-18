@@ -23,6 +23,7 @@ const PATHS: Record<string, string> = {
   sliders: '<path d="M4 8h16M4 16h16"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>',
   chevron: '<path d="M9 6l6 6-6 6"/>',
   copy: '<path d="M9 9h10v10H9zM5 15V5h10"/>',
+  pin: '<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>',
   fork: '<path d="M6 4v8M18 4v3a4 4 0 0 1-4 4H6"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="4" r="2"/><circle cx="6" cy="4" r="2"/>',
   stop: '<path d="M7 7h10v10H7z"/>',
   // snooze — a clock face

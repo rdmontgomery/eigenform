@@ -82,6 +82,8 @@ import { openInspect } from "./inspect.ts";
 import { openClaims } from "./claims.ts";
 import { el } from "./dom.ts";
 import { mountTabSearch } from "./tab-search.ts";
+import { fetchPins, setPinned } from "./pins.ts";
+import { sessionLinkRef } from "./focus.ts";
 import { FACET_HELP } from "./facets.ts";
 import { dueSnoozes, snoozableTab, type Snooze } from "./snooze.ts";
 import { openSnoozeMenu, openSnoozeShelf } from "./snooze-ui.ts";
@@ -243,16 +245,20 @@ export function mountShell(appEl: HTMLElement): void {
   // Find-a-tab filter (see tab-search.ts): highlights matches, dims the rest.
   const tabSearch = mountTabSearch({
     items: () =>
-      tabs.map((t) => ({
-        id: t.id,
-        label: t.descriptor.label,
-        cwd: t.descriptor.cwd,
-        uuid: t.descriptor.uuid,
-        ptyId: t.descriptor.ptyId,
-        facets: t.descriptor.uuid
-          ? lastForest?.find((f) => f.uuid === t.descriptor.uuid)?.facets
-          : undefined,
-      })),
+      tabs.map((t) => {
+        const fi = t.descriptor.uuid
+          ? lastForest?.find((f) => f.uuid === t.descriptor.uuid)
+          : undefined;
+        return {
+          id: t.id,
+          label: t.descriptor.label,
+          cwd: t.descriptor.cwd,
+          uuid: t.descriptor.uuid,
+          ptyId: t.descriptor.ptyId,
+          peer: fi?.peer ?? undefined,
+          facets: fi?.facets,
+        };
+      }),
     activate: (id) => activateTab(id),
     onChange: () => renderOverstory(),
     onClose: () => activeTab()?.handle.term.focus(),
@@ -1233,8 +1239,20 @@ export function mountShell(appEl: HTMLElement): void {
       onRefresh: () => void refreshRoster(),
       hasPlanReview: (row) =>
         !!row.uuid && artifactDock.reviews().some((r) => r.sessionId === row.uuid),
+      onTogglePin: (row) => {
+        if (!row.uuid) return;
+        void setPinned(row.uuid, !railView.isPinned(row)).then((pins) => {
+          if (pins) railView.setPins(pins);
+        });
+      },
     },
   );
+
+  /** Pins live on the daemon, so another window's pin shows up on the next poll. */
+  async function refreshPins() {
+    const pins = await fetchPins();
+    if (pins) railView.setPins(pins);
+  }
 
   /** Latest forest snapshot pushed by /api/watch/forest; null until the first push. */
   let lastForest: ForestItem[] | null = null;
@@ -1278,6 +1296,7 @@ export function mountShell(appEl: HTMLElement): void {
     try {
       const { ptys, forest } = await fetchRosterData();
       railView.setRows(buildRoster(ptys, forest, railView.overrides()));
+      void refreshPins();
 
       // Update tab state badges + cwd + uuid + title from live pty / forest data.
       for (const t of tabs) {
@@ -1466,6 +1485,7 @@ export function mountShell(appEl: HTMLElement): void {
       const data = await fetchRosterData();
       ptys = data.ptys;
       railView.setRows(buildRoster(data.ptys, data.forest, railView.overrides()));
+      await refreshPins();
     } catch {
       // Daemon not available — skip tab restore.
     }
@@ -1520,6 +1540,31 @@ export function mountShell(appEl: HTMLElement): void {
       focusAfterBoot(target);
     },
   });
+
+  // A session link (`/s/<id, prefix or peer name>`) clicked inside the app focuses
+  // that session here instead of opening a new browser tab. One the daemon can't
+  // resolve to a single session opens as usual, on its candidates page.
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+        return;
+      }
+      const a = (e.target as Element | null)?.closest?.("a[href]");
+      if (!(a instanceof HTMLAnchorElement)) return;
+      const ref = sessionLinkRef(a.href, location.origin);
+      if (ref === null) return;
+      e.preventDefault();
+      void fetch(`/api/resolve/${encodeURIComponent(ref)}`)
+        .then(async (res) => {
+          if (!res.ok) throw new Error(String(res.status));
+          const { session } = (await res.json()) as { session: { uuid: string } };
+          focusAfterBoot({ session: session.uuid });
+        })
+        .catch(() => window.open(a.href, "_blank", "noopener"));
+    },
+    true,
+  );
 
   // Snoozes keep polling while the page is hidden: a wake is exactly when the
   // ⏰ title matters (browsers throttle hidden timers, but still fire them).

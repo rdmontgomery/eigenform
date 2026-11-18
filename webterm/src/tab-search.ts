@@ -2,8 +2,8 @@
  * tab-search.ts — find a tab in the overstory (the session tabs along the top) by typing.
  *
  * ⌘/Ctrl+Shift+F (or the magnifier at the overstory's left edge) opens a filter box.
- * Every tab whose title, launch dir, session uuid or pty id contains all the
- * query's plain words, and whose session satisfies its facet terms (`pr:56`,
+ * Every tab whose title, launch dir, pty id or peer name contains each of the
+ * query's plain words (or whose session uuid starts with it), and whose session satisfies its facet terms (`pr:56`,
  * `repo:app`, `~#56`… — see facets.ts), is highlighted; the rest dim. The selected
  * match carries a stronger ring and is scrolled into view. ↓/↑ (or Tab/⇧Tab)
  * cycle the selection, Enter jumps to it and closes the box, Esc closes.
@@ -15,7 +15,7 @@
 
 import { el } from "./dom.ts";
 import { icon } from "./icons.ts";
-import { FACET_HELP, matchesFacets, parseQuery, wordMatches, type Facets } from "./facets.ts";
+import { FACET_HELP, idMatches, matchesFacets, parseQuery, wordMatches, type Facets } from "./facets.ts";
 
 /** What search reads from a tab. */
 export interface TabSearchItem {
@@ -24,13 +24,16 @@ export interface TabSearchItem {
   cwd?: string;
   uuid?: string;
   ptyId?: string;
+  /** The name peer sessions message this one by, while it runs. */
+  peer?: string;
   /** The tab's session facets, from the forest snapshot. */
   facets?: Facets;
 }
 
 /**
  * Ids of the items matching `query`, best first. Case-insensitive; every plain
- * word must be a substring of the item's label, cwd, uuid or ptyId, and every
+ * word must be a substring of the item's label, cwd, ptyId or peer name, or a prefix of
+ * its uuid (facets.ts `idMatches`), and every
  * facet term must hold for its session (facets.ts). Items with more words found
  * in the label rank first (the title is what you're scanning for); ties keep
  * overstory order. A blank query matches nothing — "not searching".
@@ -41,8 +44,10 @@ export function matchTabs(query: string, items: readonly TabSearchItem[]): strin
   const hits: Array<{ id: string; labelHits: number; idx: number }> = [];
   items.forEach((it, idx) => {
     const label = it.label.toLowerCase();
-    const hay = [label, it.cwd, it.uuid, it.ptyId].filter(Boolean).join("\n").toLowerCase();
-    if (!words.every((t) => wordMatches(t, hay, it.facets))) return;
+    const hay = [label, it.cwd, it.ptyId].filter(Boolean).join("\n").toLowerCase();
+    if (!words.every((t) => wordMatches(t, hay, it.facets) || idMatches(t, it.uuid, it.peer))) {
+      return;
+    }
     if (!matchesFacets(facets, it.facets)) return;
     hits.push({ id: it.id, labelHits: words.filter((t) => label.includes(t)).length, idx });
   });
