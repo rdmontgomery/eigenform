@@ -2,7 +2,7 @@
 // Run: `node --test` (native TS via --experimental-strip-types in Node 22+).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractUrls, linkLabel } from "./links.ts";
+import { extractUrls, groupLinks, linkLabel, pullRequest, siteOf, type LinkEntry } from "./links.ts";
 import type { Exchange } from "./turns.ts";
 
 function ex(overrides: Partial<Exchange> & { n: number }): Exchange {
@@ -11,12 +11,12 @@ function ex(overrides: Partial<Exchange> & { n: number }): Exchange {
 
 test("extractUrls: finds a URL in user text", () => {
   const got = extractUrls([ex({ n: 1, user: "check https://example.com/foo please" })]);
-  assert.deepEqual(got, [{ url: "https://example.com/foo", turnNumber: 1, role: "user" }]);
+  assert.deepEqual(got, [{ url: "https://example.com/foo", turnNumber: 1, source: "user" }]);
 });
 
 test("extractUrls: finds a URL in assistant text", () => {
   const got = extractUrls([ex({ n: 1, assistant: "see https://docs.rs/tokio for details" })]);
-  assert.deepEqual(got, [{ url: "https://docs.rs/tokio", turnNumber: 1, role: "assistant" }]);
+  assert.deepEqual(got, [{ url: "https://docs.rs/tokio", turnNumber: 1, source: "claude" }]);
 });
 
 test("extractUrls: strips trailing sentence punctuation", () => {
@@ -69,7 +69,7 @@ test("extractUrls: dedupes by URL, keeping the earliest turn", () => {
   ]);
   assert.equal(got.length, 1);
   assert.equal(got[0]!.turnNumber, 1);
-  assert.equal(got[0]!.role, "user");
+  assert.equal(got[0]!.source, "user");
 });
 
 test("extractUrls: dedupes http vs https as the same link", () => {
@@ -220,4 +220,100 @@ test("linkLabel: query string and fragment count toward the path length", () => 
   const label = linkLabel("https://example.com/pull/22?tab=files#issuecomment-99999999");
   assert.equal(label, "example.com…es#issuecomment-99999999");
   assert.ok(label.length <= 36);
+});
+
+// ---------------------------------------------------------------------------
+// Sources and grouping
+// ---------------------------------------------------------------------------
+
+test("extractUrls: a subagent's links are tagged subagent, at the launching turn", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "look at https://example.com/a" }),
+    ex({
+      n: 2,
+      assistant: "delegating; see https://example.com/b",
+      tool: {
+        kind: "Agent",
+        arg: "",
+        delta: "",
+        subagent: {
+          agentType: "general-purpose",
+          description: null,
+          exchanges: [
+            ex({
+              n: 1,
+              user: "check https://docs.example.org/x",
+              assistant: "found https://example.com/a and https://github.com/acme/app/pull/12",
+            }),
+          ],
+        },
+      },
+    }),
+  ]);
+  assert.deepEqual(got, [
+    { url: "https://example.com/a", turnNumber: 1, source: "user" },
+    { url: "https://example.com/b", turnNumber: 2, source: "claude" },
+    { url: "https://docs.example.org/x", turnNumber: 2, source: "subagent" },
+    { url: "https://github.com/acme/app/pull/12", turnNumber: 2, source: "subagent" },
+  ]);
+});
+
+test("pullRequest and siteOf", () => {
+  assert.equal(pullRequest("https://github.com/acme/app/pull/12"), "acme/app#12");
+  assert.equal(pullRequest("https://github.com/acme/app/pull/12/files#diff-1"), "acme/app#12");
+  assert.equal(pullRequest("https://github.com/acme/app/issues/12"), null);
+  assert.equal(pullRequest("https://example.com/acme/app/pull/12"), null);
+  assert.equal(siteOf("https://WWW.Example.com/x"), "example.com");
+  assert.equal(siteOf("http://localhost:4317/s/app-dd"), "localhost");
+});
+
+const L = (url: string, source: LinkEntry["source"], n = 1): LinkEntry => ({ url, turnNumber: n, source });
+const LINKS: LinkEntry[] = [
+  L("https://docs.example.org/guide", "user", 1),
+  L("https://github.com/acme/app/pull/12", "claude", 2),
+  L("https://example.com/one", "claude", 3),
+  L("https://github.com/acme/app/issues/4", "subagent", 4),
+  L("https://example.com/two", "subagent", 5),
+  L("https://github.com/acme/web/pull/7", "user", 6),
+];
+const shape = (gs: ReturnType<typeof groupLinks>) =>
+  gs.map((g) => [g.label, g.entries.map((e) => e.url.replace(/^https:\/\//, ""))]);
+
+test("groupLinks by site: pull requests first, then sites by size, newest first within", () => {
+  assert.deepEqual(shape(groupLinks(LINKS, "site")), [
+    ["Pull requests", ["github.com/acme/web/pull/7", "github.com/acme/app/pull/12"]],
+    ["example.com", ["example.com/two", "example.com/one"]],
+    ["docs.example.org", ["docs.example.org/guide"]],
+    ["github.com", ["github.com/acme/app/issues/4"]],
+  ]);
+});
+
+test("groupLinks by source: you, Claude, subagents, each with its PRs first", () => {
+  assert.deepEqual(shape(groupLinks(LINKS, "source")), [
+    ["Pasted by you", ["github.com/acme/web/pull/7", "docs.example.org/guide"]],
+    ["From Claude", ["github.com/acme/app/pull/12", "example.com/one"]],
+    ["From subagents", ["example.com/two", "github.com/acme/app/issues/4"]],
+  ]);
+});
+
+test("groupLinks filters by every word, any case, and drops emptied groups", () => {
+  assert.deepEqual(shape(groupLinks(LINKS, "site", "ACME pull")), [
+    ["Pull requests", ["github.com/acme/web/pull/7", "github.com/acme/app/pull/12"]],
+  ]);
+  assert.deepEqual(shape(groupLinks(LINKS, "source", "example.com")), [
+    ["From Claude", ["example.com/one"]],
+    ["From subagents", ["example.com/two"]],
+  ]);
+  assert.deepEqual(groupLinks(LINKS, "site", "nothing-matches"), []);
+});
+
+test("groupLinks gives each group a stable id", () => {
+  assert.deepEqual(
+    groupLinks(LINKS, "site").map((g) => g.key),
+    ["pr", "site:example.com", "site:docs.example.org", "site:github.com"],
+  );
+  assert.deepEqual(
+    groupLinks(LINKS, "source").map((g) => g.key),
+    ["source:user", "source:claude", "source:subagent"],
+  );
 });
