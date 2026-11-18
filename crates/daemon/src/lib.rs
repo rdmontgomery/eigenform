@@ -17,6 +17,8 @@
 //! - `launcher` — `/api/candidates` and the `/api/path` probe
 //! - `inspect` — `/api/inspect`, the skills + memory inventory
 //! - `snooze` — `/api/snoozes`, tabs closed until a wake time (persisted)
+//! - [`pins`] — `/api/pins`, sessions pinned to the top of the rail (persisted)
+//! - [`navigate`] — `/s/:ref` session links (uuid, prefix or peer name) and `/api/resolve/:ref`
 //! - [`events`] — the observability bus and `/api/events` (+ `/stream`)
 //! - [`focus`] — `POST /api/focus`, deep-linking a session to the front of the app
 //! - [`feeds`] — `/api/feeds` and `/api/feeds/act`, the rail's "Needs you" section
@@ -46,7 +48,9 @@ mod forest;
 pub mod host;
 mod inspect;
 mod launcher;
+pub mod navigate;
 mod paths;
+pub mod pins;
 pub mod plan_gate;
 mod pty;
 mod session;
@@ -147,6 +151,8 @@ pub struct AppState {
     pub plan_gate: Arc<plan_gate::PlanGate>,
     /// Snoozed tabs awaiting their wake time (persisted under `state_dir`).
     pub snoozes: Arc<snooze::SnoozeStore>,
+    /// Sessions pinned to the top of the rail (persisted under `state_dir`).
+    pub pins: Arc<pins::PinStore>,
     /// Per-spawn turn state from the claude turn hooks: is a pty safe to kill?
     pub turns: Arc<turns::SessionTurns>,
     /// Connected app windows + the focus request held while none was (`/api/focus`).
@@ -209,6 +215,16 @@ pub fn app(config: Config) -> Router {
             "/api/snoozes/{id}",
             axum::routing::delete(snooze::snooze_delete_route),
         )
+        .route(
+            "/api/pins",
+            get(pins::pins_route).post(pins::pin_create_route),
+        )
+        .route(
+            "/api/pins/{uuid}",
+            axum::routing::delete(pins::pin_delete_route),
+        )
+        .route("/s/{reference}", get(navigate::session_link_route))
+        .route("/api/resolve/{reference}", get(navigate::resolve_route))
         .route("/api/candidates", get(launcher::candidates_route))
         .route("/api/path", get(launcher::path_probe_route))
         .route("/api/health", get(health_route))
@@ -246,6 +262,7 @@ pub fn app(config: Config) -> Router {
     let state = AppState {
         host: Arc::new(host::SessionHost::with_events(Arc::clone(&events))),
         snoozes: Arc::new(snooze::SnoozeStore::open(config.state_dir.as_deref())),
+        pins: Arc::new(pins::PinStore::open(config.state_dir.as_deref())),
         config: Arc::new(config),
         events,
         plan_gate: Arc::new(plan_gate::PlanGate::default()),

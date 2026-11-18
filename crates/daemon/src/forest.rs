@@ -35,7 +35,7 @@ pub(crate) fn forest_knows(cfg: &Config, uuid: &str) -> bool {
 }
 
 /// The forest snapshot rows behind [`forest_json`].
-fn forest_rows(cfg: &Config) -> Vec<serde_json::Value> {
+pub(crate) fn forest_rows(cfg: &Config) -> Vec<serde_json::Value> {
     let mut rows: Vec<serde_json::Value> = Vec::new();
     if let (Some(projects), Some(sessions), Some(state)) =
         (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir)

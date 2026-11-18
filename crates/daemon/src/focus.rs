@@ -103,6 +103,17 @@ impl FocusHub {
         self.request_at(bus, target, Instant::now())
     }
 
+    /// Record a `focus` event for `target` only if a window is listening; never hold it.
+    /// Returns how many windows got it.
+    pub fn request_if_connected(&self, bus: &EventBus, target: &Target) -> Option<usize> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.clients == 0 {
+            return None;
+        }
+        bus.record("focus", target.to_json());
+        Some(inner.clients)
+    }
+
     fn request_at(&self, bus: &EventBus, target: &Target, now: Instant) -> Delivery {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let event = bus.record("focus", target.to_json());

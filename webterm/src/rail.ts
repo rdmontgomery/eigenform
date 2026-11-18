@@ -8,17 +8,20 @@ import { icon } from "./icons.ts";
 import { createForestPreview } from "./forest-preview.ts";
 import type { ForestPreviewHandle } from "./forest-preview.ts";
 import { adoptPtyOverrides, filterRows, type RosterRow } from "./roster.ts";
+import { splitPinned } from "./pins.ts";
 import { ageGroup, relativeRecency, type AgeGroup } from "./shell-helpers.ts";
 import { dotClasses, dotTitle, inkVar, livenessTag } from "./status.ts";
 
 const LS_OVERRIDES = "eigenform:term:overrides:v1";
 const LS_GROUPS = "eigenform:term:rail-groups:v1";
 
-/** A rail group: an age bucket for interactive sessions, or the one "headless"
- *  bucket that gathers every `claude -p` / SDK run regardless of age. */
-type RailGroup = AgeGroup | "headless";
+/** A rail group: the pinned sessions on top, an age bucket for interactive sessions,
+ *  or the one "headless" bucket that gathers every `claude -p` / SDK run regardless
+ *  of age. */
+type RailGroup = "pinned" | AgeGroup | "headless";
 
 const GROUP_LABELS: Record<RailGroup, string> = {
+  pinned: "Pinned",
   today: "Today",
   week: "This week",
   earlier: "Earlier",
@@ -47,6 +50,8 @@ export interface RailDeps {
   onRefresh: () => void;
   /** True when Claude is waiting on this row's plan (plan gate). */
   hasPlanReview?: (row: RosterRow) => boolean;
+  /** Pin or unpin the row's session (the preview's Pin button). */
+  onTogglePin?: (row: RosterRow) => void;
 }
 
 export interface RailHandle {
@@ -60,6 +65,9 @@ export interface RailHandle {
   overrides(): Readonly<Record<string, string>>;
   /** Scroll a row into view, if it's rendered (not folded away or filtered out). */
   reveal(key: string): void;
+  /** Replace the pinned session uuids (oldest pin first) and re-render. */
+  setPins(uuids: readonly string[]): void;
+  isPinned(row: RosterRow): boolean;
 }
 
 export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
@@ -161,12 +169,16 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
   /** row.key → its rendered rail button, for focus/scroll + selected styling. */
   const rowEls = new Map<string, HTMLElement>();
 
+  let pins: readonly string[] = [];
+  const isPinned = (row: RosterRow) => !!row.uuid && pins.includes(row.uuid);
+
   const preview: ForestPreviewHandle = createForestPreview({
     onLaunch: (row) => {
       deps.onLaunch(row);
       preview.hide();
     },
     onFork: (newUuid, text) => deps.onFork(newUuid, text),
+    ...(deps.onTogglePin ? { onTogglePin: deps.onTogglePin, isPinned } : {}),
   });
 
   /** Focus a row: mark it selected and float its preview. */
@@ -281,13 +293,15 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
       railScroll.append(empty);
     }
 
-    // Interactive sessions bucket by age; headless runs share one group at the
-    // bottom so a batch of `claude -p` jobs never buries the sessions you drive.
-    const buckets: [RailGroup, RosterRow[]][] = GROUP_ORDER.map((g) => [
-      g,
-      rows.filter((r) => !r.headless && ageGroup(r.recency, now) === g),
-    ]);
-    buckets.push(["headless", rows.filter((r) => r.headless)]);
+    // Pinned sessions sit above everything, in pin order. The rest bucket by age;
+    // headless runs share one group at the bottom so a batch of `claude -p` jobs
+    // never buries the sessions you drive.
+    const { pinned, rest } = splitPinned(rows, pins);
+    const buckets: [RailGroup, RosterRow[]][] = [["pinned", pinned]];
+    for (const g of GROUP_ORDER) {
+      buckets.push([g, rest.filter((r) => !r.headless && ageGroup(r.recency, now) === g)]);
+    }
+    buckets.push(["headless", rest.filter((r) => r.headless)]);
 
     for (const [group, groupRows] of buckets) {
       if (groupRows.length === 0) continue;
@@ -400,6 +414,7 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     item.append(dotWrap, body, recencyEl);
 
     if (row.key === selectedKey) item.classList.add("rail-row--selected");
+    if (isPinned(row)) item.classList.add("rail-row--pinned");
 
     // Single click / focus → select + preview (no launch). Launch is a separate
     // commit: double-click, Enter, or the float's Launch button.
@@ -448,5 +463,12 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     reveal(key) {
       rowEls.get(key)?.scrollIntoView({ block: "nearest" });
     },
+    setPins(uuids) {
+      if (uuids.length === pins.length && uuids.every((u, i) => u === pins[i])) return;
+      pins = [...uuids];
+      renderRail();
+      preview.refresh();
+    },
+    isPinned,
   };
 }

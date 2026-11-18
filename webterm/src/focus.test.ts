@@ -8,7 +8,20 @@ import {
   isSessionUuid,
   pruneRegistry,
   sessionFromSearch,
+  sessionLinkRef,
 } from "./focus.ts";
+
+test("sessionLinkRef: a /s/ link on this daemon names its reference", () => {
+  const o = "http://localhost:4317";
+  assert.equal(sessionLinkRef(`${o}/s/0000aaaa`, o), "0000aaaa");
+  assert.equal(sessionLinkRef(`${o}/s/app-dd/`, o), "app-dd");
+  assert.equal(sessionLinkRef("/s/app%20dd", o), "app dd");
+  assert.equal(sessionLinkRef("http://localhost:9999/s/app-dd", o), null, "another origin");
+  assert.equal(sessionLinkRef(`${o}/s/`, o), null);
+  assert.equal(sessionLinkRef(`${o}/s/a/b`, o), null);
+  assert.equal(sessionLinkRef(`${o}/api/forest`, o), null);
+  assert.equal(sessionLinkRef(`${o}/s/%E0%A4%A`, o), null, "bad escape");
+});
 import type { EventRecord } from "./types.ts";
 
 const U = "aaaa1111-0000-4000-8000-000000000001";

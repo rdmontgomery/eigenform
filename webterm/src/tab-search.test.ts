@@ -15,7 +15,20 @@ test("blank query matches nothing", () => {
   assert.deepEqual(matchTabs("   ", TABS), []);
 });
 
-test("case-insensitive substring over label, cwd, uuid and ptyId", () => {
+test("a session is found by its peer name or the start of its uuid", () => {
+  const tabs: TabSearchItem[] = [
+    { id: "a", label: "zsh", uuid: "0000aaaa-1111-4000-8000-000000000001", peer: "app-dd" },
+    { id: "b", label: "zsh", uuid: "0000bbbb-2222-4000-8000-000000000002", peer: "commander" },
+  ];
+  assert.deepEqual(matchTabs("APP-DD", tabs), ["a"]);
+  assert.deepEqual(matchTabs("command", tabs), ["b"], "a peer name matches by substring");
+  assert.deepEqual(matchTabs("0000a", tabs), ["a"]);
+  assert.deepEqual(matchTabs("0000", tabs), ["a", "b"]);
+  assert.deepEqual(matchTabs("1111", tabs), [], "the middle of a uuid is not a match");
+  assert.deepEqual(matchTabs("000", tabs), [], "too short to be an id prefix");
+});
+
+test("case-insensitive substring over label, cwd and ptyId; prefix of the uuid", () => {
   assert.deepEqual(matchTabs("FOREST", TABS), ["b"]);
   assert.deepEqual(matchTabs("webterm", TABS), ["a"]);
   assert.deepEqual(matchTabs("1111", TABS), ["a"]);

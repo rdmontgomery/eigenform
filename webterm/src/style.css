@@ -615,6 +615,10 @@ a.rail-feed-title:hover { text-decoration: underline; }
   border-color: color-mix(in oklch, var(--row-ink, var(--accent)) 45%, transparent);
 }
 .rail-row:focus-visible { outline: none; }
+.forest-preview-pin--on {
+  color: var(--accent);
+  border-color: color-mix(in oklch, var(--accent) 45%, transparent);
+}
 
 /* ── forest preview float ──────────────────────────────────────────────────
    A single floating panel previewing a session before launch. Static snapshot
