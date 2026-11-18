@@ -160,6 +160,10 @@ async fn a_link_with_a_window_open_focuses_the_session_there() {
         body.contains(&format!("/?session={LIVE}")),
         "open-here link: {body}"
     );
+    assert!(
+        body.contains("window.close()"),
+        "the relay tab closes itself: {body}"
+    );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut acc = String::new();

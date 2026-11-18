@@ -50,7 +50,7 @@ export interface RailDeps {
   onRefresh: () => void;
   /** True when Claude is waiting on this row's plan (plan gate). */
   hasPlanReview?: (row: RosterRow) => boolean;
-  /** Pin or unpin the row's session (the preview's Pin button). */
+  /** Pin or unpin the row's session (the row's pin toggle, the preview's Pin button). */
   onTogglePin?: (row: RosterRow) => void;
 }
 
@@ -411,7 +411,7 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     const recencyEl = el("span", "rail-row-recency");
     recencyEl.textContent = relativeRecency(row.recency, now);
 
-    item.append(dotWrap, body, recencyEl);
+    item.append(dotWrap, body, recencyEl, pinToggle(row));
 
     if (row.key === selectedKey) item.classList.add("rail-row--selected");
     if (isPinned(row)) item.classList.add("rail-row--pinned");
@@ -432,6 +432,26 @@ export function mountRail(els: RailElements, deps: RailDeps): RailHandle {
     });
 
     return item;
+  }
+
+  /** The row's pin toggle: always shown (faint until pinned), so pinning is found by
+   *  looking, not by hovering. A row with no session uuid yet gets an empty slot. */
+  function pinToggle(row: RosterRow): HTMLElement {
+    if (!deps.onTogglePin || !row.uuid) return el("span", "rail-row-pin rail-row-pin--none");
+    const on = isPinned(row);
+    const btn = el("button", `rail-row-pin${on ? " rail-row-pin--on" : ""}`);
+    btn.type = "button";
+    btn.tabIndex = -1;
+    btn.title = on ? "Unpin" : "Pin to the top of the rail";
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-pressed", String(on));
+    btn.append(icon("pin", 12));
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deps.onTogglePin!(row);
+    });
+    btn.addEventListener("dblclick", (e) => e.stopPropagation());
+    return btn;
   }
 
   function renderRailFoot() {

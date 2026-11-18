@@ -84,6 +84,8 @@ import { el } from "./dom.ts";
 import { mountTabSearch } from "./tab-search.ts";
 import { fetchPins, setPinned } from "./pins.ts";
 import { sessionLinkRef } from "./focus.ts";
+import { buildRefIndex, type SessionRefIndex } from "./session-refs.ts";
+import { registerSessionLinks } from "./term-session-links.ts";
 import { FACET_HELP } from "./facets.ts";
 import { dueSnoozes, snoozableTab, type Snooze } from "./snooze.ts";
 import { openSnoozeMenu, openSnoozeShelf } from "./snooze-ui.ts";
@@ -917,6 +919,7 @@ export function mountShell(appEl: HTMLElement): void {
 
     const handle = newTerminal(appearance.font(), appearance.scheme().theme);
     handle.term.open(fitEl);
+    registerSessionLinks(handle.term, sessionRefIndex, (uuid) => void focusSession({ session: uuid }));
 
     const entry: TabEntry = {
       id: tabId,
@@ -1358,6 +1361,18 @@ export function mountShell(appEl: HTMLElement): void {
   // row into view. The target is a session uuid or a live pty id.
   // ------------------------------------------------------------------
 
+  /** Session references in terminal output resolve against the roster, rebuilt only
+   *  when the roster changes. */
+  let refIndex: { rows: RosterRow[]; index: SessionRefIndex } | null = null;
+  function sessionRefIndex(): SessionRefIndex {
+    const rows = railView.rows();
+    if (refIndex?.rows !== rows) {
+      const targets = rows.flatMap((r) => (r.uuid ? [{ uuid: r.uuid, peer: r.peer }] : []));
+      refIndex = { rows, index: buildRefIndex(targets) };
+    }
+    return refIndex.index;
+  }
+
   async function focusSession(target: FocusTarget) {
     // A live pty and its forest session merge into one row; prefer a pty row if
     // the roster has both, so a hosted session attaches rather than resumes.
@@ -1541,6 +1556,20 @@ export function mountShell(appEl: HTMLElement): void {
     },
   });
 
+  /** Resolve a session reference and bring its session forward; false when the
+   *  daemon can't name a single session for it. */
+  async function openSessionRef(ref: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/resolve/${encodeURIComponent(ref)}`);
+      if (!res.ok) return false;
+      const { session } = (await res.json()) as { session: { uuid: string } };
+      focusAfterBoot({ session: session.uuid });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // A session link (`/s/<id, prefix or peer name>`) clicked inside the app focuses
   // that session here instead of opening a new browser tab. One the daemon can't
   // resolve to a single session opens as usual, on its candidates page.
@@ -1555,16 +1584,20 @@ export function mountShell(appEl: HTMLElement): void {
       const ref = sessionLinkRef(a.href, location.origin);
       if (ref === null) return;
       e.preventDefault();
-      void fetch(`/api/resolve/${encodeURIComponent(ref)}`)
-        .then(async (res) => {
-          if (!res.ok) throw new Error(String(res.status));
-          const { session } = (await res.json()) as { session: { uuid: string } };
-          focusAfterBoot({ session: session.uuid });
-        })
-        .catch(() => window.open(a.href, "_blank", "noopener"));
+      void openSessionRef(ref).then((ok) => {
+        if (!ok) window.open(a.href, "_blank", "noopener");
+      });
     },
     true,
   );
+
+  // The installed app capturing a session link opened elsewhere (see the manifest's
+  // launch_handler: focus-existing): the browser focuses this window and hands it the
+  // URL here instead of loading it, so the app switches tabs without a reload.
+  window.launchQueue?.setConsumer((params) => {
+    const ref = params.targetURL ? sessionLinkRef(params.targetURL, location.origin) : null;
+    if (ref !== null) void openSessionRef(ref);
+  });
 
   // Snoozes keep polling while the page is hidden: a wake is exactly when the
   // ⏰ title matters (browsers throttle hidden timers, but still fire them).

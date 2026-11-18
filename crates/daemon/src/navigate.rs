@@ -3,8 +3,9 @@
 //! `GET /api/resolve/{ref}` answers the same lookup as JSON, for the app's own clicks.
 //!
 //! - one match, an app window connected: a `focus` event goes to that window (as with
-//!   `POST /api/focus`) and the response is a short page saying so, with a link to open
-//!   the session in this tab instead
+//!   `POST /api/focus`) and the response is a short page that closes its own tab, or
+//!   failing that says where the session went, with a link to open it in this tab
+//!   instead
 //! - one match, no window: 303 to `/?session=<uuid>`, which boots the app on it
 //! - several matches: 300 with a page listing them, each linking to its full uuid
 //! - none: 404 with a page saying nothing matched
@@ -135,11 +136,15 @@ pub(crate) async fn session_link_route(
             let open_here = format!("/?session={}", c.uuid);
             let target = Target::Session(c.uuid.clone());
             match state.focus.request_if_connected(&state.events, &target) {
+                // The tab this link opened is only a relay: it closes itself at once.
+                // A browser lets a script close a tab with one history entry (a link
+                // opened from another app); otherwise the text stays, with a way in.
                 Some(_) => page(
                     StatusCode::OK,
                     "Opened in eigenform",
                     &format!(
-                        "<p>Sent <b>{}</b> to your eigenform window.</p>\
+                        "<script>window.close()</script>\
+                         <p>Sent <b>{}</b> to your eigenform window. You can close this tab.</p>\
                          <p><a href=\"{}\">Open it in this tab instead</a></p>",
                         esc(&label(c)),
                         esc(&open_here),
