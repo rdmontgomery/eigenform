@@ -1,6 +1,8 @@
 // A session's peer name printed in a terminal is a link: hovering it underlines it,
 // and clicking it opens that session in this window (a `?session=` pty socket), with
-// no browser tab or `/s/` round trip. A word naming no session stays plain text.
+// no browser tab or `/s/` round trip. A word naming no session stays plain text. A
+// session link the installed app captures (the browser hands it over through
+// `launchQueue`) switches sessions the same way, without reloading the page.
 //
 // Drives the real app against a stubbed daemon whose pty socket prints one line.
 // Run: `npm run test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
@@ -62,6 +64,7 @@ before(async () => {
     "/api/forest": FOREST,
     "/api/plan-reviews": [],
     "/api/pins": [],
+    "/api/resolve/app-dd": { session: { uuid: OTHER } },
   };
 
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -79,6 +82,12 @@ before(async () => {
     if (new URL(ws.url()).searchParams.get("attach") !== PTY.id) return;
     ws.send(JSON.stringify({ type: "pty", id: PTY.id }));
     ws.send(Buffer.from("hand it to app-dd or nobody-known\r\n"));
+  });
+  await context.addInitScript(() => {
+    const w = window as unknown as { __launch?: (p: unknown) => void };
+    Object.defineProperty(window, "launchQueue", {
+      value: { setConsumer: (f: (p: unknown) => void) => (w.__launch = f) },
+    });
   });
   await context.addInitScript((id) => {
     localStorage.setItem(
@@ -144,3 +153,14 @@ async function waitFor(cond: () => boolean, ms = 3000) {
     await new Promise((r) => setTimeout(r, 50));
   }
 }
+
+test("a captured /s/ link handed over by the browser opens the session in place", async () => {
+  const active = () => page.locator(".tab--active").textContent();
+  await page.locator(".tab", { hasText: "here" }).click();
+  assert.match((await active()) ?? "", /here/);
+  await page.evaluate((url) => {
+    (window as unknown as { __launch: (p: unknown) => void }).__launch({ targetURL: url });
+  }, `${ORIGIN}/s/app-dd`);
+  await page.waitForFunction(() => /the other one/.test(document.querySelector(".tab--active")?.textContent ?? ""));
+  assert.equal(page.url(), `${ORIGIN}/`, "no navigation");
+});

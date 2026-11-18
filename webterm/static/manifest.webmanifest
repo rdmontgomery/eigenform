@@ -4,6 +4,8 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "launch_handler": { "client_mode": ["focus-existing", "auto"] },
+  "handle_links": "preferred",
   "background_color": "#1c1814",
   "theme_color": "#1c1814",
   "icons": [

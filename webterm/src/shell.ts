@@ -1556,6 +1556,20 @@ export function mountShell(appEl: HTMLElement): void {
     },
   });
 
+  /** Resolve a session reference and bring its session forward; false when the
+   *  daemon can't name a single session for it. */
+  async function openSessionRef(ref: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/resolve/${encodeURIComponent(ref)}`);
+      if (!res.ok) return false;
+      const { session } = (await res.json()) as { session: { uuid: string } };
+      focusAfterBoot({ session: session.uuid });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // A session link (`/s/<id, prefix or peer name>`) clicked inside the app focuses
   // that session here instead of opening a new browser tab. One the daemon can't
   // resolve to a single session opens as usual, on its candidates page.
@@ -1570,16 +1584,20 @@ export function mountShell(appEl: HTMLElement): void {
       const ref = sessionLinkRef(a.href, location.origin);
       if (ref === null) return;
       e.preventDefault();
-      void fetch(`/api/resolve/${encodeURIComponent(ref)}`)
-        .then(async (res) => {
-          if (!res.ok) throw new Error(String(res.status));
-          const { session } = (await res.json()) as { session: { uuid: string } };
-          focusAfterBoot({ session: session.uuid });
-        })
-        .catch(() => window.open(a.href, "_blank", "noopener"));
+      void openSessionRef(ref).then((ok) => {
+        if (!ok) window.open(a.href, "_blank", "noopener");
+      });
     },
     true,
   );
+
+  // The installed app capturing a session link opened elsewhere (see the manifest's
+  // launch_handler: focus-existing): the browser focuses this window and hands it the
+  // URL here instead of loading it, so the app switches tabs without a reload.
+  window.launchQueue?.setConsumer((params) => {
+    const ref = params.targetURL ? sessionLinkRef(params.targetURL, location.origin) : null;
+    if (ref !== null) void openSessionRef(ref);
+  });
 
   // Snoozes keep polling while the page is hidden: a wake is exactly when the
   // ⏰ title matters (browsers throttle hidden timers, but still fire them).

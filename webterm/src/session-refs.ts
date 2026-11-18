@@ -3,10 +3,10 @@
  *
  * A reference is a whole word that names exactly one known session: its full uuid,
  * an 8+ hex-digit prefix of the uuid, or its peer name (case-insensitive). The rules
- * match the daemon's `/s/<ref>` resolver, so a word linkified here resolves there too:
- * a full uuid wins outright, otherwise every session named by the word or whose uuid
- * starts with it is a hit, and only a single hit makes a link. Ambiguous and unknown
- * words are left alone.
+ * follow the daemon's `/s/<ref>` resolver: a full uuid wins outright, otherwise every
+ * session named by the word or whose uuid starts with it is a hit, and only a single
+ * hit makes a link. Unlike `/s/`, a prefix needs 8 digits, so ordinary short words
+ * that happen to be hex never count. Ambiguous and unknown words are left alone.
  *
  * A word is a run of `[A-Za-z0-9_.-]` bounded by anything else, so a name inside a
  * path or URL (`~/work/app-dd`, `https://x/app-dd`) is not a reference: the `/`
