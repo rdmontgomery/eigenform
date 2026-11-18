@@ -84,6 +84,8 @@ import { el } from "./dom.ts";
 import { mountTabSearch } from "./tab-search.ts";
 import { fetchPins, setPinned } from "./pins.ts";
 import { sessionLinkRef } from "./focus.ts";
+import { buildRefIndex, type SessionRefIndex } from "./session-refs.ts";
+import { registerSessionLinks } from "./term-session-links.ts";
 import { FACET_HELP } from "./facets.ts";
 import { dueSnoozes, snoozableTab, type Snooze } from "./snooze.ts";
 import { openSnoozeMenu, openSnoozeShelf } from "./snooze-ui.ts";
@@ -917,6 +919,7 @@ export function mountShell(appEl: HTMLElement): void {
 
     const handle = newTerminal(appearance.font(), appearance.scheme().theme);
     handle.term.open(fitEl);
+    registerSessionLinks(handle.term, sessionRefIndex, (uuid) => void focusSession({ session: uuid }));
 
     const entry: TabEntry = {
       id: tabId,
@@ -1357,6 +1360,18 @@ export function mountShell(appEl: HTMLElement): void {
   // does — open or activate its tab (attaching a hosted pty) — and scrolls the
   // row into view. The target is a session uuid or a live pty id.
   // ------------------------------------------------------------------
+
+  /** Session references in terminal output resolve against the roster, rebuilt only
+   *  when the roster changes. */
+  let refIndex: { rows: RosterRow[]; index: SessionRefIndex } | null = null;
+  function sessionRefIndex(): SessionRefIndex {
+    const rows = railView.rows();
+    if (refIndex?.rows !== rows) {
+      const targets = rows.flatMap((r) => (r.uuid ? [{ uuid: r.uuid, peer: r.peer }] : []));
+      refIndex = { rows, index: buildRefIndex(targets) };
+    }
+    return refIndex.index;
+  }
 
   async function focusSession(target: FocusTarget) {
     // A live pty and its forest session merge into one row; prefer a pty row if

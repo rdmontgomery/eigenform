@@ -110,3 +110,19 @@ test("Pin moves a session to the top of the rail; Unpin puts it back", async () 
   assert.ok(!(await groups()).includes("Pinned"));
   assert.equal(await firstRow(), "fresh work");
 });
+
+test("each row's pin toggle pins and unpins without opening the preview", async () => {
+  const row = (title: string) => page.locator(".rail-row", { has: page.locator(`.rail-row-label:text-is('${title}')`) });
+  await page.keyboard.press("Escape");
+  await row("commander").locator(".rail-row-pin").click();
+  await page.waitForSelector(".rail-row-pin--on");
+  assert.deepEqual(pins.map((p) => p.uuid), [OLD]);
+  assert.equal((await groups())[0], "Pinned");
+  assert.equal(await firstRow(), "commander");
+  assert.equal(await page.locator(".rail-row-pin").count(), 2, "every row shows a toggle");
+
+  await row("commander").locator(".rail-row-pin--on").click();
+  await page.waitForFunction(() => !document.querySelector(".rail-row-pin--on"));
+  assert.deepEqual(pins, []);
+  assert.equal(await firstRow(), "fresh work");
+});
