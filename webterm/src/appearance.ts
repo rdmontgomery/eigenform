@@ -257,27 +257,41 @@ export function createAppearance(hooks: {
     "theme-pop",
     ".theme-btn",
     (pop) => {
-      for (const s of SCHEMES) {
-        const row = el("button", `theme-row${s.id === scheme.id ? " theme-row--on" : ""}`);
+      // Dark first, then light; catalog order (families adjacent) within each.
+      const groups: [string, Scheme[]][] = [
+        ["Dark", SCHEMES.filter((s) => s.dark)],
+        ["Light", SCHEMES.filter((s) => !s.dark)],
+      ];
+      let current: HTMLElement | null = null;
+      for (const [label, schemes] of groups) {
+        const head = el("div", "theme-group");
+        head.textContent = label;
+        pop.append(head);
+        for (const s of schemes) {
+          const row = el("button", `theme-row${s.id === scheme.id ? " theme-row--on" : ""}`);
+          if (s.id === scheme.id) current = row;
 
-        const swatch = el("div", "theme-swatch");
-        swatch.style.background = s.theme.background;
-        for (const k of SWATCH_KEYS) {
-          const dot = el("span", "theme-dot");
-          dot.style.background = s.theme[k];
-          swatch.append(dot);
+          const swatch = el("div", "theme-swatch");
+          swatch.style.background = s.theme.background;
+          for (const k of SWATCH_KEYS) {
+            const dot = el("span", "theme-dot");
+            dot.style.background = s.theme[k];
+            swatch.append(dot);
+          }
+          const fg = el("span", "theme-dot theme-dot--fg");
+          fg.style.background = s.theme.foreground;
+          swatch.append(fg);
+
+          const name = el("span", "theme-row-name");
+          name.textContent = s.name;
+
+          row.append(swatch, name);
+          row.addEventListener("click", () => applyScheme(s));
+          pop.append(row);
         }
-        const fg = el("span", "theme-dot theme-dot--fg");
-        fg.style.background = s.theme.foreground;
-        swatch.append(fg);
-
-        const name = el("span", "theme-row-name");
-        name.textContent = s.name;
-
-        row.append(swatch, name);
-        row.addEventListener("click", () => applyScheme(s));
-        pop.append(row);
       }
+      // With 30-odd schemes the list scrolls; open on the active one.
+      if (current) requestAnimationFrame(() => current?.scrollIntoView({ block: "nearest" }));
     },
     hooks.onChromeChange,
   );
