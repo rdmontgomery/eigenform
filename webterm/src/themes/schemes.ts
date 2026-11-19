@@ -1,8 +1,8 @@
 // Curated terminal color schemes. Each is a full xterm ITheme (16 ANSI +
 // fg/bg/cursor/selection); deriveChrome() turns it into the whole app's chrome.
 // Canonical palettes from the iTerm2-Color-Schemes lineage, plus Warm Ink (this
-// app's own identity) as the default. To grow the catalog, see
-// scripts/gen-schemes.mjs.
+// app's own identity) as the default. Users add their own through the picker's
+// editor or `PUT /api/themes/{id}`; those live on the daemon, not here.
 import type { TermTheme } from "./derive.ts";
 
 export interface Scheme {
@@ -13,6 +13,8 @@ export interface Scheme {
   /** Whether the background is dark (drives color-scheme + ordering). */
   dark: boolean;
   theme: TermTheme;
+  /** A user's theme from /api/themes (editable), not one of the bundled ones. */
+  custom?: boolean;
 }
 
 export const SCHEMES: Scheme[] = [
