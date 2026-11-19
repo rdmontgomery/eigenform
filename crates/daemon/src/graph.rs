@@ -433,29 +433,39 @@ pub(crate) fn settle_lineage(state: &AppState) {
     state.lineage.settle(&uuid_of);
 }
 
+/// The graph from the last forest scan (see [`store`]).
+#[derive(Default)]
+pub struct GraphSlot(Mutex<Option<Graph>>);
+
+/// Derive the graph from one forest scan and keep it for `GET /api/graph`.
+pub(crate) fn store(state: &AppState, scan: &[eigenform_forest::LiveSession]) -> Graph {
+    let sessions: Vec<GraphSession> = scan.iter().map(graph_session).collect();
+    let ledger = observe_aliases(state.config.state_dir.as_deref(), &sessions);
+    let graph = derive(&sessions, &state.lineage.links(), &ledger, Utc::now());
+    *state.graph.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(graph.clone());
+    graph
+}
+
 /// `GET /api/graph` — `{nodes, lineage, messages}` over the live sessions and their kin.
-/// See the module docs for where each edge comes from.
+/// See the module docs for where each edge comes from. Served from the last forest
+/// push's scan while the app has the forest stream open; scans only when nothing has.
 pub(crate) async fn graph_route(State(state): State<AppState>) -> Response {
     settle_lineage(&state);
-    let links = state.lineage.links();
-    let cfg = state.config.clone();
-    let graph = tokio::task::spawn_blocking(move || {
-        let (Some(projects), Some(sessions_dir), Some(state_dir)) =
-            (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir)
-        else {
-            return Graph::default();
-        };
-        let now = Utc::now();
-        let sessions: Vec<GraphSession> =
-            eigenform_forest::live_forest(projects, sessions_dir, state_dir, now)
-                .iter()
-                .map(graph_session)
-                .collect();
-        let ledger = observe_aliases(Some(state_dir), &sessions);
-        derive(&sessions, &links, &ledger, now)
-    })
-    .await
-    .unwrap_or_default();
+    let cached = state
+        .graph
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let graph = match cached {
+        Some(g) => g,
+        None => {
+            let st = state.clone();
+            tokio::task::spawn_blocking(move || store(&st, &crate::forest::scan(&st.config)))
+                .await
+                .unwrap_or_default()
+        }
+    };
     axum::Json(graph).into_response()
 }
 

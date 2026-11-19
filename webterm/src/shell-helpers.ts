@@ -126,7 +126,7 @@ export function artifactWidthFromPointer(x: number, paneRight: number): number {
 
 export const GRAPH_MIN_H = 120;
 export const TRANSCRIPT_MIN_H = 140;
-export const GRAPH_DEFAULT_H = 260;
+export const GRAPH_DEFAULT_H = 340;
 
 /**
  * Map a pointer y (px from the viewport's top) to the session graph's height in

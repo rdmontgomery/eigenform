@@ -20,7 +20,7 @@ pub(crate) async fn forest_route(State(state): State<AppState>) -> Response {
 
 /// `GET /api/watch/forest` — SSE that pushes the snapshot whenever it changes.
 pub(crate) async fn forest_watch_route(State(state): State<AppState>) -> Response {
-    forest_sse(state.config)
+    forest_sse(state)
 }
 
 /// Compute the live-Forest snapshot as a JSON string: Claude sessions, then Codex threads
@@ -36,33 +36,42 @@ pub(crate) fn forest_knows(cfg: &Config, uuid: &str) -> bool {
 
 /// The forest snapshot rows behind [`forest_json`].
 pub(crate) fn forest_rows(cfg: &Config) -> Vec<serde_json::Value> {
-    let mut rows: Vec<serde_json::Value> = Vec::new();
-    if let (Some(projects), Some(sessions), Some(state)) =
-        (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir)
-    {
-        rows.extend(
+    rows_from(cfg, &scan(cfg))
+}
+
+/// The Claude sessions of the live forest (empty without the dirs it reads).
+pub(crate) fn scan(cfg: &Config) -> Vec<eigenform_forest::LiveSession> {
+    match (&cfg.projects_dir, &cfg.sessions_dir, &cfg.state_dir) {
+        (Some(projects), Some(sessions), Some(state)) => {
             eigenform_forest::live_forest(projects, sessions, state, chrono::Utc::now())
-                .into_iter()
-                .map(|s| {
-                    serde_json::json!({
-                        "uuid": s.uuid,
-                        "title": s.title,
-                        "cwd": s.cwd.display().to_string(),
-                        "recency": s.recency.to_rfc3339(),
-                        "live": s.live,
-                        "state": s.state.as_str(),
-                        "spark": s.spark,
-                        "headless": s.headless,
-                        "pid": s.pid,
-                        "peer": s.peer,
-                        "cacheAt": s.cache.map(|c| c.at.to_rfc3339()),
-                        "cacheTtl": s.cache.and_then(|c| c.ttl_secs),
-                        "lastPromptAt": s.last_prompt.map(|t| t.to_rfc3339()),
-                        "facets": {"work": s.facets.work, "mention": s.facets.mention},
-                    })
-                }),
-        );
+        }
+        _ => Vec::new(),
     }
+}
+
+/// Snapshot rows for `sessions` (one [`scan`]), then the Codex threads.
+fn rows_from(cfg: &Config, sessions: &[eigenform_forest::LiveSession]) -> Vec<serde_json::Value> {
+    let mut rows: Vec<serde_json::Value> = sessions
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "uuid": s.uuid,
+                "title": s.title,
+                "cwd": s.cwd.display().to_string(),
+                "recency": s.recency.to_rfc3339(),
+                "live": s.live,
+                "state": s.state.as_str(),
+                "spark": s.spark,
+                "headless": s.headless,
+                "pid": s.pid,
+                "peer": s.peer,
+                "cacheAt": s.cache.map(|c| c.at.to_rfc3339()),
+                "cacheTtl": s.cache.and_then(|c| c.ttl_secs),
+                "lastPromptAt": s.last_prompt.map(|t| t.to_rfc3339()),
+                "facets": {"work": s.facets.work, "mention": s.facets.mention},
+            })
+        })
+        .collect();
     if let Some(home) = &cfg.codex_home {
         rows.extend(eigenform_codex::threads(home).into_iter().map(|t| {
             serde_json::json!({
@@ -104,7 +113,11 @@ fn hash_str(s: &str) -> u64 {
 /// A live session appends to its JSONL many times a second, so filesystem events are
 /// coalesced: after one arrives the loop waits [`FOREST_DEBOUNCE`] and drains the rest
 /// before rescanning, bounding the full-forest scan to a few per second under load.
-fn forest_sse(cfg: Arc<Config>) -> Response {
+///
+/// The same scan feeds the session graph: each one recomputes it into `state.graph`, so
+/// `GET /api/graph` (which the app fetches on each push) costs no scan of its own.
+fn forest_sse(state: AppState) -> Response {
+    let cfg = Arc::clone(&state.config);
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(8);
     tokio::spawn(async move {
         // A dedicated thread owns the notify watcher; it pings on any write under the
@@ -156,10 +169,15 @@ fn forest_sse(cfg: Arc<Config>) -> Response {
         let mut last_hash: u64 = 0;
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
         loop {
-            let cfg2 = Arc::clone(&cfg);
-            let json = tokio::task::spawn_blocking(move || forest_json(&cfg2))
-                .await
-                .unwrap_or_else(|_| "[]".to_string());
+            let st = state.clone();
+            let json = tokio::task::spawn_blocking(move || {
+                let sessions = scan(&st.config);
+                crate::graph::store(&st, &sessions);
+                serde_json::to_string(&rows_from(&st.config, &sessions))
+                    .unwrap_or_else(|_| "[]".to_string())
+            })
+            .await
+            .unwrap_or_else(|_| "[]".to_string());
             let h = hash_str(&json);
             if h != last_hash {
                 last_hash = h;

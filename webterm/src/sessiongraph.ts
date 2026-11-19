@@ -25,7 +25,7 @@ const LS_COLLAPSED = "eigenform:term:graph-collapsed:v1";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ROW_H = 24;
 const INDENT = 16;
-const RING_PAD = 64;
+const RING_PAD = 56;
 
 export interface SessionGraphHandle {
   /** Re-fetch the graph (the forest changed). */
@@ -188,8 +188,12 @@ export function mountSessionGraph(hostEl: HTMLElement): SessionGraphHandle {
     }
     const w = Math.max(200, body.clientWidth);
     const h = Math.max(160, body.clientHeight - (g.messages.length === 0 ? 40 : 0));
+    // Only sessions with a message edge go on the ring; the rest would just crowd it.
     // Ring order follows the lineage outline, so families sit together.
-    const order = lineageOutline(g).map((r) => r.node.id);
+    const linked = new Set(g.messages.flatMap((m) => [m.from, m.to]));
+    const order = lineageOutline(g)
+      .map((r) => r.node.id)
+      .filter((id) => linked.has(id));
     const pos = ringLayout(order, w, h, RING_PAD);
     const scene = el("div", "sg-ring");
     scene.style.height = `${h}px`;
@@ -259,7 +263,13 @@ export function mountSessionGraph(hostEl: HTMLElement): SessionGraphHandle {
     }
     const live = graph.nodes.filter((n) => n.live).length;
     const edges = view === "lineage" ? graph.lineage.length : graph.messages.length;
-    summary.textContent = `${live} live · ${edges} ${view === "lineage" ? "launch" : "link"}${edges === 1 ? "" : "s"}`;
+    let text = `${live} live · ${edges} ${view === "lineage" ? "launch" : "link"}${edges === 1 ? "" : "s"}`;
+    if (view === "messages") {
+      const linked = new Set(graph.messages.flatMap((m) => [m.from, m.to]));
+      const quiet = graph.nodes.filter((n) => !linked.has(n.id)).length;
+      if (quiet > 0 && graph.messages.length > 0) text += ` · ${quiet} quiet`;
+    }
+    summary.textContent = text;
     if (collapsed) return;
     const scroll = body.scrollTop;
     body.replaceChildren();

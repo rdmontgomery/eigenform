@@ -157,6 +157,8 @@ pub struct AppState {
     pub pins: Arc<pins::PinStore>,
     /// Which session launched which (`POST /api/pty`'s `parent`), persisted.
     pub lineage: Arc<graph::LineageStore>,
+    /// The session graph from the last forest scan.
+    pub graph: Arc<graph::GraphSlot>,
     /// Per-spawn turn state from the claude turn hooks: is a pty safe to kill?
     pub turns: Arc<turns::SessionTurns>,
     /// Connected app windows + the focus request held while none was (`/api/focus`).
@@ -269,6 +271,7 @@ pub fn app(config: Config) -> Router {
         snoozes: Arc::new(snooze::SnoozeStore::open(config.state_dir.as_deref())),
         pins: Arc::new(pins::PinStore::open(config.state_dir.as_deref())),
         lineage: Arc::new(graph::LineageStore::open(config.state_dir.as_deref())),
+        graph: Arc::new(graph::GraphSlot::default()),
         config: Arc::new(config),
         events,
         plan_gate: Arc::new(plan_gate::PlanGate::default()),

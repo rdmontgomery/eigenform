@@ -1401,7 +1401,7 @@ a.rail-feed-title:hover { text-decoration: underline; }
 
 .graph-region {
   position: relative;
-  height: var(--graph-h, 260px);
+  height: var(--graph-h, 340px);
   /* Cap so the transcript always keeps a usable strip, even if a restored
      --graph-h is taller than the current dock (140px ≈ TRANSCRIPT_MIN_H). */
   max-height: calc(100% - 140px);
@@ -2946,7 +2946,8 @@ a.rail-feed-title:hover { text-decoration: underline; }
   transform: translate(-50%, -50%);
   background: var(--surface);
   border-color: var(--line-soft);
-  max-width: 120px;
+  max-width: 104px;
+  font-size: 11px;
 }
 a.sg-node:hover { background: var(--raised-2); border-color: var(--line); }
 .sg-label { overflow: hidden; text-overflow: ellipsis; }
