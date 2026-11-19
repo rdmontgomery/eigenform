@@ -1274,6 +1274,7 @@ export function mountShell(appEl: HTMLElement): void {
         return;
       }
       void refreshRoster();
+      dock.refreshGraph();
     };
   }
 

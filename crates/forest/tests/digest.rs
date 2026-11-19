@@ -340,3 +340,51 @@ fn jira_keys_split_into_worked_on_and_mentioned() {
         "ABC-12 is worked on, ZZ-99 was only echoed, UTF-8 is not a key"
     );
 }
+
+fn peer_row(cwd: &Path, from: &str, pid: u32, at: &str) -> String {
+    line(json!({"type":"user","cwd":cwd,"isMeta":true,"timestamp":at,
+        "origin":{"kind":"peer","from":"uds:/tmp/socks/1.sock","verifiedPeerPid":pid,
+                  "msg_id":"00000000-0000-0000-0000-000000000001","name":from},
+        "message":{"role":"user","content":format!("Another Claude session sent a message: <cross-session-message from-name=\"{from}\">hi</cross-session-message>")}}))
+}
+
+#[test]
+fn messages_from_peer_sessions_are_the_inbox_and_nothing_else_is() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let cwd = home.path();
+    let p = home.path().join("s.jsonl");
+    let lines = [
+        user(cwd, "hello"),
+        peer_row(cwd, "app-dd", 4242, "2026-01-01T00:00:00Z"),
+        // A skill body is meta too, but has no peer origin.
+        line(json!({"type":"user","isMeta":true,"message":{"role":"user","content":"skill text"}})),
+        line(
+            json!({"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"typed"}}),
+        ),
+        peer_row(cwd, "ops-12", 77, "2026-01-01T00:05:00Z"),
+    ];
+    std::fs::write(&p, lines.concat()).unwrap();
+
+    let d = session_digest(&p);
+    let got: Vec<(&str, Option<u32>, &str)> = d
+        .peers
+        .iter()
+        .map(|m| (m.from.as_str(), m.pid, m.at.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("app-dd", Some(4242), "2026-01-01T00:00:00Z"),
+            ("ops-12", Some(77), "2026-01-01T00:05:00Z"),
+        ]
+    );
+    // The peer's prose is not the session's own talk: no facets from it.
+    assert!(d.facets.mention.is_empty());
+
+    // The cache round-trips the inbox and keeps it across an append.
+    std::fs::write(&p, lines[..2].concat()).unwrap();
+    cached_digest(state.path(), "sid", &p);
+    std::fs::write(&p, lines.concat()).unwrap();
+    assert_eq!(cached_digest(state.path(), "sid", &p), d);
+}

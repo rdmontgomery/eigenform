@@ -18,6 +18,7 @@
 //! - `inspect` — `/api/inspect`, the skills + memory inventory
 //! - `snooze` — `/api/snoozes`, tabs closed until a wake time (persisted)
 //! - [`pins`] — `/api/pins`, sessions pinned to the top of the rail (persisted)
+//! - [`graph`] — `/api/graph`, the session graph: lineage and peer messages
 //! - [`navigate`] — `/s/:ref` session links (uuid, prefix or peer name) and `/api/resolve/:ref`
 //! - [`events`] — the observability bus and `/api/events` (+ `/stream`)
 //! - [`focus`] — `POST /api/focus`, deep-linking a session to the front of the app
@@ -45,6 +46,7 @@ pub mod events;
 pub mod feeds;
 pub mod focus;
 mod forest;
+pub mod graph;
 pub mod host;
 mod inspect;
 mod launcher;
@@ -153,6 +155,8 @@ pub struct AppState {
     pub snoozes: Arc<snooze::SnoozeStore>,
     /// Sessions pinned to the top of the rail (persisted under `state_dir`).
     pub pins: Arc<pins::PinStore>,
+    /// Which session launched which (`POST /api/pty`'s `parent`), persisted.
+    pub lineage: Arc<graph::LineageStore>,
     /// Per-spawn turn state from the claude turn hooks: is a pty safe to kill?
     pub turns: Arc<turns::SessionTurns>,
     /// Connected app windows + the focus request held while none was (`/api/focus`).
@@ -200,6 +204,7 @@ pub fn app(config: Config) -> Router {
             post(plan_gate::plan_review_decision_route),
         )
         .route("/api/forest", get(forest::forest_route))
+        .route("/api/graph", get(graph::graph_route))
         .route("/api/watch/forest", get(forest::forest_watch_route))
         .route("/api/claims", get(claims::claims_route))
         .route(
@@ -263,6 +268,7 @@ pub fn app(config: Config) -> Router {
         host: Arc::new(host::SessionHost::with_events(Arc::clone(&events))),
         snoozes: Arc::new(snooze::SnoozeStore::open(config.state_dir.as_deref())),
         pins: Arc::new(pins::PinStore::open(config.state_dir.as_deref())),
+        lineage: Arc::new(graph::LineageStore::open(config.state_dir.as_deref())),
         config: Arc::new(config),
         events,
         plan_gate: Arc::new(plan_gate::PlanGate::default()),

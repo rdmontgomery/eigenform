@@ -294,16 +294,32 @@ struct CreateBody {
     /// Create a missing `new` dir instead of refusing it (`/pty`'s `create=1`).
     #[serde(default)]
     create: bool,
+    /// The launching session's uuid, recorded as the new session's parent in the
+    /// session graph once its uuid is known.
+    #[serde(default)]
+    parent: Option<String>,
+}
+
+/// A session uuid as `parent` must spell it: 36 chars of hex and dashes, lowercased.
+fn session_uuid(s: &str) -> Option<String> {
+    let ok = s.len() == 36
+        && s.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        });
+    ok.then(|| s.to_ascii_lowercase())
 }
 
 /// `POST /api/pty` — start a fresh claude session with no browser attached, so an outside
-/// tool can launch one. Body `{"new": "<cwd>", "prompt"?: "<text>", "create"?: bool}`
-/// with `content-type: application/json`.
+/// tool can launch one. Body `{"new": "<cwd>", "prompt"?: "<text>", "create"?: bool,
+/// "parent"?: "<uuid>"}` with `content-type: application/json`. `parent` is the launching
+/// session's uuid: the session graph draws the new session as its child.
 ///
 /// - 201 `{"id", "cwd"}`: spawned and registered. It lists in `GET /api/pty` (so the
 ///   rail shows it) and `/pty?attach=<id>` opens it. The uuid lands later, as on `/pty`:
 ///   on the roster row and as a `session-uuid-adopted` event.
-/// - 400 bad body, 403 non-local Origin, 415 not JSON
+/// - 400 bad body (including a `parent` that isn't a session uuid), 403 non-local
+///   Origin, 415 not JSON
 /// - 404 `new` doesn't exist and `create` is off; 500 mkdir or spawn failed
 /// - 503 no `projects_dir`: without it the daemon can't run or track a claude session
 pub(crate) async fn pty_create_route(
@@ -335,6 +351,20 @@ pub(crate) async fn pty_create_route(
         )
             .into_response();
     };
+    let parent = match body
+        .parent
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        None => None,
+        Some(p) => match session_uuid(p) {
+            Some(u) => Some(u),
+            None => {
+                return (StatusCode::BAD_REQUEST, "parent must be a session uuid").into_response()
+            }
+        },
+    };
     // `pty_command` would fall back to the default program here: never answer "start
     // claude" with a shell.
     if state.config.projects_dir.is_none() {
@@ -364,14 +394,23 @@ pub(crate) async fn pty_create_route(
     let hook_token = add_turn_hooks(&state, &mut command);
     push_prompt(&mut command, body.prompt);
     match spawn_registered(&state, command, hook_token) {
-        Ok(live) => (
-            StatusCode::CREATED,
-            axum::Json(serde_json::json!({
-                "id": live.id.to_string(),
-                "cwd": live.cwd.as_ref().map(|c| c.display().to_string()),
-            })),
-        )
-            .into_response(),
+        Ok(live) => {
+            if let Some(parent) = parent {
+                state.lineage.launched(
+                    &live.id.to_string(),
+                    &parent,
+                    chrono::Utc::now().timestamp_millis(),
+                );
+            }
+            (
+                StatusCode::CREATED,
+                axum::Json(serde_json::json!({
+                    "id": live.id.to_string(),
+                    "cwd": live.cwd.as_ref().map(|c| c.display().to_string()),
+                })),
+            )
+                .into_response()
+        }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "failed to spawn pty").into_response(),
     }
 }
@@ -413,6 +452,7 @@ pub(crate) async fn pty_list_route(State(state): State<AppState>) -> Response {
     if let Some(sessions_dir) = &state.config.sessions_dir {
         state.host.reconcile(sessions_dir);
     }
+    crate::graph::settle_lineage(&state);
     let rows: Vec<serde_json::Value> = state
         .host
         .list()

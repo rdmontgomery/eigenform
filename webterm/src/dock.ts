@@ -1,9 +1,11 @@
 // The inspect dock — a GLOBAL panel (one toggle, top-right) that follows the
 // active tab. Right-docked and pushing the terminal narrower (not a floating
-// overlay): reach map on top, transcript below, split by a draggable divider,
-// and the global events pane at the foot. Reach + transcript follow the active
-// tab's session uuid; a tab with no uuid yet shows a placeholder instead.
-// Open state and geometry (width, reach height) persist across reloads.
+// overlay): the session graph on top, split by a draggable divider from the
+// reach map (folded to its header by default) and the transcript, with the
+// global events pane at the foot. Reach + transcript follow the active tab's
+// session uuid; a tab with no uuid yet shows a placeholder instead. The graph
+// is global and marks the active tab's session.
+// Open state and geometry (width, graph height) persist across reloads.
 
 import { el, makeDragHandle } from "./dom.ts";
 import { mountDrawer } from "./drawer.ts";
@@ -12,17 +14,19 @@ import { mountReachMap } from "./reachmap.ts";
 import type { ReachHandle } from "./reachmap.ts";
 import { mountEvents } from "./events.ts";
 import type { EventsHandle } from "./events.ts";
+import { mountSessionGraph } from "./sessiongraph.ts";
+import type { SessionGraphHandle } from "./sessiongraph.ts";
 import {
   drawerWidthFromPointer,
   DRAWER_DEFAULT_W,
   splitHeightFromPointer,
-  REACH_DEFAULT_H,
+  GRAPH_DEFAULT_H,
   type TabDescriptor,
 } from "./shell-helpers.ts";
 
 const LS_DRAWER = "eigenform:term:drawer:v1";
 const LS_DOCK_W = "eigenform:term:drawer-w:v1";
-const LS_REACH_H = "eigenform:term:reach-h:v1";
+const LS_GRAPH_H = "eigenform:term:graph-h:v1";
 
 function readNum(key: string, fallback: number): number {
   const v = Number(localStorage.getItem(key));
@@ -38,6 +42,8 @@ export interface DockHandle {
   setOpen(open: boolean): void;
   /** Reconcile the mounted panes against (open, the active tab). */
   sync(active: TabDescriptor | null, hasTabs: boolean): void;
+  /** The forest changed: re-fetch the session graph (if mounted). */
+  refreshGraph(): void;
 }
 
 export function mountDock(
@@ -54,15 +60,16 @@ export function mountDock(
   const dockResizer = el("div", "drawer-resizer");
   dockResizer.title = "drag to resize the inspect panel";
   const drawerDock = el("div", "drawer-dock");
-  const reachRegion = el("div", "reach-region");
+  const graphRegion = el("div", "graph-region");
   const dockVsplit = el("div", "dock-vsplit");
-  dockVsplit.title = "drag to resize the reach map / transcript split";
+  dockVsplit.title = "drag to resize the session graph / transcript split";
+  const reachRegion = el("div", "reach-region");
   const transcriptRegion = el("div", "transcript-region");
   // Events pane: a collapsible accordion at the dock's foot. Unlike the reach map
   // + transcript (which are uuid-bound), it's global, so it has no vertical split —
   // it self-collapses to just its header when folded.
   const eventsRegion = el("div", "events-region");
-  drawerDock.append(reachRegion, dockVsplit, transcriptRegion, eventsRegion);
+  drawerDock.append(graphRegion, dockVsplit, reachRegion, transcriptRegion, eventsRegion);
 
   let drawerOpen = localStorage.getItem(LS_DRAWER) === "1";
   /** Mounted transcript drawer (uuid-bound), or null. */
@@ -72,23 +79,25 @@ export function mountDock(
   /** Mounted events pane (global — not uuid-bound), or null. Lives while the dock
    *  is open, independent of the active tab. */
   let eventsCurrent: EventsHandle | null = null;
+  /** Mounted session graph (global, like events), or null. */
+  let graphCurrent: SessionGraphHandle | null = null;
   /** Placeholder shown when the dock is open but the active tab has no uuid. */
   let dockPlaceholder: HTMLElement | null = null;
 
-  // Persisted dock geometry: dock width + reach-region height. Re-clamped on
+  // Persisted dock geometry: dock width + graph-region height. Re-clamped on
   // read so a stale/garbage value can't wedge the layout.
   let dockW = drawerWidthFromPointer(0, readNum(LS_DOCK_W, DRAWER_DEFAULT_W));
-  let reachH = readNum(LS_REACH_H, REACH_DEFAULT_H);
+  let graphH = readNum(LS_GRAPH_H, GRAPH_DEFAULT_H);
 
   function applyDockGeometry() {
     document.documentElement.style.setProperty("--drawer-w", `${dockW}px`);
-    document.documentElement.style.setProperty("--reach-h", `${reachH}px`);
+    document.documentElement.style.setProperty("--graph-h", `${graphH}px`);
   }
   applyDockGeometry();
 
   function saveDockGeometry() {
     localStorage.setItem(LS_DOCK_W, String(dockW));
-    localStorage.setItem(LS_REACH_H, String(reachH));
+    localStorage.setItem(LS_GRAPH_H, String(graphH));
   }
 
   function sync(active: TabDescriptor | null, hasTabs: boolean) {
@@ -103,6 +112,8 @@ export function mountDock(
       drawerCurrent = null;
       eventsCurrent?.close();
       eventsCurrent = null;
+      graphCurrent?.close();
+      graphCurrent = null;
       deps.onChange();
       return;
     }
@@ -110,8 +121,10 @@ export function mountDock(
     // The events pane is global (not uuid-bound) — mount it once while the dock is
     // open, before the per-uuid reach/transcript wiring below.
     if (!eventsCurrent) eventsCurrent = mountEvents(eventsRegion);
+    if (!graphCurrent) graphCurrent = mountSessionGraph(graphRegion);
 
     const uuid = active?.uuid ?? null;
+    graphCurrent.setActive(uuid);
 
     if (uuid) {
       if (dockPlaceholder) {
@@ -119,7 +132,6 @@ export function mountDock(
         dockPlaceholder = null;
       }
       reachRegion.style.display = "";
-      dockVsplit.style.display = "";
 
       if (reachCurrent?.uuid !== uuid) {
         reachCurrent?.handle.close();
@@ -149,7 +161,6 @@ export function mountDock(
       drawerCurrent?.handle.close();
       drawerCurrent = null;
       reachRegion.style.display = "none";
-      dockVsplit.style.display = "none";
       // Rebuilt (not reused) each time: the message depends on the active tab's
       // kind, which can change between calls (switching from a claude tab whose
       // uuid hasn't resolved yet to a plain terminal tab, or vice versa).
@@ -170,7 +181,7 @@ export function mountDock(
   }
 
   // ── Splitters ──────────────────────────────────────────────────────────────
-  // Width (the dock's left edge) and the reach/transcript vertical split. Both
+  // Width (the dock's left edge) and the graph/transcript vertical split. Both
   // mirror the rail resizer: drag updates the CSS var live; state persists on
   // mouseup. The width drag re-fits the terminal once at the end — a per-pixel
   // resize would SIGWINCH the pty on every move (spike 09's repaint handles one).
@@ -195,7 +206,7 @@ export function mountDock(
     "row-resize",
     (e) => {
       const r = drawerDock.getBoundingClientRect();
-      reachH = splitHeightFromPointer(e.clientY, r.top, r.height);
+      graphH = splitHeightFromPointer(e.clientY, r.top, r.height);
       applyDockGeometry();
     },
     saveDockGeometry,
@@ -210,5 +221,6 @@ export function mountDock(
       localStorage.setItem(LS_DRAWER, open ? "1" : "0");
     },
     sync,
+    refreshGraph: () => graphCurrent?.refresh(),
   };
 }
