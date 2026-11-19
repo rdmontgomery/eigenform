@@ -39,6 +39,16 @@ const MODE_LABEL: Record<ReachView, string> = {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+/** Folded to its header unless the user opened it ("0"). */
+const LS_COLLAPSED = "eigenform:term:reach-collapsed:v1";
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(LS_COLLAPSED) !== "0";
+  } catch {
+    return true;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Geometry + palette
 // ---------------------------------------------------------------------------
@@ -239,9 +249,14 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   // ── Collapse toggle ───────────────────────────────────────────────────────
   // Clicking the header folds the map to just this bar; CSS (:has) shrinks the
   // dock's reach-region and hides the splitter so the transcript fills the rest.
-  let collapsed = false;
+  let collapsed = readCollapsed();
   function setCollapsed(c: boolean) {
     collapsed = c;
+    try {
+      localStorage.setItem(LS_COLLAPSED, c ? "1" : "0");
+    } catch {
+      // Private mode: the fold just won't survive a reload.
+    }
     root.classList.toggle("reachmap--collapsed", c);
     head.setAttribute("aria-expanded", String(!c));
     head.title = c ? "Show reach map" : "Hide reach map";
@@ -623,6 +638,7 @@ export function mountReachMap(hostEl: HTMLElement, uuid: string, opts: ReachOpti
   }
 
   renderPlayBtn();
+  setCollapsed(collapsed);
 
   // ── Teardown ──────────────────────────────────────────────────────────────
   return {

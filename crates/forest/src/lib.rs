@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 pub mod digest;
-pub use digest::{cached_digest, session_digest, Digest, Facets};
+pub use digest::{cached_digest, session_digest, Digest, Facets, PeerMessage};
 
 /// First tail window read; doubles on escalation up to the whole file.
 const TAIL_WINDOW: u64 = 64 * 1024;
@@ -304,6 +304,8 @@ pub struct LiveSession {
     pub last_prompt: Option<DateTime<Utc>>,
     /// Repos, PRs, issues and branches the session worked on or mentioned.
     pub facets: Facets,
+    /// Messages other sessions sent this one (see [`PeerMessage`]).
+    pub peers: Vec<PeerMessage>,
 }
 
 /// The session's prompt-cache clock. The last real assistant row is the last API
@@ -626,6 +628,7 @@ pub fn live_forest_with(
                 .and_then(|t| t.last_prompt.as_deref())
                 .and_then(parse_ts),
             facets: digest.facets,
+            peers: digest.peers,
         });
     }
     // Live sessions whose JSONL hasn't landed yet (brand-new): show them anyway.
@@ -647,6 +650,7 @@ pub fn live_forest_with(
             cache: None,
             last_prompt: None,
             facets: Facets::default(),
+            peers: Vec::new(),
         });
     }
 

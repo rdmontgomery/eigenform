@@ -23,6 +23,10 @@
 //! `ticket` (`ABC-123`, as written: keys are upper case).
 //! Repo keys are lowercased: GitHub is case-insensitive, and so is the search.
 //!
+//! A third product is the session's **inbox of peer messages**: each `user` row Claude Code
+//! wrote for a message another session sent it (`origin.kind == "peer"`), reduced to the
+//! sender's peer name, its pid and when it arrived. The session graph draws these as edges.
+//!
 //! JSONL transcripts are append-only, so the persisted state carries the byte offset it
 //! has read to and a refresh parses only the new tail. A file that shrank was rewritten:
 //! it is re-read from the start. Unchanged (mtime, len) is served without opening it.
@@ -35,13 +39,15 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 /// Bump when the persisted shape or the extraction rules change: older state is rebuilt.
-const VERSION: u64 = 3;
+const VERSION: u64 = 4;
 /// Most facets kept in state per side; bounds a pathological transcript.
 const STATE_CAP: usize = 256;
 /// Most facets reported per side (what travels in every forest push).
 pub const FACET_CAP: usize = 64;
 /// Most unanswered tool calls remembered across refreshes.
 const PENDING_CAP: usize = 64;
+/// Most peer messages kept per session; the oldest drop first.
+const PEER_CAP: usize = 512;
 
 /// What a session touched, by provenance. See the module docs for the vocabulary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -50,11 +56,23 @@ pub struct Facets {
     pub mention: Vec<String>,
 }
 
-/// The spark and facets of one transcript.
+/// A message another session sent this one, as its receiver recorded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerMessage {
+    /// The sender's peer name at the time (`app-dd`).
+    pub from: String,
+    /// The sender's pid, when Claude Code verified it.
+    pub pid: Option<u32>,
+    /// When the row was written (RFC 3339, as in the transcript).
+    pub at: String,
+}
+
+/// The spark, facets and peer inbox of one transcript.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Digest {
     pub spark: Vec<u32>,
     pub facets: Facets,
+    pub peers: Vec<PeerMessage>,
 }
 
 /// How to read the result of a tool call whose output names what it acted on.
@@ -101,6 +119,7 @@ struct State {
     cur_repo: Option<String>,
     /// Tool calls awaiting a result that names what they acted on.
     pending: Vec<(String, Harvest)>,
+    peers: Vec<PeerMessage>,
 }
 
 fn push_unique(list: &mut Vec<String>, item: String) {
@@ -186,6 +205,7 @@ impl State {
                 self.acc = 0;
             }
             Some("user") => {
+                self.peer_message(v);
                 let meta = v.get("isMeta").and_then(Value::as_bool) == Some(true);
                 let content = v.get("message").and_then(|m| m.get("content"));
                 if let Some(s) = content.and_then(Value::as_str) {
@@ -207,6 +227,33 @@ impl State {
             }
             _ => {}
         }
+    }
+
+    fn peer_message(&mut self, v: &Value) {
+        let Some(origin) = v.get("origin") else {
+            return;
+        };
+        if origin.get("kind").and_then(Value::as_str) != Some("peer") {
+            return;
+        }
+        let Some(from) = origin.get("name").and_then(Value::as_str) else {
+            return;
+        };
+        if self.peers.len() >= PEER_CAP {
+            self.peers.remove(0);
+        }
+        self.peers.push(PeerMessage {
+            from: from.to_string(),
+            pid: origin
+                .get("verifiedPeerPid")
+                .and_then(Value::as_u64)
+                .and_then(|p| u32::try_from(p).ok()),
+            at: v
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        });
     }
 
     /// Chat prose: everything it names is a mention.
@@ -405,6 +452,7 @@ impl State {
         Digest {
             spark: self.spark.clone(),
             facets: self.facets(),
+            peers: self.peers.clone(),
         }
     }
 
@@ -457,6 +505,7 @@ impl State {
             "cwd_repos": self.cwd_repos,
             "cur_repo": self.cur_repo,
             "pending": self.pending.iter().map(|(id, h)| [id.as_str(), h.as_str()]).collect::<Vec<_>>(),
+            "peers": self.peers.iter().map(|p| serde_json::json!({"from": p.from, "pid": p.pid, "at": p.at})).collect::<Vec<_>>(),
         })
     }
 
@@ -503,6 +552,21 @@ impl State {
                         .filter_map(|p| {
                             let id = p.get(0)?.as_str()?;
                             Some((id.to_string(), Harvest::parse(p.get(1)?.as_str()?)?))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            peers: v
+                .get("peers")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|p| {
+                            Some(PeerMessage {
+                                from: p.get("from")?.as_str()?.to_string(),
+                                pid: p.get("pid").and_then(Value::as_u64).map(|n| n as u32),
+                                at: p.get("at")?.as_str()?.to_string(),
+                            })
                         })
                         .collect()
                 })

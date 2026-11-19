@@ -227,6 +227,13 @@ async fn refuses_bad_requests_without_spawning() {
     assert_eq!(status, 400);
     let (status, _) = create(&base, &serde_json::json!({ "prompt": "hi" })).await;
     assert_eq!(status, 400);
+    // A parent that isn't a session uuid.
+    let (status, body) = create(
+        &base,
+        &serde_json::json!({ "new": work.path(), "parent": "not-a-uuid" }),
+    )
+    .await;
+    assert_eq!(status, 400, "{body}");
 
     assert!(roster(&base).await.is_empty());
     assert!(!work.path().join(".claude-args").exists());
@@ -240,4 +247,71 @@ async fn refuses_bad_requests_without_spawning() {
     let (status, _) = helpers::http_post(&bare, "/api/pty", &[JSON], &ok_body).await;
     assert_eq!(status, 503);
     assert!(roster(&bare).await.is_empty());
+}
+
+/// Write fresh transcripts into `cwd`'s project dir until pty `id` adopts one; its uuid.
+async fn adopt(base: &str, projects: &Path, cwd: &str, id: &str) -> String {
+    let escaped: String = cwd
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let pdir = projects.join(escaped);
+    std::fs::create_dir_all(&pdir).unwrap();
+    for n in 0..20 {
+        let uuid = format!("abcd0000-0000-4000-8000-{n:012}");
+        std::fs::write(pdir.join(format!("{uuid}.jsonl")), "{}\n").unwrap();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if let Some(u) = roster(base)
+            .await
+            .into_iter()
+            .find(|r| r["id"] == id)
+            .and_then(|r| r["uuid"].as_str().map(str::to_string))
+        {
+            return u;
+        }
+    }
+    panic!("pty {id} never adopted a uuid");
+}
+
+#[tokio::test]
+async fn a_parent_is_recorded_as_lineage_once_the_child_has_a_uuid() {
+    fake_claude();
+    let projects = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let base = serve(Config {
+        program: "sh".into(),
+        projects_dir: Some(projects.path().to_path_buf()),
+        state_dir: Some(state.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+    let work = tempfile::tempdir().unwrap();
+    let cwd = work.path().to_str().unwrap().to_string();
+    let parent = "0000AAAA-0000-4000-8000-000000000001";
+
+    let (status, body) = create(&base, &serde_json::json!({ "new": cwd, "parent": parent })).await;
+    assert_eq!(status, 201, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let child = adopt(&base, projects.path(), &cwd, &id).await;
+
+    // Listing the roster settled it; the link survives in the state dir.
+    let links: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(state.path().join("lineage.json")).unwrap()).unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["child"], child.as_str());
+    assert_eq!(links[0]["parent"], parent.to_ascii_lowercase().as_str());
+
+    assert_eq!(
+        helpers::http_delete(&base, &format!("/api/pty/{id}")).await,
+        204
+    );
 }

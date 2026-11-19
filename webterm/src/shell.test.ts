@@ -26,7 +26,7 @@ import {
   DRAWER_MIN_W,
   DRAWER_MAX_W,
   splitHeightFromPointer,
-  REACH_MIN_H,
+  GRAPH_MIN_H,
   TRANSCRIPT_MIN_H,
   seedDue,
   SEED_QUIET_MS,
@@ -173,7 +173,7 @@ test("drawerWidthFromPointer: rounds fractional pointer positions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// splitHeightFromPointer — the reach map sits on top of the transcript inside
+// splitHeightFromPointer — the session graph sits on top of the transcript inside
 // the drawer. The divider drag sets the reach region's height (pointer y minus
 // the region's top), clamped so neither pane collapses below its minimum.
 // ---------------------------------------------------------------------------
@@ -183,8 +183,8 @@ test("splitHeightFromPointer: height is the pointer offset below the region top"
   assert.equal(splitHeightFromPointer(400, 100, 600), 300);
 });
 
-test("splitHeightFromPointer: clamps up to REACH_MIN_H near the top", () => {
-  assert.equal(splitHeightFromPointer(105, 100, 600), REACH_MIN_H);
+test("splitHeightFromPointer: clamps up to GRAPH_MIN_H near the top", () => {
+  assert.equal(splitHeightFromPointer(105, 100, 600), GRAPH_MIN_H);
 });
 
 test("splitHeightFromPointer: leaves the transcript at least TRANSCRIPT_MIN_H", () => {

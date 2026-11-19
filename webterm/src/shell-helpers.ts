@@ -121,18 +121,18 @@ export function artifactWidthFromPointer(x: number, paneRight: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// splitHeightFromPointer — reach-region height for the in-drawer vertical split.
+// splitHeightFromPointer — graph-region height for the in-drawer vertical split.
 // ---------------------------------------------------------------------------
 
-export const REACH_MIN_H = 120;
+export const GRAPH_MIN_H = 120;
 export const TRANSCRIPT_MIN_H = 140;
-export const REACH_DEFAULT_H = 260;
+export const GRAPH_DEFAULT_H = 340;
 
 /**
- * Map a pointer y (px from the viewport's top) to the reach region's height in
+ * Map a pointer y (px from the viewport's top) to the session graph's height in
  * the drawer's vertical split, given the split region's top and total height.
- * The reach map sits above the transcript, so its height is the pointer's
- * offset below `regionTop`, clamped to keep the reach map ≥ REACH_MIN_H and the
+ * The graph sits above the transcript, so its height is the pointer's offset
+ * below `regionTop`, clamped to keep the graph ≥ GRAPH_MIN_H and the
  * transcript ≥ TRANSCRIPT_MIN_H.
  */
 export function splitHeightFromPointer(
@@ -140,8 +140,8 @@ export function splitHeightFromPointer(
   regionTop: number,
   regionHeight: number,
 ): number {
-  const max = Math.max(REACH_MIN_H, regionHeight - TRANSCRIPT_MIN_H);
-  return Math.min(max, Math.max(REACH_MIN_H, Math.round(y - regionTop)));
+  const max = Math.max(GRAPH_MIN_H, regionHeight - TRANSCRIPT_MIN_H);
+  return Math.min(max, Math.max(GRAPH_MIN_H, Math.round(y - regionTop)));
 }
 
 // ---------------------------------------------------------------------------

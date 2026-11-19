@@ -1387,7 +1387,7 @@ a.rail-feed-title:hover { text-decoration: underline; }
   scrollbar-width: none;
 }
 
-/* ── Inspect dock — reach map (top) + transcript (bottom), docked right ───── */
+/* ── Inspect dock — session graph (top), reach + transcript, docked right ─── */
 .drawer-dock {
   display: flex;
   flex-direction: column;
@@ -1399,13 +1399,28 @@ a.rail-feed-title:hover { text-decoration: underline; }
   overflow: hidden;
 }
 
-.reach-region {
+.graph-region {
   position: relative;
-  height: var(--reach-h, 260px);
+  height: var(--graph-h, 340px);
   /* Cap so the transcript always keeps a usable strip, even if a restored
-     --reach-h is taller than the current dock (140px ≈ TRANSCRIPT_MIN_H). */
+     --graph-h is taller than the current dock (140px ≈ TRANSCRIPT_MIN_H). */
   max-height: calc(100% - 140px);
   flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.graph-region:has(.sgraph--collapsed) { height: auto; max-height: none; flex: 0 0 auto; }
+.graph-region:has(.sgraph--collapsed) + .dock-vsplit { display: none; }
+
+/* Reach sits between the graph and the transcript, folded to its header by
+   default; opened, it takes a fixed share (no splitter of its own). */
+.reach-region {
+  position: relative;
+  height: 260px;
+  max-height: 45%;
+  flex-shrink: 0;
+  border-top: 1px solid var(--line);
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -1419,7 +1434,7 @@ a.rail-feed-title:hover { text-decoration: underline; }
   overflow: hidden;
 }
 
-/* Horizontal splitter between reach map and transcript. */
+/* Horizontal splitter between the session graph and the panes below it. */
 .dock-vsplit {
   height: 7px;
   flex-shrink: 0;
@@ -2372,7 +2387,6 @@ a.rail-feed-title:hover { text-decoration: underline; }
   max-height: none;
   flex: 0 0 auto;
 }
-.reach-region:has(.reachmap--collapsed) + .dock-vsplit { display: none; }
 
 .reachmap-head {
   display: flex;
@@ -2838,3 +2852,129 @@ a.rail-feed-title:hover { text-decoration: underline; }
   background: color-mix(in oklch, var(--st-error) 12%, transparent);
 }
 .cl-act:disabled { cursor: default; opacity: 0.6; }
+
+/* ── Session graph — lineage outline / message ring (sessiongraph.ts) ────── */
+.sgraph {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  overflow: hidden;
+}
+.sgraph-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  user-select: none;
+}
+.sgraph-head:hover { background: var(--raised); }
+.sgraph-caret {
+  display: inline-flex;
+  color: var(--tx-3);
+  transform: rotate(90deg);
+  transition: transform 0.12s ease;
+  flex-shrink: 0;
+}
+.sgraph--collapsed .sgraph-caret { transform: rotate(0deg); }
+.sgraph--collapsed .sgraph-body { display: none; }
+.sgraph--collapsed .sgraph-head { border-bottom: none; }
+.sgraph-title { font-weight: 650; font-size: 13px; letter-spacing: 0.02em; color: var(--tx); }
+.sgraph-summary {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tx-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sgraph-views {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.sgraph-view {
+  border: none;
+  background: transparent;
+  color: var(--tx-3);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.sgraph-view + .sgraph-view { border-left: 1px solid var(--line); }
+.sgraph-view:hover { color: var(--tx); }
+.sgraph-view--on { background: var(--accent-wash); color: var(--tx); }
+.sgraph-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 6px 0; }
+.sgraph-body--ring { overflow: hidden; padding: 0; }
+.sgraph-empty { padding: 6px 12px 8px; font-size: 11.5px; color: var(--tx-3); line-height: 1.4; }
+
+.sg-outline, .sg-ring { position: relative; }
+.sg-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.sg-lineage-edge { fill: none; stroke: var(--tx-faint); stroke-width: 1; }
+.sg-msg-edge { fill: none; stroke: var(--ink-teal); transition: opacity 0.12s; }
+.sg-arrowhead { fill: var(--ink-teal); }
+.sg-ring--focus .sg-msg-edge:not(.sg-hot) { opacity: 0.08 !important; }
+.sg-ring--focus .sg-hot { opacity: 1 !important; }
+
+.sg-node {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 150px;
+  height: 20px;
+  padding: 0 7px 0 3px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 11.5px;
+  color: var(--tx);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sg-node--row { margin-top: 2px; max-width: calc(100% - 20px); }
+.sg-node--after-divider { margin-top: 2px; }
+.sg-node--ring {
+  transform: translate(-50%, -50%);
+  background: var(--surface);
+  border-color: var(--line-soft);
+  max-width: 104px;
+  font-size: 11px;
+}
+a.sg-node:hover { background: var(--raised-2); border-color: var(--line); }
+.sg-label { overflow: hidden; text-overflow: ellipsis; }
+.sg-dot {
+  width: 8px; height: 8px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: var(--st-idle);
+  flex-shrink: 0;
+}
+.sg-node--working .sg-dot { background: var(--st-running); }
+.sg-node--ready .sg-dot { background: var(--st-success); }
+.sg-node--dead { color: var(--tx-3); }
+.sg-node--dead .sg-dot { background: transparent; border: 1px solid var(--tx-faint); }
+.sg-node--ghost { color: var(--tx-faint); font-style: italic; cursor: default; }
+.sg-node--ghost .sg-dot { border-style: dashed; }
+.sg-node--ring.sg-node--ghost { border-style: dashed; border-color: var(--line); }
+.sg-node--active { border-color: var(--accent); background: var(--accent-wash); }
+.sg-divider {
+  position: absolute;
+  left: 12px; right: 12px;
+  transform: translateY(-4px);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tx-faint);
+  border-top: 1px solid var(--line-soft);
+  padding-top: 1px;
+  pointer-events: none;
+}
