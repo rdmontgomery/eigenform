@@ -5,7 +5,7 @@
 // `launchQueue`) switches sessions the same way, without reloading the page.
 //
 // Drives the real app against a stubbed daemon whose pty socket prints one line.
-// Run: `npm run test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
+// Run: `pnpm test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

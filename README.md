@@ -64,7 +64,7 @@ For a foreground daemon (dev, debugging, scripting) use the explicit `eigenform 
 ### Prerequisites
 
 - **[Rust](https://rustup.rs)** toolchain (`cargo`) — builds the binary.
-- **[Node](https://nodejs.org)** — only at build time, to bundle the frontend.
+- **[Node](https://nodejs.org)** and **[pnpm](https://pnpm.io)** — only at build time, to bundle the frontend. `corepack enable` provides the pnpm version `webterm/package.json` pins.
 - **[`just`](https://github.com/casey/just)** — a command runner. If you know `make`, `just` is the same idea: the [`justfile`](justfile) holds named recipes (`install`, `run`, `dev`, `test`) and `just <recipe>` runs one. It's simpler than `make` — recipes are plain shell, no tabs-vs-spaces, no build-graph. Install it with:
 
   ```sh
@@ -77,7 +77,7 @@ For a foreground daemon (dev, debugging, scripting) use the explicit `eigenform 
 Prefer not to install `just`? The recipes are thin — run the underlying commands yourself:
 
 ```sh
-cd webterm && npm install && npm run build && cd ..        # = just build
+cd webterm && pnpm install --frozen-lockfile && pnpm run build && cd ..   # = just build
 cargo install --path crates/eigenform-cli --features embed-assets --locked   # = just install
 ```
 

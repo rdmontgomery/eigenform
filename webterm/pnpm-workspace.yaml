@@ -1,0 +1,5 @@
+# esbuild's install script fetches its platform binary; nothing else may run scripts.
+onlyBuiltDependencies:
+  - esbuild
+# Don't resolve a package version published less than 3 days ago (supply-chain hold-back).
+minimumReleaseAge: 4320

@@ -6,7 +6,7 @@
 // Enter must not launch the row, Esc must actually close the editor, clicks
 // inside the editor stay in it, and clearing the name drops the override.
 //
-// Run: `npm run test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
+// Run: `pnpm test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

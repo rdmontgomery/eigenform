@@ -2,7 +2,7 @@
 // site, or by who sent them (you, Claude, a subagent). Groups fold one by one and a
 // filter box narrows the lot.
 //
-// Run: `npm run test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
+// Run: `pnpm test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
