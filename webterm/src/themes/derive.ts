@@ -18,6 +18,18 @@ export interface TermTheme {
   brightBlue: string; brightMagenta: string; brightCyan: string; brightWhite: string;
 }
 
+/** Chrome tokens a theme can pin instead of deriving them from its palette. */
+export interface ChromeOverrides {
+  /** --accent; --accent-2 and --accent-wash still derive from it. */
+  accent?: string;
+  running?: string;
+  idle?: string;
+  error?: string;
+  success?: string;
+}
+
+export const OVERRIDE_KEYS = ["accent", "running", "idle", "error", "success"] as const;
+
 export interface Oklch {
   /** Perceptual lightness, 0..1. */
   L: number;
@@ -72,6 +84,29 @@ export function hexToOklch(hex: string): Oklch {
   return labToLch(hexToOklab(hex));
 }
 
+/** Convert OKLCH back to an sRGB hex color, clamping anything out of gamut. */
+export function oklchToHex({ L, C, H }: Oklch): string {
+  const a = C * Math.cos((H * Math.PI) / 180), b = C * Math.sin((H * Math.PI) / 180);
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  const lin = [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+  return "#" + lin
+    .map((c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.max(c, 0) ** (1 / 2.4) - 0.055))
+    .map((c) => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Parse this module's own `oklch(L C H[ / a])` output; null for anything else. */
+export function parseOklch(css: string): Oklch | null {
+  const m = css.match(/^oklch\(([\d.]+) ([\d.]+) ([\d.]+)/);
+  return m ? { L: Number(m[1]), C: Number(m[2]), H: Number(m[3]) } : null;
+}
+
 /** Format OKLCH as a CSS `oklch()` string, optionally with alpha. */
 function lchToCss({ L, C, H }: Oklch, alpha = 1): string {
   const base = `oklch(${L.toFixed(4)} ${C.toFixed(4)} ${H.toFixed(2)}`;
@@ -98,10 +133,10 @@ function pickAccent(s: TermTheme): Oklch {
 }
 
 /**
- * Derive every chrome CSS custom property from a scheme. Keys include the
- * leading `--`, so the caller can `setProperty(k, v)` directly.
+ * Derive every chrome CSS custom property from a scheme, with any `o` overrides
+ * pinned. Keys include the leading `--`, so the caller can `setProperty(k, v)`.
  */
-export function deriveChrome(s: TermTheme): Record<string, string> {
+export function deriveChrome(s: TermTheme, o: ChromeOverrides = {}): Record<string, string> {
   const bg = hexToOklab(s.background);
   const fg = hexToOklab(s.foreground);
   const dark = bg.L < 0.5;
@@ -110,7 +145,8 @@ export function deriveChrome(s: TermTheme): Record<string, string> {
   const surf = (t: number) => labToCss(mixLab(bg, fg, t));
   const text = (t: number) => labToCss(mixLab(fg, bg, t));
 
-  const accent = pickAccent(s);
+  const accent = o.accent ? hexToOklch(o.accent) : pickAccent(s);
+  const pinned = (hex: string | undefined, derived: string) => (hex ? lchToCss(hexToOklch(hex)) : derived);
 
   // Functional colors: keep the ANSI hue, but pin lightness/chroma into a band
   // so they read consistently on whatever surface the scheme produced.
@@ -139,10 +175,10 @@ export function deriveChrome(s: TermTheme): Record<string, string> {
     "--accent-2": lchToCss({ L: clamp(accent.L, 0.5, 0.8), C: accent.C * 0.55, H: accent.H }),
     "--accent-wash": lchToCss(accent, dark ? 0.16 : 0.12),
 
-    "--st-running": functional(s.brightYellow, 0.13),
-    "--st-idle": text(0.42),
-    "--st-error": functional(s.brightRed, 0.15),
-    "--st-success": functional(s.brightGreen, 0.11),
+    "--st-running": pinned(o.running, functional(s.brightYellow, 0.13)),
+    "--st-idle": pinned(o.idle, text(0.42)),
+    "--st-error": pinned(o.error, functional(s.brightRed, 0.15)),
+    "--st-success": pinned(o.success, functional(s.brightGreen, 0.11)),
 
     "--ink-clay": ink(s.red),
     "--ink-ochre": ink(s.yellow),

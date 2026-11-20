@@ -18,6 +18,7 @@
 //! - `inspect` — `/api/inspect`, the skills + memory inventory
 //! - `snooze` — `/api/snoozes`, tabs closed until a wake time (persisted)
 //! - [`pins`] — `/api/pins`, sessions pinned to the top of the rail (persisted)
+//! - [`themes`] — `/api/themes`, the user's custom color themes (persisted)
 //! - [`graph`] — `/api/graph`, the session graph: lineage and peer messages
 //! - [`navigate`] — `/s/:ref` session links (uuid, prefix or peer name) and `/api/resolve/:ref`
 //! - [`events`] — the observability bus and `/api/events` (+ `/stream`)
@@ -57,6 +58,7 @@ pub mod plan_gate;
 mod pty;
 mod session;
 pub mod snooze;
+pub mod themes;
 pub mod turns;
 mod watch;
 
@@ -155,6 +157,8 @@ pub struct AppState {
     pub snoozes: Arc<snooze::SnoozeStore>,
     /// Sessions pinned to the top of the rail (persisted under `state_dir`).
     pub pins: Arc<pins::PinStore>,
+    /// The user's custom color themes (persisted under `state_dir`).
+    pub themes: Arc<themes::ThemeStore>,
     /// Which session launched which (`POST /api/pty`'s `parent`), persisted.
     pub lineage: Arc<graph::LineageStore>,
     /// The session graph from the last forest scan.
@@ -232,6 +236,11 @@ pub fn app(config: Config) -> Router {
             "/api/pins/{uuid}",
             axum::routing::delete(pins::pin_delete_route),
         )
+        .route("/api/themes", get(themes::themes_route))
+        .route(
+            "/api/themes/{id}",
+            axum::routing::put(themes::theme_put_route).delete(themes::theme_delete_route),
+        )
         .route("/s/{reference}", get(navigate::session_link_route))
         .route("/api/resolve/{reference}", get(navigate::resolve_route))
         .route("/api/candidates", get(launcher::candidates_route))
@@ -272,6 +281,7 @@ pub fn app(config: Config) -> Router {
         host: Arc::new(host::SessionHost::with_events(Arc::clone(&events))),
         snoozes: Arc::new(snooze::SnoozeStore::open(config.state_dir.as_deref())),
         pins: Arc::new(pins::PinStore::open(config.state_dir.as_deref())),
+        themes: Arc::new(themes::ThemeStore::open(config.state_dir.as_deref())),
         lineage: Arc::new(graph::LineageStore::open(config.state_dir.as_deref())),
         graph: Arc::new(graph::GraphSlot::default()),
         forest: Arc::new(forest::RowsSlot::default()),

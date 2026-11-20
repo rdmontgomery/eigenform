@@ -54,8 +54,12 @@ for (const s of SCHEMES) {
     assert.ok(ratio >= 4.5, `${s.id} contrast ${ratio.toFixed(2)} < 4.5`);
   });
 
+  test(`scheme[${s.id}]: overrides are 6-digit hex`, () => {
+    for (const [k, v] of Object.entries(s.overrides ?? {})) assert.ok(isHex(v), `${s.id}.overrides.${k} = ${v}`);
+  });
+
   test(`scheme[${s.id}]: derives a full set of valid oklch chrome tokens`, () => {
-    const tokens = deriveChrome(s.theme);
+    const tokens = deriveChrome(s.theme, s.overrides);
     assert.ok(Object.keys(tokens).length >= 25, "too few tokens");
     for (const [k, v] of Object.entries(tokens)) {
       assert.match(v, /^oklch\(/, `${s.id} ${k} not oklch: ${v}`);

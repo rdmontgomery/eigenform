@@ -63,11 +63,31 @@ pub async fn http_post(
     headers: &[(&str, &str)],
     body: &str,
 ) -> (u16, String) {
+    http_send("POST", base, path, headers, body).await
+}
+
+/// Minimal HTTP PUT with extra headers; returns `(status, body)`.
+pub async fn http_put(
+    base: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, String) {
+    http_send("PUT", base, path, headers, body).await
+}
+
+async fn http_send(
+    method: &str,
+    base: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let host = base.strip_prefix("http://").unwrap();
     let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
     let mut req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: {}\r\n",
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: {}\r\n",
         body.len()
     );
     for (k, v) in headers {
