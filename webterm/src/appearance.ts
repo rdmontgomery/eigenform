@@ -1,5 +1,7 @@
 // Appearance: the color scheme and terminal typography, both persisted, plus the
-// two top-bar popovers that edit them and the ⌘/Ctrl +/−/0 zoom keys.
+// two top-bar popovers that edit them, the live theme editor, and the ⌘/Ctrl
+// +/−/0 zoom keys. Custom themes live in the daemon (`/api/themes`); the active
+// one is also cached locally so first paint doesn't wait on the network.
 //
 // The shell owns the terminals, so it supplies the side effects: repaint every
 // terminal on a scheme change, re-apply + refit on a font change, and re-render
@@ -10,20 +12,38 @@ import type { FontSettings } from "./pty.ts";
 import { SCHEMES, DEFAULT_SCHEME_ID, schemeById } from "./themes/schemes.ts";
 import type { Scheme } from "./themes/schemes.ts";
 import { deriveChrome } from "./themes/derive.ts";
+import { customToScheme, readCustomTheme, parseThemeFile, themeIdFor, paletteOf } from "./themes/custom.ts";
+import type { CustomTheme } from "./themes/custom.ts";
+import { fetchThemes, saveTheme, deleteTheme } from "./themes/store.ts";
+import { openThemeEditor } from "./theme-editor.ts";
+import type { ThemeEditor } from "./theme-editor.ts";
 import { el } from "./dom.ts";
 
-const LS_THEME = "eigenform:term:theme:v1"; // legacy light/dark — migrated to v2
 const LS_SCHEME = "eigenform:term:theme:v2"; // scheme id
 const LS_FONT = "eigenform:term:font:v1";
+const LS_ACTIVE_CUSTOM = "eigenform:term:theme:custom:v1"; // the active custom theme, for first paint
 
-/** Resolve the active scheme: stored v2 id → migrated v1 light/dark → default. */
-function loadSchemeId(): string {
-  const v2 = localStorage.getItem(LS_SCHEME);
-  if (v2 && schemeById(v2)) return v2;
-  const v1 = localStorage.getItem(LS_THEME);
-  if (v1 === "light") return "warm-ink-light";
-  if (v1 === "dark") return "warm-ink-dark";
-  return DEFAULT_SCHEME_ID;
+/** Resolve the active scheme: a built-in by stored id → the cached custom theme
+ *  with that id → default. A stored id for a since-removed built-in lands on
+ *  the default. */
+function loadScheme(): Scheme {
+  const id = localStorage.getItem(LS_SCHEME);
+  const builtin = id ? schemeById(id) : undefined;
+  if (builtin) return builtin;
+  if (id) {
+    try {
+      const cached = readCustomTheme(JSON.parse(localStorage.getItem(LS_ACTIVE_CUSTOM) ?? "null"));
+      if (cached && cached.id === id) return customToScheme(cached);
+    } catch { /* fall through */ }
+  }
+  return schemeById(DEFAULT_SCHEME_ID)!;
+}
+
+function toCustomTheme(s: Scheme): CustomTheme {
+  const t: CustomTheme = { id: s.id, name: s.name, theme: paletteOf(s.theme) };
+  if (s.base) t.base = s.base;
+  if (s.overrides) t.overrides = { ...s.overrides };
+  return t;
 }
 
 /** Terminal typefaces offered in the font popover. macOS-first: "System Mono"
@@ -68,7 +88,7 @@ function loadFont(): FontSettings {
 
 function applyChrome(s: Scheme) {
   const root = document.documentElement;
-  for (const [k, v] of Object.entries(deriveChrome(s.theme))) {
+  for (const [k, v] of Object.entries(deriveChrome(s.theme, s.overrides))) {
     root.style.setProperty(k, v);
   }
   root.style.colorScheme = s.dark ? "dark" : "light";
@@ -140,6 +160,8 @@ const SWATCH_KEYS = ["red", "yellow", "green", "cyan", "blue", "magenta"] as con
 
 export interface Appearance {
   scheme(): Scheme;
+  /** Open the live theme editor on the active scheme. */
+  editTheme(): void;
   font(): FontSettings;
   themePopover: Popover;
   fontPopover: Popover;
@@ -157,19 +179,75 @@ export function createAppearance(hooks: {
   /** Re-render the top bar (popover open state, theme title). */
   onChromeChange: () => void;
 }): Appearance {
-  let scheme: Scheme = schemeById(loadSchemeId()) ?? SCHEMES[0]!;
+  let scheme: Scheme = loadScheme();
   applyChrome(scheme);
   let font = loadFont();
+  let customs: Scheme[] = [];
+  let editor: ThemeEditor | null = null;
+  let themeMsg = "";
 
-  /** Paint the whole surface from a scheme: chrome tokens on :root + every
-   *  open terminal's colors. Persisted so it survives reload. */
-  function applyScheme(next: Scheme) {
+  /** Paint the whole surface from a scheme (chrome tokens on :root + every open
+   *  terminal) without making it the saved choice; the editor's live preview. */
+  function paint(next: Scheme) {
     scheme = next;
-    localStorage.setItem(LS_SCHEME, next.id);
     applyChrome(next);
     hooks.onScheme(next);
+  }
+
+  /** Paint a scheme and persist it as the active choice. */
+  function applyScheme(next: Scheme) {
+    paint(next);
+    localStorage.setItem(LS_SCHEME, next.id);
+    if (next.custom) localStorage.setItem(LS_ACTIVE_CUSTOM, JSON.stringify(toCustomTheme(next)));
+    else localStorage.removeItem(LS_ACTIVE_CUSTOM);
     hooks.onChromeChange();
     themePopover.rerender();
+  }
+
+  function setCustoms(list: CustomTheme[]) {
+    customs = list.map(customToScheme);
+    themePopover.rerender();
+  }
+
+  // Reconcile with the daemon: pick up themes saved in another window, and drop
+  // back to the default if the active custom theme was deleted elsewhere.
+  void fetchThemes().then((list) => {
+    if (!list) return;
+    setCustoms(list);
+    if (!scheme.custom || editor?.isOpen()) return;
+    const live = customs.find((c) => c.id === scheme.id);
+    applyScheme(live ?? schemeById(DEFAULT_SCHEME_ID)!);
+  });
+
+  function editTheme() {
+    if (editor?.isOpen()) return;
+    editor = openThemeEditor(scheme, {
+      allIds: () => [...SCHEMES, ...customs].map((s) => s.id),
+      builtin: schemeById,
+      preview: paint,
+      commit: applyScheme,
+      save: async (t) => setCustoms(await saveTheme(t)),
+      remove: async (id) => setCustoms(await deleteTheme(id)),
+      onClose: () => {
+        editor = null;
+        hooks.onChromeChange();
+      },
+    });
+    hooks.onChromeChange();
+  }
+
+  /** Import a theme file as a new custom theme and switch to it. */
+  async function importFile(file: File) {
+    try {
+      const parsed = parseThemeFile(await file.text(), file.name);
+      const t: CustomTheme = { ...parsed, id: themeIdFor(parsed.name, [...SCHEMES, ...customs].map((s) => s.id)) };
+      setCustoms(await saveTheme(t));
+      themeMsg = "";
+      applyScheme(customToScheme(t));
+    } catch (e) {
+      themeMsg = `Import failed: ${(e as Error).message}`;
+      themePopover.rerender();
+    }
   }
 
   /** Merge a patch into the live font settings, persist, and re-lay every grid. */
@@ -252,12 +330,17 @@ export function createAppearance(hooks: {
     hooks.onChromeChange,
   );
 
-  /** Theme popover — pick a scheme by sight (live swatch strips). */
+  /** Theme popover — pick a scheme by sight (live swatch strips), then edit or import. */
   const themePopover = createPopover(
     "theme-pop",
     ".theme-btn",
     (pop) => {
-      for (const s of SCHEMES) {
+      const section = (title: string) => {
+        const h = el("div", "theme-section");
+        h.textContent = title;
+        pop.append(h);
+      };
+      const rows = (list: Scheme[]) => { for (const s of list) {
         const row = el("button", `theme-row${s.id === scheme.id ? " theme-row--on" : ""}`);
 
         const swatch = el("div", "theme-swatch");
@@ -275,8 +358,35 @@ export function createAppearance(hooks: {
         name.textContent = s.name;
 
         row.append(swatch, name);
-        row.addEventListener("click", () => applyScheme(s));
+        row.addEventListener("click", () => { editor?.close(); applyScheme(s); });
         pop.append(row);
+      } };
+
+      rows(SCHEMES);
+      if (customs.length) {
+        section("Your themes");
+        rows(customs);
+      }
+
+      const foot = el("div", "theme-pop-foot");
+      const edit = el("button", "theme-pop-action");
+      edit.textContent = "Edit colors…";
+      edit.addEventListener("click", () => { themePopover.toggle(edit); editTheme(); });
+      const imp = el("button", "theme-pop-action");
+      imp.textContent = "Import…";
+      imp.title = "Import a theme (.json export or iTerm2 .itermcolors)";
+      const file = el("input");
+      file.type = "file";
+      file.accept = ".json,.itermcolors,application/json";
+      file.hidden = true;
+      file.addEventListener("change", () => { const f = file.files?.[0]; if (f) void importFile(f); });
+      imp.addEventListener("click", () => file.click());
+      foot.append(edit, imp, file);
+      pop.append(foot);
+      if (themeMsg) {
+        const m = el("div", "theme-pop-msg");
+        m.textContent = themeMsg;
+        pop.append(m);
       }
     },
     hooks.onChromeChange,
@@ -284,6 +394,7 @@ export function createAppearance(hooks: {
 
   return {
     scheme: () => scheme,
+    editTheme,
     font: () => font,
     themePopover,
     fontPopover,
