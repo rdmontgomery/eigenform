@@ -159,6 +159,8 @@ pub struct AppState {
     pub lineage: Arc<graph::LineageStore>,
     /// The session graph from the last forest scan.
     pub graph: Arc<graph::GraphSlot>,
+    /// The snapshot rows from the last forest scan.
+    pub forest: Arc<forest::RowsSlot>,
     /// Per-spawn turn state from the claude turn hooks: is a pty safe to kill?
     pub turns: Arc<turns::SessionTurns>,
     /// Connected app windows + the focus request held while none was (`/api/focus`).
@@ -272,6 +274,7 @@ pub fn app(config: Config) -> Router {
         pins: Arc::new(pins::PinStore::open(config.state_dir.as_deref())),
         lineage: Arc::new(graph::LineageStore::open(config.state_dir.as_deref())),
         graph: Arc::new(graph::GraphSlot::default()),
+        forest: Arc::new(forest::RowsSlot::default()),
         config: Arc::new(config),
         events,
         plan_gate: Arc::new(plan_gate::PlanGate::default()),

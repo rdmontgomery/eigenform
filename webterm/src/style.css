@@ -2880,7 +2880,8 @@ a.rail-feed-title:hover { text-decoration: underline; }
   flex-shrink: 0;
 }
 .sgraph--collapsed .sgraph-caret { transform: rotate(0deg); }
-.sgraph--collapsed .sgraph-body { display: none; }
+.sgraph--collapsed .sgraph-body,
+.sgraph--collapsed .sgraph-legend { display: none; }
 .sgraph--collapsed .sgraph-head { border-bottom: none; }
 .sgraph-title { font-weight: 650; font-size: 13px; letter-spacing: 0.02em; color: var(--tx); }
 .sgraph-summary {
@@ -2914,6 +2915,16 @@ a.rail-feed-title:hover { text-decoration: underline; }
 .sgraph-view--on { background: var(--accent-wash); color: var(--tx); }
 .sgraph-body { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 6px 0; }
 .sgraph-body--ring { overflow: hidden; padding: 0; }
+.sgraph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  padding: 4px 10px 5px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 10.5px;
+  color: var(--tx-3);
+}
+.sgraph-legend-item { display: inline-flex; align-items: center; gap: 3px; cursor: help; }
 .sgraph-empty { padding: 6px 12px 8px; font-size: 11.5px; color: var(--tx-3); line-height: 1.4; }
 
 .sg-outline, .sg-ring { position: relative; }
@@ -2951,19 +2962,10 @@ a.rail-feed-title:hover { text-decoration: underline; }
 }
 a.sg-node:hover { background: var(--raised-2); border-color: var(--line); }
 .sg-label { overflow: hidden; text-overflow: ellipsis; }
-.sg-dot {
-  width: 8px; height: 8px;
-  margin-left: 3px;
-  border-radius: 50%;
-  background: var(--st-idle);
-  flex-shrink: 0;
-}
-.sg-node--working .sg-dot { background: var(--st-running); }
-.sg-node--ready .sg-dot { background: var(--st-success); }
+.sg-node .dot { margin-left: 1px; }
 .sg-node--dead { color: var(--tx-3); }
-.sg-node--dead .sg-dot { background: transparent; border: 1px solid var(--tx-faint); }
 .sg-node--ghost { color: var(--tx-faint); font-style: italic; cursor: default; }
-.sg-node--ghost .sg-dot { border-style: dashed; }
+.sg-node--ghost .dot::before { background: transparent; border: 1px dashed var(--tx-faint); width: 7px; height: 7px; opacity: 1; }
 .sg-node--ring.sg-node--ghost { border-style: dashed; border-color: var(--line); }
 .sg-node--active { border-color: var(--accent); background: var(--accent-wash); }
 .sg-divider {

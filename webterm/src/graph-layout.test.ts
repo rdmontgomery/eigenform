@@ -6,6 +6,7 @@ import {
   arcPath,
   edgeWidth,
   edgeRecency,
+  nodeStatus,
   type GraphNode,
   type SessionGraph,
 } from "./graph-layout.ts";
@@ -87,4 +88,27 @@ test("edge weight grows with count; recency fades with age", () => {
   assert.equal(edgeRecency("2026-01-01T01:00:00Z", now), 0.5);
   assert.equal(edgeRecency("2025-12-01T00:00:00Z", now), 0.3);
   assert.equal(edgeRecency("garbage", now), 0.3);
+});
+
+test("a node's dot follows the rail when the rail lists it, else its forest state", () => {
+  const live = (state: string): GraphNode => ({ id: "a", label: "a", live: true, state, ghost: false });
+  assert.deepEqual(nodeStatus(live("ready"), { activity: "working", liveness: "eigenform" }), {
+    activity: "working",
+    liveness: "eigenform",
+  });
+  assert.deepEqual(nodeStatus(live("working"), null), { activity: "working", liveness: "external" });
+  assert.deepEqual(nodeStatus(live("ready"), null), { activity: "waiting", liveness: "external" });
+  assert.deepEqual(
+    nodeStatus(live("ready"), { activity: "idle", liveness: "none" }),
+    { activity: "waiting", liveness: "external" },
+    "a rail row that hasn't caught up yet doesn't make a live session read as exited",
+  );
+  assert.deepEqual(nodeStatus({ ...live("working"), live: false }, { activity: "working", liveness: "eigenform" }), {
+    activity: "idle",
+    liveness: "none",
+  });
+  assert.deepEqual(nodeStatus({ id: "peer:x", label: "x", live: false, ghost: true }, null), {
+    activity: "idle",
+    liveness: "none",
+  });
 });
