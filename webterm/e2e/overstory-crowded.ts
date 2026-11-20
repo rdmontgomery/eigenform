@@ -2,7 +2,7 @@
 // still show some of its name, not just its status dot and cache clock. Same
 // stubbed-daemon harness as terminal-fit.ts.
 //
-// Run: `npm run test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
+// Run: `pnpm test:browser`. Set CHROMIUM_PATH to use a preinstalled binary.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

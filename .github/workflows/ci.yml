@@ -23,17 +23,20 @@ jobs:
         working-directory: webterm
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: webterm/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: webterm/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npx playwright-core install --with-deps chromium
-      - run: npm run test:browser
-      - run: npm run build
+          cache: pnpm
+          cache-dependency-path: webterm/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - run: pnpm exec playwright-core install --with-deps chromium
+      - run: pnpm run test:browser
+      - run: pnpm run build
 
   rust:
     name: rust (fmt · clippy · test · embedded build)
@@ -52,14 +55,17 @@ jobs:
         run: cargo test --workspace --locked
       # The `just install` path: bake webterm/dist into the binary and prove the
       # daemon serves it with no on-disk frontend.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: webterm/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: webterm/package-lock.json
+          cache: pnpm
+          cache-dependency-path: webterm/pnpm-lock.yaml
       - name: build webterm for embedding
         working-directory: webterm
-        run: npm ci && npm run build
+        run: pnpm install --frozen-lockfile && pnpm run build
       - name: embedded-assets test
         run: cargo test -p eigenform-daemon --features embed-assets --test embedded --locked
 

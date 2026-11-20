@@ -4,7 +4,7 @@
 // tab comes back in the background, flashing, with ⏰ in the page title until
 // it is clicked; cancelling from the shelf drops it for good.
 //
-// Run: `npm run test:browser`. Needs Chromium for playwright-core; set
+// Run: `pnpm test:browser`. Needs Chromium for playwright-core; set
 // CHROMIUM_PATH to use a preinstalled binary.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";

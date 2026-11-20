@@ -17,5 +17,6 @@
     "esbuild": "^0.28.2",
     "playwright-core": "1.56",
     "typescript": "^6.0.3"
-  }
+  },
+  "packageManager": "pnpm@10.23.0"
 }

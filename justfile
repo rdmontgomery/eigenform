@@ -9,7 +9,7 @@ default:
 
 # Build the eigenform (webterm) bundle → webterm/dist (served at /, baked in by install).
 build:
-    cd webterm && npm install && npm run build
+    cd webterm && pnpm install --frozen-lockfile && pnpm run build
 
 # Build the app, start the daemon, open the browser at / (pty spawns $SHELL, never claude).
 run port="4317": build
@@ -29,11 +29,11 @@ install: build
 dev port="4317":
     #!/usr/bin/env bash
     set -euo pipefail
-    cd webterm && npm install >/dev/null 2>&1
+    cd webterm && pnpm install --frozen-lockfile >/dev/null 2>&1
     # --watch=forever, not --watch: esbuild stops watching when its stdin closes,
     # which it does the moment we background it with `&` in this non-interactive
     # recipe — you'd get one build and no hot reload. `forever` keeps it watching.
-    npx esbuild src/main.ts --bundle --outdir=dist --format=esm --watch=forever </dev/null &
+    pnpm exec esbuild src/main.ts --bundle --outdir=dist --format=esm --watch=forever </dev/null &
     ESBUILD=$!
     trap "kill $ESBUILD 2>/dev/null || true" EXIT
     cd ..
@@ -63,4 +63,4 @@ fmt:
 # Rust workspace + webterm unit tests (never spawns claude).
 test:
     cargo test --workspace
-    cd webterm && npm install >/dev/null 2>&1 && npm run typecheck && npm test
+    cd webterm && pnpm install --frozen-lockfile >/dev/null 2>&1 && pnpm run typecheck && pnpm test

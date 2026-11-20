@@ -9,7 +9,7 @@
 // mirroring it. One live pty is reported and pre-saved as an open tab, which
 // makes boot restore it through the production openTabWithQuery path.
 //
-// Run: `npm run test:browser`. Lives outside src/ and test/ so plain `npm test`
+// Run: `pnpm test:browser`. Lives outside src/ and test/ so plain `pnpm test`
 // (node --test's default globs) stays browser-free. Needs Chromium for
 // playwright-core; set CHROMIUM_PATH to use a preinstalled binary.
 import { test, before, after } from "node:test";
