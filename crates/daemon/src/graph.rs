@@ -433,31 +433,37 @@ pub(crate) fn settle_lineage(state: &AppState) {
     state.lineage.settle(&uuid_of);
 }
 
-/// The graph from the last forest scan (see [`store`]).
+/// The graph from the last forest scan (see [`store`]), and when it ran.
 #[derive(Default)]
-pub struct GraphSlot(Mutex<Option<Graph>>);
+pub struct GraphSlot(Mutex<Option<(std::time::Instant, Graph)>>);
+
+impl GraphSlot {
+    /// The last scan's graph, unless no scan has run within [`crate::forest::ROWS_FRESH`]
+    /// (no app window has the forest stream open).
+    fn fresh(&self) -> Option<Graph> {
+        let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref()
+            .filter(|(at, _)| at.elapsed() < crate::forest::ROWS_FRESH)
+            .map(|(_, graph)| graph.clone())
+    }
+}
 
 /// Derive the graph from one forest scan and keep it for `GET /api/graph`.
 pub(crate) fn store(state: &AppState, scan: &[eigenform_forest::LiveSession]) -> Graph {
     let sessions: Vec<GraphSession> = scan.iter().map(graph_session).collect();
     let ledger = observe_aliases(state.config.state_dir.as_deref(), &sessions);
     let graph = derive(&sessions, &state.lineage.links(), &ledger, Utc::now());
-    *state.graph.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(graph.clone());
+    *state.graph.0.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((std::time::Instant::now(), graph.clone()));
     graph
 }
 
 /// `GET /api/graph` — `{nodes, lineage, messages}` over the live sessions and their kin.
 /// See the module docs for where each edge comes from. Served from the last forest
-/// push's scan while the app has the forest stream open; scans only when nothing has.
+/// push's scan while the app has the forest stream open; scans when no stream has lately.
 pub(crate) async fn graph_route(State(state): State<AppState>) -> Response {
     settle_lineage(&state);
-    let cached = state
-        .graph
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    let graph = match cached {
+    let graph = match state.graph.fresh() {
         Some(g) => g,
         None => {
             let st = state.clone();
@@ -478,6 +484,21 @@ mod tests {
     const C: &str = "0000cccc-0000-0000-0000-000000000003";
     const D: &str = "0000dddd-0000-0000-0000-000000000004";
     const OLD: &str = "0000eeee-0000-0000-0000-000000000005";
+
+    #[test]
+    fn a_stored_graph_is_served_only_while_fresh() {
+        let slot = GraphSlot::default();
+        assert!(slot.fresh().is_none());
+        let at = std::time::Instant::now();
+        *slot.0.lock().unwrap() = Some((at, Graph::default()));
+        assert!(slot.fresh().is_some());
+        let stale = at - crate::forest::ROWS_FRESH - std::time::Duration::from_secs(1);
+        *slot.0.lock().unwrap() = Some((stale, Graph::default()));
+        assert!(
+            slot.fresh().is_none(),
+            "no stream has scanned lately: rescan"
+        );
+    }
 
     fn now() -> DateTime<Utc> {
         "2026-01-02T00:00:00Z".parse().unwrap()

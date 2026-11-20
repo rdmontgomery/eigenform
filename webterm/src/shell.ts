@@ -70,7 +70,7 @@ import { mountRailFeeds } from "./rail-feeds.ts";
 import { mountRailLinks } from "./rail-links.ts";
 import { mountRail } from "./rail.ts";
 import { eventStream } from "./event-stream.ts";
-import { focusTarget, sessionFromSearch, trackWindowPresence } from "./focus.ts";
+import { focusTarget, isSessionUuid, sessionFromSearch, trackWindowPresence } from "./focus.ts";
 import type { FocusTarget } from "./focus.ts";
 import { mountDock } from "./dock.ts";
 import { mountArtifactDock } from "./artifact-dock.ts";
@@ -289,6 +289,10 @@ export function mountShell(appEl: HTMLElement): void {
     },
     onResize: () => fitActive(),
     onChange: () => renderControls(),
+    statusOf: (uuid) => {
+      const row = rosterRowFor(uuid);
+      return row ? { activity: row.activity, liveness: row.liveness } : null;
+    },
   });
   // The artifact pane (what the session made; annotate; plan reviews) sits between
   // the stack and the dock. See artifact-dock.ts / artifacts.ts for its sandboxing.
@@ -1374,14 +1378,17 @@ export function mountShell(appEl: HTMLElement): void {
     return refIndex.index;
   }
 
+  /** The rail row for a session. A live pty and its forest session merge into one
+   *  row; prefer a pty row if the roster has both, so a hosted session attaches
+   *  rather than resumes. */
+  function rosterRowFor(uuid: string): RosterRow | undefined {
+    const rows = railView.rows().filter((r) => r.uuid === uuid);
+    return rows.find((r) => r.ptyId) ?? rows[0];
+  }
+
   async function focusSession(target: FocusTarget) {
-    // A live pty and its forest session merge into one row; prefer a pty row if
-    // the roster has both, so a hosted session attaches rather than resumes.
-    const find = () => {
-      if ("pty" in target) return railView.rows().find((r) => r.ptyId === target.pty);
-      const rows = railView.rows().filter((r) => r.uuid === target.session);
-      return rows.find((r) => r.ptyId) ?? rows[0];
-    };
+    const find = () =>
+      "pty" in target ? railView.rows().find((r) => r.ptyId === target.pty) : rosterRowFor(target.session);
     let row = find();
     if (!row) {
       // The forest stream is closed while the page is hidden, so a session born
@@ -1585,6 +1592,14 @@ export function mountShell(appEl: HTMLElement): void {
       const ref = sessionLinkRef(a.href, location.origin);
       if (ref === null) return;
       e.preventDefault();
+      // A full uuid the rail lists needs no lookup: switch as its rail row would,
+      // without the round trip to /api/resolve.
+      const row = isSessionUuid(ref) ? rosterRowFor(ref.toLowerCase()) : undefined;
+      if (row) {
+        launchRow(row);
+        railView.reveal(row.key);
+        return;
+      }
       void openSessionRef(ref).then((ok) => {
         if (!ok) window.open(a.href, "_blank", "noopener");
       });

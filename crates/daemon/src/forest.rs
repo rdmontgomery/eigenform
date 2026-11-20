@@ -4,7 +4,8 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::{AppState, Config};
 
@@ -37,6 +38,28 @@ pub(crate) fn forest_knows(cfg: &Config, uuid: &str) -> bool {
 /// The forest snapshot rows behind [`forest_json`].
 pub(crate) fn forest_rows(cfg: &Config) -> Vec<serde_json::Value> {
     rows_from(cfg, &scan(cfg))
+}
+
+/// The snapshot rows from the forest stream's last scan, and when it ran.
+#[derive(Default)]
+pub struct RowsSlot(Mutex<Option<(Instant, Arc<Vec<serde_json::Value>>)>>);
+
+/// How old the stream's rows may be and still stand in for a scan. The stream rescans at
+/// least every 3 s while an app window has it open.
+pub(crate) const ROWS_FRESH: Duration = Duration::from_secs(15);
+
+impl RowsSlot {
+    fn put(&self, rows: Vec<serde_json::Value>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), Arc::new(rows)));
+    }
+
+    /// The last scan's rows, unless no stream has scanned within [`ROWS_FRESH`].
+    pub(crate) fn fresh(&self) -> Option<Arc<Vec<serde_json::Value>>> {
+        let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref()
+            .filter(|(at, _)| at.elapsed() < ROWS_FRESH)
+            .map(|(_, rows)| Arc::clone(rows))
+    }
 }
 
 /// The Claude sessions of the live forest (empty without the dirs it reads).
@@ -115,7 +138,8 @@ fn hash_str(s: &str) -> u64 {
 /// before rescanning, bounding the full-forest scan to a few per second under load.
 ///
 /// The same scan feeds the session graph: each one recomputes it into `state.graph`, so
-/// `GET /api/graph` (which the app fetches on each push) costs no scan of its own.
+/// `GET /api/graph` (which the app fetches on each push) costs no scan of its own. Its rows
+/// go to `state.forest`, where session-link lookups find them without a scan.
 fn forest_sse(state: AppState) -> Response {
     let cfg = Arc::clone(&state.config);
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(8);
@@ -172,9 +196,12 @@ fn forest_sse(state: AppState) -> Response {
             let st = state.clone();
             let json = tokio::task::spawn_blocking(move || {
                 let sessions = scan(&st.config);
+                crate::graph::settle_lineage(&st);
                 crate::graph::store(&st, &sessions);
-                serde_json::to_string(&rows_from(&st.config, &sessions))
-                    .unwrap_or_else(|_| "[]".to_string())
+                let rows = rows_from(&st.config, &sessions);
+                let json = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string());
+                st.forest.put(rows);
+                json
             })
             .await
             .unwrap_or_else(|_| "[]".to_string());
@@ -210,4 +237,20 @@ fn forest_sse(state: AppState) -> Response {
             axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(10)),
         )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_stand_in_for_a_scan_only_while_fresh() {
+        let slot = RowsSlot::default();
+        assert!(slot.fresh().is_none(), "nothing scanned yet");
+        slot.put(vec![serde_json::json!({"uuid": "0000aaaa"})]);
+        assert_eq!(slot.fresh().unwrap().len(), 1);
+        let stale = Instant::now() - ROWS_FRESH - Duration::from_secs(1);
+        slot.0.lock().unwrap().as_mut().unwrap().0 = stale;
+        assert!(slot.fresh().is_none(), "no stream has scanned lately");
+    }
 }

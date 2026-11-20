@@ -8,13 +8,16 @@
 
 import { el } from "./dom.ts";
 import { icon } from "./icons.ts";
+import { dotClasses, dotTitle } from "./status.ts";
 import {
   arcPath,
   edgeRecency,
   edgeWidth,
   lineageOutline,
+  nodeStatus,
   ringLayout,
   type GraphNode,
+  type NodeStatus,
   type SessionGraph,
 } from "./graph-layout.ts";
 
@@ -24,6 +27,8 @@ const LS_VIEW = "eigenform:term:graph-view:v1";
 const LS_COLLAPSED = "eigenform:term:graph-collapsed:v1";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ROW_H = 24;
+/** Room the "no recorded parent" divider takes above the first loner. */
+const DIVIDER_H = 16;
 const INDENT = 16;
 const RING_PAD = 56;
 
@@ -57,14 +62,40 @@ function writeLS(key: string, value: string) {
   }
 }
 
-function tooltip(n: GraphNode): string {
+function tooltip(n: GraphNode, st: NodeStatus): string {
   if (n.ghost) return `${n.label}\nexited before eigenform saw it; known only by its peer name`;
-  return [n.label, n.title && n.title !== n.label ? n.title : null, n.cwd, n.live ? n.state : "exited"]
+  return [n.label, n.title && n.title !== n.label ? n.title : null, n.cwd, dotTitle(st.activity, st.liveness)]
     .filter(Boolean)
     .join("\n");
 }
 
-export function mountSessionGraph(hostEl: HTMLElement): SessionGraphHandle {
+/** The rail's dots, explained once at the foot of the panel. */
+function legend(): HTMLElement {
+  const foot = el("div", "sgraph-legend");
+  const item = (cls: string, text: string, title: string) => {
+    const i = el("span", "sgraph-legend-item");
+    i.title = title;
+    const label = el("span");
+    label.textContent = text;
+    i.append(el("span", cls), label);
+    return i;
+  };
+  foot.append(
+    item(dotClasses("working", "eigenform"), "running", dotTitle("working", "eigenform")),
+    item(dotClasses("waiting", "eigenform"), "your turn", dotTitle("waiting", "eigenform")),
+    item(dotClasses("idle", "eigenform"), "idle", dotTitle("idle", "eigenform")),
+    item(dotClasses("idle", "external"), "outside eigenform", dotTitle("idle", "external")),
+    item(dotClasses("idle", "none"), "exited", dotTitle("idle", "none")),
+  );
+  return foot;
+}
+
+export interface SessionGraphDeps {
+  /** The rail's status for a session it lists, so a node's dot matches its rail row. */
+  statusOf(uuid: string): NodeStatus | null;
+}
+
+export function mountSessionGraph(hostEl: HTMLElement, deps: SessionGraphDeps): SessionGraphHandle {
   const root = el("div", "sgraph");
   const head = el("div", "sgraph-head");
   head.tabIndex = 0;
@@ -88,7 +119,7 @@ export function mountSessionGraph(hostEl: HTMLElement): SessionGraphHandle {
   toggle.append(viewBtn("lineage", "Lineage"), viewBtn("messages", "Messages"));
   head.append(caret, title, summary, toggle);
   const body = el("div", "sgraph-body scroll");
-  root.append(head, body);
+  root.append(head, body, legend());
   hostEl.append(root);
 
   let view: View = readLS(LS_VIEW) === "messages" ? "messages" : "lineage";
@@ -120,9 +151,10 @@ export function mountSessionGraph(hostEl: HTMLElement): SessionGraphHandle {
   });
 
   function nodeEl(n: GraphNode): HTMLElement {
+    const st = nodeStatus(n, n.ghost ? null : deps.statusOf(n.id));
     const cls = [
       "sg-node",
-      n.live ? `sg-node--${n.state ?? "live"}` : "sg-node--dead",
+      n.live ? "" : "sg-node--dead",
       n.ghost ? "sg-node--ghost" : "",
       n.id === active ? "sg-node--active" : "",
     ]
@@ -130,9 +162,9 @@ export function mountSessionGraph(hostEl: HTMLElement): SessionGraphHandle {
       .join(" ");
     const a = n.ghost ? el("span", cls) : el("a", cls);
     if (a instanceof HTMLAnchorElement) a.href = `/s/${encodeURIComponent(n.id)}`;
-    a.title = tooltip(n);
+    a.title = tooltip(n, st);
     a.dataset.id = n.id;
-    const dot = el("span", "sg-dot");
+    const dot = el("span", dotClasses(st.activity, st.liveness));
     const label = el("span", "sg-label");
     label.textContent = n.label;
     a.append(dot, label);
@@ -147,19 +179,22 @@ export function mountSessionGraph(hostEl: HTMLElement): SessionGraphHandle {
 
   function renderLineage(g: SessionGraph) {
     const rows = lineageOutline(g);
+    const divider = rows.findIndex((r) => r.lonelyStart);
+    const topY = (row: number) => row * ROW_H + (divider >= 0 && row >= divider ? DIVIDER_H : 0);
+    const height = topY(rows.length);
     const wrap = el("div", "sg-outline");
-    wrap.style.height = `${rows.length * ROW_H}px`;
-    const lines = svg("svg", { class: "sg-edges", width: "100%", height: rows.length * ROW_H });
+    wrap.style.height = `${height}px`;
+    const lines = svg("svg", { class: "sg-edges", width: "100%", height });
     const dotX = (depth: number) => 14 + depth * INDENT;
-    const midY = (row: number) => row * ROW_H + ROW_H / 2;
+    const midY = (row: number) => topY(row) + ROW_H / 2;
     rows.forEach((r, i) => {
       const n = nodeEl(r.node);
       n.classList.add("sg-node--row");
-      n.style.top = `${i * ROW_H}px`;
+      n.style.top = `${topY(i)}px`;
       n.style.left = `${dotX(r.depth) - 6}px`;
       if (r.lonelyStart) {
         const rule = el("div", "sg-divider");
-        rule.style.top = `${i * ROW_H}px`;
+        rule.style.top = `${topY(i) - DIVIDER_H + 4}px`;
         rule.textContent = "no recorded parent";
         wrap.append(rule);
         n.classList.add("sg-node--after-divider");

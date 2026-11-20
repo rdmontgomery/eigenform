@@ -1,6 +1,8 @@
 // Session-graph layouts, pure (no DOM): the lineage outline and the message ring.
 // Both are deterministic, so a live update never shuffles nodes that didn't change.
 
+import { forestActivity, type Activity, type Liveness } from "./roster.ts";
+
 export interface GraphNode {
   /** Session uuid, or `peer:<name>` for a sender known only by name. */
   id: string;
@@ -149,4 +151,22 @@ export function edgeRecency(lastIso: string, nowMs: number): number {
   if (mins <= 60) return 0.75;
   if (mins <= 24 * 60) return 0.5;
   return 0.3;
+}
+
+/** The rail's two status channels for a graph node. */
+export interface NodeStatus {
+  activity: Activity;
+  liveness: Liveness;
+}
+
+/**
+ * A node's status dot, in the rail's vocabulary so the two read alike. `rail` is the
+ * rail's own status for the session when it lists it (it knows whether eigenform hosts
+ * the pty, and a hosted pty's turn state is fresher than the forest's); otherwise the
+ * node's forest state decides, and a live session the rail doesn't host is external.
+ */
+export function nodeStatus(n: GraphNode, rail: NodeStatus | null): NodeStatus {
+  if (!n.live || n.ghost) return { activity: "idle", liveness: "none" };
+  if (rail && rail.liveness !== "none") return rail;
+  return { activity: forestActivity(n.state ?? ""), liveness: "external" };
 }

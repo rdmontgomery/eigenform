@@ -133,9 +133,14 @@ async fn resolve_answers_the_same_lookup_as_json() {
 
 /// Open `/api/events/stream` and wait for its head, so the daemon counts a window.
 async fn open_stream(base: &str) -> tokio::net::TcpStream {
+    open_sse(base, "/api/events/stream").await
+}
+
+/// Open the SSE stream at `path` and wait for its head.
+async fn open_sse(base: &str, path: &str) -> tokio::net::TcpStream {
     let host = base.strip_prefix("http://").unwrap();
     let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
-    let req = format!("GET /api/events/stream HTTP/1.1\r\nHost: {host}\r\n\r\n");
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n");
     stream.write_all(req.as_bytes()).await.unwrap();
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -176,6 +181,41 @@ async fn a_link_with_a_window_open_focuses_the_session_there() {
         }
     }
     assert!(acc.contains("\"focus\"") && acc.contains(LIVE), "{acc}");
+}
+
+#[tokio::test]
+async fn resolve_rescans_for_a_session_the_stream_has_not_seen() {
+    let f = start().await;
+    // An open forest stream keeps its last scan's rows, which resolve answers from.
+    let mut forest = open_sse(&f.base, "/api/watch/forest").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut acc = String::new();
+    let mut buf = [0u8; 4096];
+    while !acc.contains(LIVE) && tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(n)) =
+            tokio::time::timeout(Duration::from_millis(200), forest.read(&mut buf)).await
+        {
+            acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    }
+    assert!(acc.contains(LIVE), "first push: {acc}");
+
+    let (code, _, body) = helpers::http_get_full(&f.base, &format!("/api/resolve/{LIVE}")).await;
+    assert_eq!(code, 200, "{body}");
+
+    const NEW: &str = "abcd3333-0000-4000-8000-000000000003";
+    std::fs::write(
+        f._proj
+            .path()
+            .join("-home-me-p")
+            .join(format!("{NEW}.jsonl")),
+        transcript(NEW),
+    )
+    .unwrap();
+    let (code, _, body) = helpers::http_get_full(&f.base, &format!("/api/resolve/{NEW}")).await;
+    assert_eq!(code, 200, "a session born after the last scan: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["session"]["uuid"], NEW);
 }
 
 #[tokio::test]

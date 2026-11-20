@@ -11,7 +11,9 @@
 //! - none: 404 with a page saying nothing matched
 //!
 //! The candidates are the forest snapshot's rows (`GET /api/forest`), so a peer name only
-//! resolves while its session runs: the name lives in the session's live claim.
+//! resolves while its session runs: the name lives in the session's live claim. A full
+//! scan takes seconds on a busy machine, so the rows of the forest stream's last scan
+//! answer first; a reference they don't resolve to one session gets a fresh scan.
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, StatusCode};
@@ -66,9 +68,8 @@ pub fn resolve<'a>(candidates: &'a [Candidate], reference: &str) -> Resolution<'
     }
 }
 
-fn candidates(state: &AppState) -> Vec<Candidate> {
-    crate::forest::forest_rows(&state.config)
-        .into_iter()
+fn candidates(rows: &[serde_json::Value]) -> Vec<Candidate> {
+    rows.iter()
         .filter_map(|r| {
             let s = |k: &str| r[k].as_str().map(str::to_string);
             Some(Candidate {
@@ -82,11 +83,23 @@ fn candidates(state: &AppState) -> Vec<Candidate> {
         .collect()
 }
 
-async fn load(state: &AppState) -> Vec<Candidate> {
+async fn scan(state: &AppState) -> Vec<Candidate> {
     let state = state.clone();
-    tokio::task::spawn_blocking(move || candidates(&state))
+    tokio::task::spawn_blocking(move || candidates(&crate::forest::forest_rows(&state.config)))
         .await
         .unwrap_or_default()
+}
+
+/// Candidates for `reference`: the stream's last rows when they name exactly one session,
+/// else a fresh scan.
+async fn load(state: &AppState, reference: &str) -> Vec<Candidate> {
+    if let Some(rows) = state.forest.fresh() {
+        let cached = candidates(&rows);
+        if matches!(resolve(&cached, reference), Resolution::Found(_)) {
+            return cached;
+        }
+    }
+    scan(state).await
 }
 
 fn candidate_json(c: &Candidate) -> serde_json::Value {
@@ -105,7 +118,7 @@ pub(crate) async fn resolve_route(
     AxumPath(reference): AxumPath<String>,
     State(state): State<AppState>,
 ) -> Response {
-    let all = load(&state).await;
+    let all = load(&state, &reference).await;
     match resolve(&all, &reference) {
         Resolution::Found(c) => {
             Json(serde_json::json!({ "session": candidate_json(c) })).into_response()
@@ -130,7 +143,7 @@ pub(crate) async fn session_link_route(
     AxumPath(reference): AxumPath<String>,
     State(state): State<AppState>,
 ) -> Response {
-    let all = load(&state).await;
+    let all = load(&state, &reference).await;
     match resolve(&all, &reference) {
         Resolution::Found(c) => {
             let open_here = format!("/?session={}", c.uuid);

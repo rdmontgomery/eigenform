@@ -15,7 +15,7 @@ import type { ReachHandle } from "./reachmap.ts";
 import { mountEvents } from "./events.ts";
 import type { EventsHandle } from "./events.ts";
 import { mountSessionGraph } from "./sessiongraph.ts";
-import type { SessionGraphHandle } from "./sessiongraph.ts";
+import type { SessionGraphDeps, SessionGraphHandle } from "./sessiongraph.ts";
 import {
   drawerWidthFromPointer,
   DRAWER_DEFAULT_W,
@@ -55,6 +55,8 @@ export function mountDock(
     onResize: () => void;
     /** Open/close or content changed — re-render the top-bar toggle. */
     onChange: () => void;
+    /** The rail's status for a session, so the graph's dots match the rail's. */
+    statusOf: SessionGraphDeps["statusOf"];
   },
 ): DockHandle {
   const dockResizer = el("div", "drawer-resizer");
@@ -121,7 +123,7 @@ export function mountDock(
     // The events pane is global (not uuid-bound) — mount it once while the dock is
     // open, before the per-uuid reach/transcript wiring below.
     if (!eventsCurrent) eventsCurrent = mountEvents(eventsRegion);
-    if (!graphCurrent) graphCurrent = mountSessionGraph(graphRegion);
+    if (!graphCurrent) graphCurrent = mountSessionGraph(graphRegion, { statusOf: deps.statusOf });
 
     const uuid = active?.uuid ?? null;
     graphCurrent.setActive(uuid);
