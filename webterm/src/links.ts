@@ -54,15 +54,25 @@ function cleanUrl(raw: string): string {
  *   - host case ("GitHub.com" vs "github.com")
  *   - an explicit default port (":443" on https, ":80" on http)
  *   - a single trailing slash on a non-root path
- * Query string and fragment are compared as-is: they can point at a genuinely
+ * and two that are the same thing under another spelling:
+ *   - a pull request, whatever tab or comment of it is linked (it shows as one
+ *     `owner/repo#N` row, and opens on the PR itself)
+ *   - a Slack message, with or without its thread query
+ * Otherwise query string and fragment are compared as-is: they can point at a genuinely
  * different resource or anchor (e.g. a `#issuecomment-…` deep link), so two
  * URLs differing only there are NOT treated as duplicates.
  * Falls back to the raw url if it doesn't parse (should be unreachable —
  * URL_RE only matches strings `new URL` already accepts).
  */
 function normalizeForDedup(url: string): string {
+  const pr = pullRequest(url);
+  if (pr) return `pr:${pr.toLowerCase()}`;
   try {
     const u = new URL(url);
+    // A Slack permalink's ?thread_ts/&cid only says how to open the message.
+    if (SLACK_MSG.test(u.pathname) && u.hostname.endsWith("slack.com")) {
+      return `${u.hostname.toLowerCase()}${u.pathname}`;
+    }
     const defaultPort = u.protocol === "https:" ? "443" : "80";
     const port = u.port && u.port !== defaultPort ? `:${u.port}` : "";
     const path = u.pathname.length > 1 && u.pathname.endsWith("/")
@@ -88,7 +98,7 @@ export function extractUrls(exchanges: Exchange[]): LinkEntry[] {
       const url = cleanUrl(m[0]);
       if (!url) continue;
       const key = normalizeForDedup(url);
-      if (!seen.has(key)) seen.set(key, { url, turnNumber: n, source });
+      if (!seen.has(key)) seen.set(key, { url: pullRequestUrl(url) ?? url, turnNumber: n, source });
     }
   }
 
@@ -107,42 +117,87 @@ export function extractUrls(exchanges: Exchange[]): LinkEntry[] {
 }
 
 /**
- * Max characters in a rail link label. Long enough for a legible host+path in
- * the rail's default width, short enough that most labels don't need
- * truncating at all; the CSS `text-overflow: ellipsis` on `.rail-link-label`
- * is a safety net for a narrower rail.
+ * Max characters in a generic rail link label. The CSS ellipsis on
+ * `.rail-link-label` is a safety net for a narrower rail.
  */
 const LABEL_MAX_CHARS = 36;
 
+const SLACK_MSG = /^\/archives\/[^/]+\/p(\d{10})(\d{6})$/;
+const JIRA_KEY = /^\/browse\/([A-Z][A-Z0-9_]+-\d+)\/?$/;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Nov 3, 14:09" in local time. */
+export function shortStamp(d: Date): string {
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hh}:${mm}`;
+}
+
+/** A name for links whose URL says little to a reader: Slack messages, Jira
+ *  tickets, GitHub issues, files and repos. Null for anything else. */
+function namedLabel(u: URL, withHost: boolean): string | null {
+  const host = u.hostname.toLowerCase();
+  const path = u.pathname;
+  if (host.endsWith("slack.com")) {
+    const m = SLACK_MSG.exec(path);
+    if (m) {
+      const thread = u.searchParams.get("thread_ts");
+      const kind = thread && thread !== `${m[1]}.${m[2]}` ? "reply" : "message";
+      const when = shortStamp(new Date(Number(m[1]) * 1000));
+      return `${withHost ? "Slack " : ""}${kind} · ${when}`;
+    }
+  }
+  const jira = JIRA_KEY.exec(path);
+  if (jira) return jira[1]!;
+  if (host === "github.com") {
+    const segs = path.split("/").filter(Boolean);
+    const [owner, repo, kind, ...rest] = segs;
+    if (owner && repo && !kind) return `${owner}/${repo}`;
+    if (owner && repo && (kind === "issues" || kind === "pull") && /^\d+$/.test(rest[0] ?? "")) {
+      return `${repo}#${rest[0]}`; // the owner would push the number out of a narrow rail
+    }
+    if (repo && (kind === "blob" || kind === "tree") && rest.length > 1) {
+      return `${repo} · ${rest[rest.length - 1]}`;
+    }
+  }
+  return null;
+}
+
 /**
- * Compact host + path label for a URL — the full url lives in the row's
- * title tooltip. Truncates from the FRONT of the path, keeping whole trailing
- * segments, so the part that usually differs between sibling links (a PR/issue
- * number, a filename, a slug) stays visible. Sibling links sharing a long
- * prefix (e.g. "github.com/owner/repo/pull/") would otherwise all display as
- * the same truncated string under plain end-ellipsis, even though they point
- * at different PRs.
+ * Display label for a URL — the full url lives in the row's title tooltip.
+ * Known shapes get a name (`namedLabel`). Anything else shows host + path, or
+ * just the path when `withHost` is false (inside a site's group, whose header
+ * already names the host). A long path is cut from the FRONT, keeping whole
+ * trailing segments, so the part that differs between siblings (a number, a
+ * filename, a slug) stays visible.
  */
-export function linkLabel(url: string): string {
-  let host: string;
-  let rest: string;
+export function linkLabel(url: string, withHost = true): string {
+  let u: URL;
   try {
-    const u = new URL(url);
-    host = u.hostname;
-    rest = u.pathname === "/" ? "" : `${u.pathname}${u.search}${u.hash}`;
+    u = new URL(url);
   } catch {
     return url;
   }
+  const named = namedLabel(u, withHost);
+  if (named) return named;
+
+  const host = withHost ? u.hostname : "";
+  const rest = u.pathname === "/" ? "" : `${u.pathname}${u.search}${u.hash}`;
+  if (!host) return tailCut(rest || "/", LABEL_MAX_CHARS);
 
   const full = rest ? `${host}${rest}` : host;
   if (full.length <= LABEL_MAX_CHARS) return full;
   if (!rest) return `${full.slice(0, LABEL_MAX_CHARS - 1)}…`; // host alone is already over budget
-
   const budget = LABEL_MAX_CHARS - host.length - 1; // -1 for the "…" marker
   if (budget <= 0) return `${full.slice(0, LABEL_MAX_CHARS - 1)}…`;
+  return `${host}${tailCut(rest, budget + 1)}`;
+}
 
-  // rest starts with "/", so segments[0] === "" — walk backwards from the end,
-  // keeping whole "/segment" chunks while they still fit the budget.
+/** `rest` if it fits in `max`, else "…" plus as many whole trailing "/segment"
+ *  chunks as fit (or the raw tail when even the last segment doesn't). */
+function tailCut(rest: string, max: number): string {
+  if (rest.length <= max) return rest;
+  const budget = max - 1;
   const segments = rest.split("/");
   let kept = "";
   for (let i = segments.length - 1; i >= 1; i--) {
@@ -150,7 +205,7 @@ export function linkLabel(url: string): string {
     if (candidate.length > budget) break;
     kept = candidate;
   }
-  return kept ? `${host}…${kept}` : `${host}…${rest.slice(-budget)}`;
+  return `…${kept || rest.slice(-budget)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +221,18 @@ export function pullRequest(url: string): string | null {
     if (u.hostname.toLowerCase() !== "github.com") return null;
     const m = PR_PATH.exec(u.pathname);
     return m ? `${m[1]}/${m[2]}#${m[3]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The plain `https://github.com/owner/repo/pull/N` for any link into a PR, else null. */
+export function pullRequestUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname.toLowerCase() !== "github.com") return null;
+    const m = PR_PATH.exec(u.pathname);
+    return m ? `https://github.com/${m[1]}/${m[2]}/pull/${m[3]}` : null;
   } catch {
     return null;
   }
