@@ -155,7 +155,7 @@ export function mountRailLinks(container: HTMLElement): RailLinksHandle {
     renderList();
   }
 
-  function linkRow(entry: LinkEntry): HTMLElement {
+  function linkRow(entry: LinkEntry, withHost = true): HTMLElement {
     const row = el("a", `rail-link-row rail-link-row--${entry.source}`);
     row.href = entry.url;
     row.target = "_blank";
@@ -165,7 +165,7 @@ export function mountRailLinks(container: HTMLElement): RailLinksHandle {
     const pr = pullRequest(entry.url);
     row.append(icon(pr ? "fork" : "globe", 12));
     const text = el("span", "rail-link-label");
-    text.textContent = pr ?? linkLabel(entry.url);
+    text.textContent = linkLabel(entry.url, withHost);
     row.append(text);
     return row;
   }
@@ -209,7 +209,9 @@ export function mountRailLinks(container: HTMLElement): RailLinksHandle {
       list.append(head);
       if (isFolded) continue;
       const body = el("div", "rail-links-group-body");
-      for (const entry of g.entries) body.append(linkRow(entry));
+      // A site group's header already names the host.
+      const withHost = !g.key.startsWith("site:");
+      for (const entry of g.entries) body.append(linkRow(entry, withHost));
       list.append(body);
     }
   }

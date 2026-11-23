@@ -2,7 +2,7 @@
 // Run: `node --test` (native TS via --experimental-strip-types in Node 22+).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractUrls, groupLinks, linkLabel, pullRequest, siteOf, type LinkEntry } from "./links.ts";
+import { extractUrls, groupLinks, linkLabel, pullRequest, shortStamp, siteOf, type LinkEntry } from "./links.ts";
 import type { Exchange } from "./turns.ts";
 
 function ex(overrides: Partial<Exchange> & { n: number }): Exchange {
@@ -168,6 +168,23 @@ test("extractUrls: no exchanges → empty list", () => {
   assert.deepEqual(extractUrls([]), []);
 });
 
+test("extractUrls: every link into one PR is one entry, opening on the PR", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "see https://github.com/acme/app/pull/7/files" }),
+    ex({ n: 2, assistant: "https://github.com/acme/app/pull/7 and https://github.com/Acme/app/pull/7#discussion_r1" }),
+  ]);
+  assert.deepEqual(got, [{ url: "https://github.com/acme/app/pull/7", turnNumber: 1, source: "user" }]);
+});
+
+test("extractUrls: a Slack message with and without its thread query is one entry", () => {
+  const got = extractUrls([
+    ex({ n: 1, user: "https://acme.slack.com/archives/C0ABC/p1793289381860279" }),
+    ex({ n: 2, user: "https://acme.slack.com/archives/C0ABC/p1793289381860279?thread_ts=1793289381.860279&cid=C0ABC" }),
+    ex({ n: 3, user: "https://acme.slack.com/archives/C0ABC/p1793289381860280" }),
+  ]);
+  assert.equal(got.length, 2);
+});
+
 test("extractUrls: no URLs present → empty list", () => {
   const got = extractUrls([ex({ n: 1, user: "no links at all" })]);
   assert.deepEqual(got, []);
@@ -186,27 +203,46 @@ test("linkLabel: bare host (root path) has no trailing slash", () => {
   assert.equal(linkLabel("https://example.com"), "example.com");
 });
 
-test("linkLabel: sibling PR links stay distinguishable (the bug this fixes)", () => {
-  const labels = [22, 23, 24, 25].map((n) =>
-    linkLabel(`https://github.com/rdmontgomery/eigenform/pull/${n}`),
-  );
-  // All four must render to DIFFERENT strings — a shared long prefix
-  // ("github.com/rdmontgomery/eigenform/pull/") must not swallow the part
-  // that actually differs (the PR number).
+test("linkLabel: sibling links sharing a long prefix stay distinguishable", () => {
+  const labels = [22, 23, 24, 25].map((n) => linkLabel(`https://example.com/acme/app/build/runs/${n}`));
   assert.equal(new Set(labels).size, 4, `expected 4 distinct labels, got ${JSON.stringify(labels)}`);
-  for (const label of labels) {
-    assert.ok(label.length <= 36, `label too long: ${label}`);
-  }
+  for (const label of labels) assert.ok(label.length <= 36, `label too long: ${label}`);
 });
 
-test("linkLabel: truncates from the front, keeping whole trailing path segments", () => {
-  const label = linkLabel("https://github.com/rdmontgomery/eigenform/pull/22");
-  assert.equal(label, "github.com…/eigenform/pull/22");
+test("linkLabel: truncates from the front, keeping the host and whole trailing segments", () => {
+  assert.equal(linkLabel("https://example.com/acme/application/build/runs/22"), "example.com…/build/runs/22");
 });
 
-test("linkLabel: preserves the host even when the path must truncate", () => {
-  const label = linkLabel("https://github.com/rdmontgomery/eigenform/pull/22");
-  assert.ok(label.startsWith("github.com"), `expected host kept, got ${label}`);
+test("linkLabel: without the host, shows the path alone", () => {
+  assert.equal(linkLabel("https://example.com/acme/app", false), "/acme/app");
+  assert.equal(linkLabel("https://example.com/", false), "/");
+  assert.equal(
+    linkLabel("https://example.com/acme/application/build/runs/22/attempts/3", false),
+    "…/build/runs/22/attempts/3",
+  );
+});
+
+test("linkLabel: names GitHub PRs, issues, files and repos", () => {
+  assert.equal(linkLabel("https://github.com/acme/app/pull/22"), "app#22");
+  assert.equal(linkLabel("https://github.com/acme/app/issues/4"), "app#4");
+  assert.equal(linkLabel("https://github.com/acme/app/blob/main/docs/guide.md"), "app · guide.md");
+  assert.equal(linkLabel("https://github.com/acme/app"), "acme/app");
+});
+
+test("linkLabel: names a Jira-style ticket by its key", () => {
+  assert.equal(linkLabel("https://acme.atlassian.net/browse/APP-548"), "APP-548");
+  assert.equal(linkLabel("https://acme.atlassian.net/browse/APP-548", false), "APP-548");
+});
+
+test("linkLabel: a Slack message shows when it was posted, not its id", () => {
+  const when = shortStamp(new Date(1793289381 * 1000));
+  const url = "https://acme.slack.com/archives/C0ABC123/p1793289381860279";
+  assert.equal(linkLabel(url), `Slack message · ${when}`);
+  assert.equal(linkLabel(url, false), `message · ${when}`);
+  assert.equal(
+    linkLabel(`${url}?thread_ts=1793280000.000100&cid=C0ABC123`, false),
+    `reply · ${when}`,
+  );
 });
 
 test("linkLabel: a single path segment longer than the whole budget falls back to raw tail", () => {
@@ -286,6 +322,25 @@ test("groupLinks by site: pull requests first, then sites by size, newest first 
     ["docs.example.org", ["docs.example.org/guide"]],
     ["github.com", ["github.com/acme/app/issues/4"]],
   ]);
+});
+
+test("groupLinks by site: artifact hosts, then artifact pages, then the rest; GitHub and Slack last", () => {
+  const links = [
+    L("https://acme.slack.com/archives/C0ABC/p1793289381860279", "user"),
+    L("https://acme.slack.com/archives/C0ABC/p1793289381860280", "user"),
+    L("https://acme.slack.com/archives/C0ABC/p1793289381860281", "user"),
+    L("https://github.com/acme/app/blob/main/README.md", "user"),
+    L("https://github.com/acme/app/blob/main/LICENSE", "user"),
+    L("https://claude.ai/artifact/abc", "claude"),
+    L("https://claude.ai/artifact/def", "claude"),
+    L("https://artifacts.example.com/a/one", "claude"),
+    L("https://docs.example.org/guide", "user"),
+    L("https://github.com/acme/app/pull/12", "claude"),
+  ];
+  assert.deepEqual(
+    groupLinks(links, "site").map((g) => g.label),
+    ["Pull requests", "artifacts.example.com", "claude.ai", "docs.example.org", "github.com", "acme.slack.com"],
+  );
 });
 
 test("groupLinks by source: you, Claude, subagents, each with its PRs first", () => {

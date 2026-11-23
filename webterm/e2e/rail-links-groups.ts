@@ -111,7 +111,7 @@ test("by site: pull requests first, then sites by size", async () => {
   assert.deepEqual(await counts(), ["2", "6", "2"]);
   assert.deepEqual(
     await page.locator(".rail-links-group-body").first().locator(".rail-link-label").allTextContents(),
-    ["acme/app#13", "acme/app#12"],
+    ["app#13", "app#12"],
   );
   if (process.env.SCREENSHOT) await page.locator(".rail").screenshot({ path: process.env.SCREENSHOT });
 });

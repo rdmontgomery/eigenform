@@ -401,7 +401,7 @@ button { font: inherit; color: inherit; }
   border-radius: 6px;
   color: var(--tx);
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: 12.5px;
   outline: none;
 }
 .rail-links-filter::placeholder { color: var(--tx-3); }
@@ -417,9 +417,9 @@ button { font: inherit; color: inherit; }
   padding: 3px 7px;
   background: transparent;
   border: 0;
-  color: var(--tx-3);
+  color: var(--tx-2);
   font-family: var(--font-ui);
-  font-size: 10.5px;
+  font-size: 11.5px;
   cursor: pointer;
 }
 .rail-links-mode + .rail-links-mode { border-left: 1px solid var(--line); }
@@ -439,13 +439,13 @@ button { font: inherit; color: inherit; }
   border-radius: 6px;
   text-align: left;
   cursor: pointer;
-  color: var(--tx-3);
+  color: var(--tx-2);
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .rail-links-group:first-child { margin-top: 0; }
-.rail-links-group:hover { background: var(--raised-2); color: var(--tx-2); }
+.rail-links-group:hover { background: var(--raised-2); color: var(--tx); }
 .rail-links-group--folded .rail-group-caret { transform: rotate(0deg); }
 .rail-links-group-name {
   flex: 1;
@@ -457,7 +457,7 @@ button { font: inherit; color: inherit; }
 .rail-links-group-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   padding-left: 10px;
 }
 .rail-links-none {
@@ -540,17 +540,18 @@ a.rail-feed-title:hover { text-decoration: underline; }
 .rail-link-row {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 6px;
+  gap: 8px;
+  padding: 5px 6px;
   border-radius: 6px;
-  color: var(--tx-2);
+  color: var(--tx);
   text-decoration: none;
-  font-size: 11.5px;
+  font-size: 13px;
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
 }
-.rail-link-row:hover { background: var(--raised-2); color: var(--tx); }
-.rail-link-row svg { flex-shrink: 0; color: var(--tx-faint); }
+.rail-link-row:hover { background: var(--raised-2); }
+.rail-link-row svg { flex-shrink: 0; color: var(--tx-3); }
 .rail-link-label {
   overflow: hidden;
   text-overflow: ellipsis;
