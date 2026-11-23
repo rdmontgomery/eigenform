@@ -324,6 +324,25 @@ test("groupLinks by site: pull requests first, then sites by size, newest first 
   ]);
 });
 
+test("groupLinks by site: artifact hosts, then artifact pages, then the rest; GitHub and Slack last", () => {
+  const links = [
+    L("https://acme.slack.com/archives/C0ABC/p1793289381860279", "user"),
+    L("https://acme.slack.com/archives/C0ABC/p1793289381860280", "user"),
+    L("https://acme.slack.com/archives/C0ABC/p1793289381860281", "user"),
+    L("https://github.com/acme/app/blob/main/README.md", "user"),
+    L("https://github.com/acme/app/blob/main/LICENSE", "user"),
+    L("https://claude.ai/artifact/abc", "claude"),
+    L("https://claude.ai/artifact/def", "claude"),
+    L("https://artifacts.example.com/a/one", "claude"),
+    L("https://docs.example.org/guide", "user"),
+    L("https://github.com/acme/app/pull/12", "claude"),
+  ];
+  assert.deepEqual(
+    groupLinks(links, "site").map((g) => g.label),
+    ["Pull requests", "artifacts.example.com", "claude.ai", "docs.example.org", "github.com", "acme.slack.com"],
+  );
+});
+
 test("groupLinks by source: you, Claude, subagents, each with its PRs first", () => {
   assert.deepEqual(shape(groupLinks(LINKS, "source")), [
     ["Pasted by you", ["github.com/acme/web/pull/7", "docs.example.org/guide"]],

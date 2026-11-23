@@ -271,11 +271,24 @@ export function matchesFilter(entry: LinkEntry, query: string): boolean {
 }
 
 /**
+ * Where a site's group sits in the by-site view, lowest first: a host that
+ * serves artifacts, then a site with artifact pages among others, then the
+ * rest, then GitHub's non-PR links, then Slack.
+ */
+function siteTier(site: string, entries: readonly LinkEntry[]): number {
+  if (site.includes("artifact")) return 0;
+  if (entries.some((e) => /\/artifacts?\//.test(new URL(e.url).pathname))) return 1;
+  if (site === "github.com") return 3;
+  if (site === "slack.com" || site.endsWith(".slack.com")) return 4;
+  return 2;
+}
+
+/**
  * Group links for the panel, newest mention first within each group, after
  * dropping those not matching `query`.
  *
- * - by site: pull requests in one group first, then one group per site, the
- *   biggest first (ties by name)
+ * - by site: pull requests in one group first, then one group per site, in
+ *   `siteTier` order, the biggest first within a tier (ties by name)
  * - by source: you, Claude, subagents, in that order, each with its pull requests
  *   first
  *
@@ -304,7 +317,7 @@ export function groupLinks(entries: readonly LinkEntry[], by: LinkGrouping, quer
     list.push(e);
   }
   const sites = [...bySite]
-    .sort(([a, x], [b, y]) => y.length - x.length || a.localeCompare(b))
+    .sort(([a, x], [b, y]) => siteTier(a, x) - siteTier(b, y) || y.length - x.length || a.localeCompare(b))
     .map(([site, list]) => ({ key: `site:${site}`, label: site, entries: list }));
   return prs.length > 0 ? [{ key: "pr", label: "Pull requests", entries: prs }, ...sites] : sites;
 }
